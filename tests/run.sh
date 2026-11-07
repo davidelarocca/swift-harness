@@ -2456,6 +2456,22 @@ if grep -qF '@ReduceMotion private var reduceMotion' "$PLUGIN/skills/design-syst
   ok "motion: the shared presenter reads Reduce Motion through the overridable wrapper"
 else nok "motion: the shared presenter reads Reduce Motion through the overridable wrapper"; fi
 
+# ---------- layout audit from the accessibility tree (#69) ----------
+LA="$PLUGIN/skills/setup/templates/tests/LayoutAudit.swift"
+if link_ok "$HERE/fixtures/layout-audit/LayoutFixtureUITests/LayoutAudit.swift" "$LA" &&
+  grep -qF 'layout-audit-fixture:' "$HERE/../.github/workflows/ci.yml" &&
+  grep -qF 'platform=iOS Simulator' "$HERE/../.github/workflows/ci.yml"; then
+  ok "layout audit: the CI fixture runs the template helper itself, on macOS and an iOS simulator"
+else nok "layout audit: the CI fixture runs the template helper itself, on macOS and an iOS simulator"; fi
+if grep -qF '| `tests/LayoutAudit.swift` |' "$PLUGIN/skills/setup/SKILL.md" && grep -qF 'has no reason' "$LA" &&
+  grep -qF 'matches no issue' "$LA" && grep -qF 'it is not resizable' "$LA"; then
+  ok "layout audit: setup installs it; an exception needs a reason and an issue; a window that cannot be resized fails"
+else nok "layout audit: setup installs it; an exception needs a reason and an issue; a window that cannot be resized fails"; fi
+if grep -qF 'cut by its own frame' "$LA" && grep -qF 'status bar' "$LA" && grep -qF 'UILaunchScreen' "$LA" &&
+  grep -qF 'INFOPLIST_KEY_UILaunchScreen_Generation = YES' "$HERE/fixtures/layout-audit/LayoutFixture.xcodeproj/project.pbxproj"; then
+  ok "layout audit: the header lists what it cannot see, and the iOS fixture has a launch screen"
+else nok "layout audit: the header lists what it cannot see, and the iOS fixture has a launch screen"; fi
+
 if ! command -v swiftlint >/dev/null 2>&1; then
   printf 'skip  motion: swiftlint not installed, the template rule was not run\n'
 else

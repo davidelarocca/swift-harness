@@ -179,6 +179,39 @@ jobs:
             grep -q "FocusOrderTests $t\]' passed" "$RUNNER_TEMP/a11y.log" || { echo "FocusOrderTests $t did not pass (skipped?)"; exit 1; }
           done
 
+  layout-audit-fixture:
+    name: Layout audit fixture (UI tests, macOS and iOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain and simulators
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available | grep -E 'iPhone' | head -5
+
+      # The LayoutAudit template helper (linked into the fixture) in real UI tests, on macOS at
+      # the smallest window and on an iPhone simulator: it finds the two cut buttons and the
+      # overlapping labels, nothing in the scrolling list, and the fixed screen passes.
+      - name: UI tests of tests/fixtures/layout-audit (macOS)
+        working-directory: tests/fixtures/layout-audit
+        run: |
+          xcodebuild test -project LayoutFixture.xcodeproj -scheme LayoutFixture -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/dd" 2>&1 | tee "$RUNNER_TEMP/mac.log" | grep -E 'Test Case|LayoutAudit|error:|TEST (SUCCEEDED|FAILED)'
+          grep -q 'TEST SUCCEEDED' "$RUNNER_TEMP/mac.log"
+          grep -q 'LayoutAudit: window shrunk' "$RUNNER_TEMP/mac.log"
+
+      - name: UI tests of tests/fixtures/layout-audit (iOS simulator)
+        working-directory: tests/fixtures/layout-audit
+        run: |
+          SIM="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone")) | .name][0] // empty')"
+          echo "iPhone simulator: ${SIM:-none}"
+          [ -n "$SIM" ]
+          xcodebuild test -project LayoutFixture.xcodeproj -scheme LayoutFixture -destination "platform=iOS Simulator,name=$SIM" \
+            -derivedDataPath "$RUNNER_TEMP/dd" 2>&1 | tee "$RUNNER_TEMP/ios.log" | grep -E 'Test Case|LayoutAudit|error:|TEST (SUCCEEDED|FAILED)'
+          grep -q 'TEST SUCCEEDED' "$RUNNER_TEMP/ios.log"
+          grep -q "testTheLargestTextStillShowsTheOverlap\]' passed" "$RUNNER_TEMP/ios.log"
+
   plugin-validate:
     name: claude plugin validate
     runs-on: ubuntu-latest

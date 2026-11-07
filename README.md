@@ -159,7 +159,16 @@ Claude builds a screen at the size of its preview. `docs/LAYOUT_CONTRACT.md` giv
 
 A view that takes any width and asks for none cannot be measured, and the check fails with what to do instead of passing: `NavigationSplitView`, `HSplitView`, `List` and `Table` clip what does not fit without reporting it. Most main windows are split views, so the pages of the detail column and the sidebar get rows of their own. Content that takes any width but has a width of its own (text that wraps, or a `.frame(minWidth: 0, maxWidth: .infinity)` that hides its content) cannot be told apart: it passes with a note on the test output. Found on a ~97k-line app, where both main screens passed without being measured.
 
-The content is measured without the window's frame: a `.frame(minWidth:)` around a view hides content wider than the frame, so the window's minimum belongs to a small window view, measured on its own. Not measured: truncated text, overlaps, and where popovers open; those are review checks, on screenshots when the project captures them (below).
+The content is measured without the window's frame: a `.frame(minWidth:)` around a view hides content wider than the frame, so the window's minimum belongs to a small window view, measured on its own.
+
+On the running app, a UI test looks at what the window really shows. `LayoutAudit` (from `templates/tests/LayoutAudit.swift`) reads the accessibility tree once and fails for every element cut by the edge of its window, sheet or popover outside a scroll view, and every text over another text, with the frames:
+
+```swift
+LayoutAudit.shrinkWindow(app)   // macOS: drags the window to its minimum size
+try LayoutAudit.check(app)      // 'play' is cut by the left edge: (417, 390, 150x24) in (510, 285, 280x312)
+```
+
+It works on macOS and on an iOS simulator (iPhone, iPad, the largest Dynamic Type size through `LayoutAudit.largestText`), measured on a fixture in CI: two cut buttons and two overlapping labels are found, a scrolling list past its edge is not, the fixed screen passes. Frames in the tree are not clipped, which is what makes an edge measurable. It catches the overflow that `.frame(minWidth: 0, maxWidth: .infinity)` hides from `LayoutContract`. Not measured: text truncated by its own frame, content under the iOS status bar, and where popovers open; those are review checks, on screenshots when the project captures them (below).
 
 </details>
 
@@ -365,13 +374,13 @@ scripts/verify.sh
 
 ## Roadmap
 
-Next up: **v1.6.0, assisted macOS to iOS porting**, in verified slices. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
+Next up: **v1.6.0, reliable sessions, keyboard and performance**: per-session state, keyboard and focus checks, a layout audit from the accessibility tree, a docs reference check and a performance budget. Then v1.7.0, assisted macOS to iOS porting, which waits for a real port. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
 
 ## Limitations
 
 - **The verify approval covers what the command names, not everything it reads.** The command is split on spaces, not parsed as shell: with quotes or shell syntax and no `verify.inputs`, the approval shows as `approved, partial coverage` (also in `/swift-harness:doctor`), and listing the scripts in `verify.inputs` covers them. An input outside the project, or a folder with a link that leads outside it, cannot be covered, so the approval is refused. A `Makefile` behind `make verify`, or a script that `verify.sh` sources, can change without a new approval. Approving also means trusting the project's build (Xcode Run Script phases, SwiftPM manifests and plugins). See [SECURITY.md](SECURITY.md).
 - **The registry check is about entries, not reuse.** It proves each entry points to a real declaration and finds unlisted views, modifiers, layouts and styles in `registry.sources`. It does not decide whether a new view duplicates an existing one. Editing only the registry also re-runs the fast verification at the end of the turn, since the registry is part of the checked state.
-- **The layout contract measures room, not looks.** It proves a screen does not need more space than its window gives at each size, and that the window declares its sizes. Text that truncates, content that overlaps and popovers that open outside the window are left to review. A split view, a `List` or a `Table` is measured through the pages it holds, which need rows of their own, and a stretched frame only gets a note; a UI test on the real window is the stronger check there. The measuring tests cannot run in a test target hosted by a sandboxed app, which cannot read `docs/`: use a package or unhosted test target, or pass `contract:`. macOS only for now; iOS size classes come with [#40](https://github.com/davidelarocca/swift-harness/issues/40).
+- **The layout contract measures room, not looks.** It proves a screen does not need more space than its window gives at each size, and that the window declares its sizes. Text that truncates and popovers that open outside the window are left to review; cut and overlapping content is found by `LayoutAudit` in UI tests. A split view, a `List` or a `Table` is measured through the pages it holds, which need rows of their own, and a stretched frame only gets a note; a UI test on the real window is the stronger check there. The measuring tests cannot run in a test target hosted by a sandboxed app, which cannot read `docs/`: use a package or unhosted test target, or pass `contract:`. macOS only for now; iOS size classes come with [#40](https://github.com/davidelarocca/swift-harness/issues/40).
 - **Screenshot review is a judgment, not a check.** The images are evidence for the reviewer; a misaligned row does not fail anything. Capturing needs a logged-in session with a window server (Xcode, `swift test`, GitHub macOS runners) and a test target that can read and write the project: a sandboxed host app cannot, so use a package or unhosted test target, or pass `sizes:`, `source:` and a writable `output:`. Images depend on the macOS version and display scale. macOS only for now.
 - **Architecture contracts cover SwiftPM targets only.** Dependencies between Xcode targets, and imports that the build allows through a transitive dependency, are not checked.
 - **The protected-path guard is not a sandbox.** It covers the Edit, Write and MultiEdit tools only; a shell command run through Bash can still change a protected file. Such a change is reported to you at the end of the turn (the file, changed or deleted), after the fact: detection, not prevention. For hard limits use Claude Code [permission rules](https://code.claude.com/docs/en/permissions) (`deny`).

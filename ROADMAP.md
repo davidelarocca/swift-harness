@@ -13,7 +13,7 @@ _Last updated: 7 November 2026: v1.6.0 is now sessions, keyboard and performance
 | 🧷 | **Per-session state.** Two sessions on one folder keep their own start lists, so one never hides the other's shell changes. Done, in Unreleased. | [#61](https://github.com/davidelarocca/swift-harness/issues/61) |
 | ⌨️ | **Keyboard, focus order and Reduce Motion checks** for shared components: keys pressed in unit tests, the Tab order in UI tests, an overridable Reduce Motion in the design system. Done, in Unreleased. | [#52](https://github.com/davidelarocca/swift-harness/issues/52) |
 | ⏱️ | **Performance budget.** Key operations measured against recorded baselines in the full check; a regression fails with the numbers. Later, a skill that explains slowness with a trace. | [#33](https://github.com/davidelarocca/swift-harness/issues/33) |
-| 📐 | **Layout check from the accessibility tree** in UI tests: an element cut by the window edge, a text over another, on macOS and iOS. | [#69](https://github.com/davidelarocca/swift-harness/issues/69) |
+| 📐 | **Layout check from the accessibility tree** in UI tests: an element cut by the window edge, a text over another, on macOS and iOS. Done, in Unreleased. | [#69](https://github.com/davidelarocca/swift-harness/issues/69) |
 | 🔗 | **Docs reference check.** Broken links, paths and section names in the project docs, and a size budget for what every session reads. | [#70](https://github.com/davidelarocca/swift-harness/issues/70) |
 
 ## Next: v1.7.0, assisted macOS to iOS porting

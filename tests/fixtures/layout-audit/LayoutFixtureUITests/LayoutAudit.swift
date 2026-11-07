@@ -1,0 +1,1 @@
+../../../../plugins/swift-harness/skills/setup/templates/tests/LayoutAudit.swift
