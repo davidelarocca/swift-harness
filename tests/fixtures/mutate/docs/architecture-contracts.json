@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "packages": {
+    ".": {
+      "App": ["Feature", "DesignSystem"],
+      "Feature": ["Domain", "DesignSystem"],
+      "Domain": [],
+      "DesignSystem": []
+    }
+  }
+}

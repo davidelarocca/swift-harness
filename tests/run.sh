@@ -2776,6 +2776,54 @@ set_config "$D" '{"docs":{"enabled":false}}'
 sed -i '' 's/^## Modules/## Parts/' "$D/docs/ARCHITECTURE.md"
 expect_result "docs-watch: docs.enabled false turns it off" 0 '^exit=0$' "$(docs_watch "$D")"
 
+# ---------- check sensitivity (#79) ----------
+
+mutate() { # mutate.sh arguments; prints "exit=<code>" then the output
+  local out code
+  out="$("$SCRIPTS/mutate.sh" "$@" 2>&1)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$out"
+}
+M="$TMP/mutate"
+cp -R "$HERE/fixtures/mutate" "$M"
+before="$(snapshot "$M")"
+out="$(mutate --project "$M")"
+expect_result "mutate: the fixture passes every check without mutations" 0 'Without mutations: registry pass, layout pass, docs pass, security pass, contracts pass' "$out"
+for op in registry-rename:registry layout-rename:layout docs-stale-link:docs security-relax:security contracts-forbidden:contracts; do
+  expect_result "mutate: ${op%%:*} is killed by the ${op#*:} check, and only by it" 0 "^\| ${op%%:*} \| [^|]+:[0-9]+ \([^|]+\) \| ${op#*:} \| killed \| ${op#*:} \|$" "$out"
+done
+expect_result "mutate: the summary counts them" 0 '^5 killed, 0 survived, 0 with no site\.$' "$out"
+if [ "$(snapshot "$M")" = "$before" ]; then ok "mutate: the project itself is not changed"
+else nok "mutate: the project itself is not changed" "$(diff <(printf '%s\n' "$before") <(snapshot "$M") | head)"; fi
+expect_result "mutate: --only runs one operator" 0 '^1 killed, 0 survived, 0 with no site\.$' "$(mutate --project "$M" --only docs-stale-link)" 'registry-rename'
+expect_result "mutate: an unknown operator is a usage error" 2 'unknown operator "nope"' "$(mutate --project "$M" --only nope)"
+expect_result "mutate: --list names each operator and its check" 0 'contracts-forbidden +contracts' "$(mutate --list)"
+
+# A survived mutation is reported, not a failed run: security off, approved off, so the
+# check compares nothing and the relaxed entitlement goes through.
+M2="$TMP/mutate-survived"
+cp -R "$HERE/fixtures/mutate" "$M2"
+printf '%s\n' '{"registry":{"sources":["Sources/DesignSystem"]},"security":{"enabled":false}}' >"$M2/.claude/swift-harness.json"
+expect_result "mutate: a mutation no check notices is reported as SURVIVED, exit 0" 0 '^\| security-relax \| [^|]+ \| security \| SURVIVED \| - \|$' "$(mutate --project "$M2" --only security-relax)"
+
+# A check that already fails can still kill: only problems it did not report before count.
+M3="$TMP/mutate-failing"
+cp -R "$HERE/fixtures/mutate" "$M3"
+printf '| UI-002 | Ghost | Gone | | | | Sources/DesignSystem/Ghost.swift | | |\n' >>"$M3/docs/COMPONENT_REGISTRY.md"
+out="$(mutate --project "$M3" --only registry-rename)"
+expect_result "mutate: a check failing without mutations is named" 0 'registry fails already' "$out"
+expect_result "mutate: it still kills a mutation with a new problem" 0 '^\| registry-rename \| [^|]+ \| registry \| killed \| registry \|$' "$out"
+
+# No documents, no sites; a path in backticks is used when the docs have no link.
+M4="$TMP/mutate-bare"
+mkdir -p "$M4/.claude" "$M4/docs"
+printf '{}\n' >"$M4/.claude/swift-harness.json"
+printf '# Notes\n\nSee `docs/NOTES.md` and [the web](https://example.com).\n' >"$M4/CLAUDE.md"
+printf '# Notes\n' >"$M4/docs/NOTES.md"
+out="$(mutate --project "$M4")"
+expect_result "mutate: operators with nothing to change report no site" 0 '^1 killed, 0 survived, 4 with no site\.$' "$out"
+expect_result "mutate: a path in backticks is moved when there is no local link" 0 'CLAUDE\.md:3 \(docs/NOTES\.md now points to docs/NOTES-moved\.md\) \| docs \| killed' "$out"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
