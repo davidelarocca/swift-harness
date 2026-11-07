@@ -2,21 +2,11 @@
 
 Where swift-harness is going, and why. Live status is in the [milestones](https://github.com/davidelarocca/swift-harness/milestones) and [issues](https://github.com/davidelarocca/swift-harness/issues). This page is updated with every release.
 
-_Last updated: 7 November 2026: v1.7.0 is now the measured harness and v1.8.0 checks the running app over time; iOS porting moves to v1.9.0, still waiting for a real port._
+_Last updated: 7 November 2026, after v1.6.0 (reliable sessions, keyboard and focus, layout audit, docs references, performance budgets)._
 
 **Guiding principle:** every check the harness claims to run must actually run, and must be backed by a test. New features come after the existing gates are reliable, and claims about impact come with measurements.
 
-## Now: v1.6.0, reliable sessions, keyboard and performance
-
-| | What you get | Issue |
-|---|---|---|
-| 🧷 | **Per-session state.** Two sessions on one folder keep their own start lists, so one never hides the other's shell changes. Done, in Unreleased. | [#61](https://github.com/davidelarocca/swift-harness/issues/61) |
-| ⌨️ | **Keyboard, focus order and Reduce Motion checks** for shared components: keys pressed in unit tests, the Tab order in UI tests, an overridable Reduce Motion in the design system. Done, in Unreleased. | [#52](https://github.com/davidelarocca/swift-harness/issues/52) |
-| ⏱️ | **Performance budget.** Key operations measured in instructions retired against baselines you approve; a regression fails with the numbers. Done, in Unreleased; a skill that explains slowness with a trace comes later. | [#33](https://github.com/davidelarocca/swift-harness/issues/33) |
-| 📐 | **Layout check from the accessibility tree** in UI tests: an element cut by the window edge, a text over another, on macOS and iOS. Done, in Unreleased. | [#69](https://github.com/davidelarocca/swift-harness/issues/69) |
-| 🔗 | **Docs reference check.** Broken links, paths and section names in the project docs, and a size budget for what every session reads. Done, in Unreleased. | [#70](https://github.com/davidelarocca/swift-harness/issues/70) |
-
-## Next: v1.7.0, a measured harness
+## Now: v1.7.0, a measured harness
 
 Evidence before new checks: whether the checks catch what they claim, whether a project drifts, and what the harness actually caught.
 
@@ -68,6 +58,7 @@ Ideas parked until there is demand: a local, read-only view of the checks with e
 
 | Version | Highlights |
 |---|---|
+| [1.6.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.6.0) | Reliable sessions and checks on what the app does: per-session state, keyboard and focus order checks with an overridable Reduce Motion, a layout audit from the accessibility tree on macOS and iOS, a docs reference check, and performance budgets measured in instructions retired against baselines only you approve. |
 | [1.5.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.5.0) | iOS-aware verify script, doctor and UI guidance (an iPhone simulator in CI), a read-only porting audit checked on a real app, a security settings contract approved only by you, a concurrency ratchet, shell changes to protected files reported, a checkpoint after compaction, an accessibility audit for UI tests. |
 | [1.4.1](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.4.1) | Layout contract checked on a real app: content that takes any width (split views, lists, tables) no longer passes unmeasured; it fails with what to measure instead. |
 | [1.4.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.4.0) | Visual coherence: a layout contract measured by the project's tests at every window size, screenshots for the design review, and visual regression against baselines only you approve (`/swift-harness:approve-snapshots`), pinned to one macOS version. |

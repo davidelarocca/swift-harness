@@ -275,8 +275,8 @@ They start as warnings, which double as the migration to-do list. Switch a rule 
 
 A quality tool has to be checked itself. Every release goes through:
 
-- **273 automated checks** of the hooks, templates and skills (`tests/run.sh`), run in CI with macOS `/bin/bash` 3.2, plus ShellCheck and a build of the Swift reference files.
-- **A smoke test in real Claude Code sessions** (`tests/smoke/`): 16 scenarios for the hooks, 6 for reusing UI components and 3 for product coherence (4 of them baselines without the plugin), with their invariants checked automatically. Latest full run of the hook scenarios: 62/62 invariants passed ([results](tests/smoke/RESULTS.md)).
+- **528 automated checks** of the hooks, templates and skills (`tests/run.sh`), run in CI with macOS `/bin/bash` 3.2, plus ShellCheck and a build of the Swift reference files.
+- **A smoke test in real Claude Code sessions** (`tests/smoke/`): 23 scenarios for the hooks (snapshots, security settings, docs and performance budgets included), 6 for reusing UI components, 3 for product coherence, 6 for window sizes and 6 for screenshot review (some of them baselines without the plugin), with their invariants checked automatically. Every run is recorded with its cost ([results](tests/smoke/RESULTS.md)).
 
 What Claude did in those sessions:
 
@@ -405,7 +405,7 @@ scripts/verify.sh
 
 ## Roadmap
 
-Next up: **v1.6.0, reliable sessions, keyboard and performance**: per-session state, keyboard and focus checks, a layout audit from the accessibility tree, a docs reference check and a performance budget. Then v1.7.0, a measured harness (checks tested by planting defects, a drift score, a record of what the checks caught, evals), and v1.8.0, checks on the running app over flows and time. iOS porting follows when a real port exists. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
+Next up: **v1.7.0, a measured harness**: whether each check catches what it claims (planted defects), drift over the history, an evidence summary per turn, a local catch log and report, and evals with and without the plugin. Then v1.8.0 checks the running app over time, and v1.9.0 is assisted macOS to iOS porting, which waits for a real port. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
 
 ## Limitations
 
