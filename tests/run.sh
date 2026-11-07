@@ -2926,6 +2926,107 @@ expect_result "mutate --verify: no padding rule in .swiftlint.yml is 'no check'"
 expect_result "mutate --verify: no test calling KeyboardCheck is 'no check'" 0 '^\| keyboard-shortcut \| - \| keyboard \| no check \(no test calls KeyboardCheck\) \| - \|$' "$out"
 expect_result "mutate --verify: ... counted apart" 0 '^0 killed, 0 survived, 0 with no site, 2 with no check\.$' "$out"
 
+# ---------- drift score (#80) ----------
+
+drift() { # drift.sh arguments; prints "exit=<code>" then the output
+  local out code
+  out="$("$SCRIPTS/drift.sh" "$@" 2>&1)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$out"
+}
+DR="$TMP/drift"
+mkdir -p "$DR/.claude" "$DR/docs" "$DR/Sources/DesignSystem" "$DR/Sources/Features"
+git -C "$DR" init -q
+git -C "$DR" config user.email test@example.com
+git -C "$DR" config user.name test
+printf '%s\n' '{"registry":{"sources":["Sources"]}}' >"$DR/.claude/swift-harness.json"
+cat >"$DR/Sources/DesignSystem/Tokens.swift" <<'EOF'
+import SwiftUI
+
+public enum Spacing { public static let s: CGFloat = 8; public static let m: CGFloat = 12 }
+public enum Radius { public static let card: CGFloat = 10 }
+EOF
+cat >"$DR/Sources/DesignSystem/Pill.swift" <<'EOF'
+import SwiftUI
+
+public struct Pill: View {
+    let text: String
+    public var body: some View { Text(text).padding(Spacing.s).background(Capsule().fill(.quaternary)) }
+}
+EOF
+cat >"$DR/docs/COMPONENT_REGISTRY.md" <<'EOF'
+# Component registry
+
+## Components
+
+| ID | Name | Purpose | Use when | Don't use when | API entry point | File | Used by | Tests |
+|---|---|---|---|---|---|---|---|---|
+| UI-001 | Pill | Transient status | Confirmations | Errors | `Pill(text:)` | Sources/DesignSystem/Pill.swift | LibraryView | none |
+
+## Internal
+
+| Name | Why not registered |
+|---|---|
+| LibraryView | A screen |
+EOF
+printf '# App\n\nComponents: [registry](docs/COMPONENT_REGISTRY.md).\n' >"$DR/CLAUDE.md"
+library() { # $1 body of LibraryView
+  printf 'import SwiftUI\n\nstruct LibraryView: View {\n    var body: some View {\n%s\n    }\n}\n' "$1" >"$DR/Sources/Features/LibraryView.swift"
+}
+CLEAN='        VStack(spacing: Spacing.s) {
+            Text("Library").font(Typography.title).padding(Spacing.m)
+            Text("Albums").padding().padding(.horizontal)
+            HStack(spacing: 0) {}
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card))'
+library "$CLEAN"
+git -C "$DR" add -A && git -C "$DR" commit -qm clean
+library '        VStack(spacing: 7) {
+            Text("Library").font(.system(size: 15)).padding(13)
+            Text("Albums").padding(.horizontal, 13).foregroundStyle(Color(red: 0.2, green: 0.3, blue: 0.4))
+            HStack(spacing: 0) {}
+        }
+        .cornerRadius(5)'
+cat >"$DR/Sources/Features/StatusPill.swift" <<'EOF'
+import SwiftUI
+
+struct StatusPill: View {
+    var body: some View { Text("Saved").padding(Spacing.s) }
+}
+EOF
+printf '# App\n\nComponents: [registry](docs/REGISTRY.md).\n' >"$DR/CLAUDE.md"
+git -C "$DR" add -A && git -C "$DR" commit -qm drift
+library "$CLEAN"
+git -C "$DR" rm -q Sources/Features/StatusPill.swift
+printf '# App\n\nComponents: [registry](docs/COMPONENT_REGISTRY.md).\n' >"$DR/CLAUDE.md"
+git -C "$DR" add -A && git -C "$DR" commit -qm cleanup
+
+out="$(drift history --project "$DR" "$(git -C "$DR" rev-list --max-parents=0 HEAD)^!" 2>&1)"
+expect_result "drift: a clean commit scores 0, with every design value a token" 0 'score 0  tokens 100%' "$out"
+out="$(drift history HEAD~2..HEAD --project "$DR" --json)"
+scores="$(printf '%s\n' "$out" | sed 1d | jq -r '.score' | paste -sd' ' -)"
+expect_result "drift: history prints one object per commit, oldest first" 0 '^exit=0' "$out"
+if [ "$scores" = "8 0" ]; then ok "drift: planted drift raises the score (8), the clean-up brings it back (0)"
+else nok "drift: planted drift raises the score (8), the clean-up brings it back (0)" "scores: $scores"; fi
+drifted="$(printf '%s\n' "$out" | sed -n 2p)"
+if [ "$(jq -c '[.tokens.padding.values, .tokens.padding.literal, .tokens.spacing.values, .tokens.radius.values, .tokens.font.values, .colors.literal, .token_share]' <<<"$drifted")" = '[[13],2,[7],[5],[15],1,29]' ]; then
+  ok "drift: literal values are counted by kind (padding 13 twice, spacing 7, radius 5, font 15, one color), token share 29%"
+else nok "drift: literal values are counted by kind (padding 13 twice, spacing 7, radius 5, font 15, one color), token share 29%" "$drifted"; fi
+if [ "$(jq -c '.near_duplicates' <<<"$drifted")" = '[{"name":"StatusPill","file":"Sources/Features/StatusPill.swift:3","like":"Pill"}]' ]; then
+  ok "drift: a new component with the role of a registered one is a near-duplicate"
+else nok "drift: a new component with the role of a registered one is a near-duplicate" "$drifted"; fi
+if [ "$(jq -c '.checks' <<<"$drifted")" = '{"registry":0,"layout":0,"docs":1,"contracts":0}' ]; then ok "drift: the docs check's problems are counted"
+else nok "drift: the docs check's problems are counted" "$drifted"; fi
+git -C "$DR" checkout -q HEAD~1
+out="$(drift score --project "$DR")"
+expect_result "drift: score names the literal values and the near-duplicate" 0 'near-duplicate: StatusPill \(Sources/Features/StatusPill\.swift:3\) has the role of Pill' "$out"
+git -C "$DR" checkout -q -
+printf '%s\n' "custom_rules:" "  ds_hardcoded_padding:" "    regex: x" "    excluded: 'Sources/Features/'" >"$DR/.swiftlint.yml"
+library '        Text("x").padding(13)'
+expect_result "drift: files the SwiftLint padding rule excludes are not UI code" 0 'score 0 ' "$(drift score --project "$DR")"
+expect_result "drift: history outside a git repository is a usage error" 2 'not a git repository' "$(drift history HEAD --project "$M4")"
+expect_result "drift: a range git does not know is a usage error" 2 'not a range git knows' "$(drift history nope..HEAD --project "$DR")"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
