@@ -3015,6 +3015,9 @@ else nok "drift: literal values are counted by kind (padding 13 twice, spacing 7
 if [ "$(jq -c '.near_duplicates' <<<"$drifted")" = '[{"name":"StatusPill","file":"Sources/Features/StatusPill.swift:3","like":"Pill"}]' ]; then
   ok "drift: a new component with the role of a registered one is a near-duplicate"
 else nok "drift: a new component with the role of a registered one is a near-duplicate" "$drifted"; fi
+if [ "$(printf '%s\n' "$out" | sed 1d | jq -c '[.ui_lines > 0, .literals_per_kloc]' | paste -sd' ' -)" = "[true,$(jq '(6 * 10000 / .ui_lines | round) / 10' <<<"$drifted")] [true,0]" ]; then
+  ok "drift: literals per 1000 UI lines, for comparing across sizes"
+else nok "drift: literals per 1000 UI lines, for comparing across sizes" "$out"; fi
 if [ "$(jq -c '.checks' <<<"$drifted")" = '{"registry":0,"layout":0,"docs":1,"contracts":0}' ]; then ok "drift: the docs check's problems are counted"
 else nok "drift: the docs check's problems are counted" "$drifted"; fi
 git -C "$DR" checkout -q HEAD~1
@@ -3026,6 +3029,16 @@ library '        Text("x").padding(13)'
 expect_result "drift: files the SwiftLint padding rule excludes are not UI code" 0 'score 0 ' "$(drift score --project "$DR")"
 expect_result "drift: history outside a git repository is a usage error" 2 'not a git repository' "$(drift history HEAD --project "$M4")"
 expect_result "drift: a range git does not know is a usage error" 2 'not a range git knows' "$(drift history nope..HEAD --project "$DR")"
+rm "$DR/.swiftlint.yml"
+expect_result "drift: --exclude leaves matching paths out of the UI code" 0 'score 0 ' "$(drift score --project "$DR" --exclude '^Sources/Features/')"
+library '        Text("x").foregroundStyle(Color(red: r, green: g, blue: b)).background(Color(hex: 0x336699))'
+expect_result "drift: a color computed from variables is not a literal, a hex one is" 0 'color 1/1' "$(drift score --project "$DR")"
+for i in 1 2 3 4; do git -C "$DR" commit -q --allow-empty -m "empty $i"; done
+out="$(drift history HEAD~6..HEAD --every 3 --project "$DR" --json)"
+if [ "$(printf '%s\n' "$out" | sed 1d | jq -r .commit | paste -sd' ' -)" = "$(for r in HEAD~5 HEAD~2 HEAD; do git -C "$DR" rev-parse --short "$r"; done | paste -sd' ' -)" ]; then
+  ok "drift: --every 3 keeps the first commit of each three, and the last"
+else nok "drift: --every 3 keeps the first commit of each three, and the last" "$out"; fi
+expect_result "drift: --every needs a positive number" 2 'usage' "$(drift history HEAD --every 0 --project "$DR")"
 
 # ---------- summary ----------
 

@@ -2,12 +2,15 @@
 # Drift score (#80): how coherent the project is, per commit. Run by the user (and the evals of
 # #8), never by a hook; it sources no hook code.
 #
-#   drift.sh score   [--project DIR] [--json]          the working tree, with the details
-#   drift.sh history <range> [--project DIR] [--json]   one line (or JSON object) per commit of a
-#                                                       git range, oldest first, e.g. main~20..main
+#   drift.sh score   [--project DIR] [--exclude ERE] [--json]
+#       the working tree, with the details
+#   drift.sh history <range> [--every N] [--project DIR] [--exclude ERE] [--json]
+#       one line (or JSON object) per commit of a git range, oldest first (main~20..main);
+#       --every N keeps one commit in N, and the last one, for a long history
 #
 # Measured in the UI code (Swift files outside tests, and outside the files the SwiftLint
-# padding rule excludes, usually the design system package):
+# padding rule excludes, usually the design system package, and outside paths matching
+# --exclude, for a project without that SwiftLint config):
 # - Design values: padding, stack spacing, corner radius and font size, each use classed as a
 #   literal number or a token (any other expression: Spacing.m, theme.gap). Literal values are
 #   counted as distinct values and uses; the token share is tokens / (tokens + literals).
@@ -21,7 +24,9 @@
 #   evaluates Package.swift, code from the repository, once per commit).
 #
 # The score is the number of things to fix: literal uses (colors included), near-duplicates
-# and problems. Lower is better; its direction over commits is what matters.
+# and problems. Lower is better; its direction over commits is what matters. It grows with the
+# code, so a growing app also gets the literal uses per 1000 non-empty UI lines, and the token
+# share: those two compare across sizes.
 #
 # Exit 0: printed. Exit 2: usage error, not a git repository (history), or a missing tool.
 
@@ -31,7 +36,7 @@ export LC_ALL=C
 here="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
-  echo "usage: drift.sh score [--project DIR] [--json] | drift.sh history <range> [--project DIR] [--json]" >&2
+  echo "usage: drift.sh score [--project DIR] [--exclude ERE] [--json] | drift.sh history <range> [--every N] [--project DIR] [--exclude ERE] [--json]" >&2
   exit 2
 }
 
@@ -41,9 +46,16 @@ case "$mode" in score | history) ;; *) usage ;; esac
 range=""
 project="."
 json=false
+every=1
+exclude=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) [ $# -ge 2 ] || usage; project="$2"; shift 2 ;;
+    --exclude) [ $# -ge 2 ] || usage; exclude="$2"; shift 2 ;;
+    --every)
+      [ $# -ge 2 ] || usage
+      case "$2" in '' | *[!0-9]* | 0) usage ;; esac
+      every="$2"; shift 2 ;;
     --json) json=true; shift ;;
     -*) usage ;;
     *) [ "$mode" = history ] && [ -z "$range" ] || usage; range="$1"; shift ;;
@@ -71,6 +83,7 @@ ui_files() {
   excluded="$(awk '/^  ds_hardcoded_padding:/ { r = 1; next } r && /^  [a-z_]+:/ { exit }
     r && /^    excluded:/ { sub(/^    excluded:[ \t]*/, ""); gsub(/^'"'"'|'"'"'$/, ""); print; exit }' "$root/.swiftlint.yml" 2>/dev/null)"
   case "$excluded" in '' | *'{{'*) ;; *) files="$(grep -vE -- "$excluded" <<<"$files")" ;; esac
+  [ -z "$exclude" ] || files="$(grep -vE -- "$exclude" <<<"$files")"
   printf '%s\n' "$files" | grep -v '^$'
 }
 
@@ -122,7 +135,9 @@ design_values() {
         s = $0
         while (match(s, /(Color\((red|hue|white|hex):[^)]*\)|NSColor\((red|calibratedRed|srgbRed|deviceRed|white|calibratedWhite):[^)]*\)|#colorLiteral\([^)]*\))/)) {
           v = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
-          gsub(/[ \t]+/, "", v); print "color\tliteral\t" v
+          gsub(/[ \t]+/, "", v)
+          # Components computed from variables (Color(red: r, ...)) are not a hardcoded color.
+          if (v ~ /[0-9]/ || v ~ /^#colorLiteral/) print "color\tliteral\t" v
         }
       }' "$root/$f"
   done <<<"$(ui_files "$root")"
@@ -169,8 +184,9 @@ problems() {
 measure() {
   local root="$1"
   design_values "$root" >"$work/values"
+  ui_lines="$(cd "$root" && ui_files "$root" | while IFS= read -r f; do cat "$f"; done | grep -c .)"
   near_duplicates "$root" >"$work/dupes"
-  jq -n --arg commit "$2" --arg date "$3" \
+  jq -n --arg commit "$2" --arg date "$3" --argjson lines "${ui_lines:-0}" \
     --rawfile values "$work/values" --rawfile dupes "$work/dupes" \
     --argjson registry "$(problems "$root" registry)" --argjson layout "$(problems "$root" layout)" \
     --argjson docs "$(problems "$root" docs)" --argjson contracts "$(problems "$root" contracts)" '
@@ -188,6 +204,8 @@ measure() {
     | {commit: $commit, date: $date,
        score: ($lit + $colors.literal + ($d | length) + ([$checks[]] | add)),
        token_share: (if $lit + $tok == 0 then null else (($tok * 100 / ($lit + $tok)) | round) end),
+       ui_lines: $lines,
+       literals_per_kloc: (if $lines == 0 then null else ((($lit + $colors.literal) * 10000 / $lines | round) / 10) end),
        tokens: $tokens, colors: $colors, near_duplicates: $d, checks: $checks}'
 }
 
@@ -196,6 +214,7 @@ line() {
   jq -r '
     def k($n): "\($n) \(.tokens[$n].values | length)/\(.tokens[$n].literal)";
     "\(.commit) \(.date)  score \(.score)  tokens \(if .token_share == null then "-" else "\(.token_share)%" end)"
+    + "  literals per 1k UI lines \(.literals_per_kloc // "-") (\(.ui_lines) lines)"
     + "  literals (values/uses): \(k("padding")), \(k("spacing")), \(k("radius")), \(k("font")), color \(.colors.values | length)/\(.colors.literal)"
     + "  near-duplicates \(.near_duplicates | length)"
     + "  problems: registry \(.checks.registry), layout \(.checks.layout), docs \(.checks.docs), contracts \(.checks.contracts)"'
@@ -217,6 +236,9 @@ fi
 git -C "$project" rev-parse --git-dir >/dev/null 2>&1 || { echo "drift: $project is not a git repository." >&2; exit 2; }
 commits="$(git -C "$project" rev-list --reverse "$range" 2>/dev/null)" || { echo "drift: not a range git knows: $range" >&2; exit 2; }
 [ -n "$commits" ] || { echo "drift: no commits in $range." >&2; exit 0; }
+if [ "$every" -gt 1 ]; then
+  commits="$(printf '%s\n' "$commits" | awk -v n="$every" '{ cur = $0 } (NR - 1) % n == 0 { print } END { if ((NR - 1) % n) print cur }')"
+fi
 while IFS= read -r sha; do
   tree="$work/tree"
   rm -rf "$tree" && mkdir -p "$tree"

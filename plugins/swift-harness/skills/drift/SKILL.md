@@ -23,12 +23,12 @@ With a git range in the arguments (`$ARGUMENTS`, for example `main~30..main`), o
 "${CLAUDE_PLUGIN_ROOT}/scripts/drift.sh" history <range> --project .
 ```
 
-Each commit is extracted and measured on its own, so a long range takes a while: before running more than about 50 commits, say how many there are.
+Each commit is extracted and measured on its own (about a second for a 36k-line UI). For a long range add `--every N` to measure one commit in N, and the last. A project without the SwiftLint config of the setup can leave its design-system package out with `--exclude '^Packages/DesignSystem/'` (any path regex).
 
 ## 2. Report
 
 Show the output as printed, then in a few lines:
-- The score is the number of things to fix: literal uses (padding, spacing, radius, font size, colors made from components), near-duplicates and check problems. Lower is better. Its direction over commits matters more than its value.
+- The score is the number of things to fix: literal uses (padding, spacing, radius, font size, colors made from components), near-duplicates and check problems. Lower is better. Its direction over commits matters more than its value, and it grows with the code: over a range, compare the token share and the literals per 1000 UI lines.
 - `tokens` is the share of design values that go through a token. Name the kinds whose literal values grew, and the values (from `score`).
 - A near-duplicate is a guess from the name: `StatusPill` has the role of the registered `Pill`. Ask the user to confirm it before proposing to reuse the registered component or register the new one.
 - Over a range, name the commits where the score jumped or dropped, and what moved.

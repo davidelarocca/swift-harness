@@ -5,5 +5,6 @@ Measurements of the harness itself: whether its checks catch what they claim, on
 | Eval | Question | Issue |
 |---|---|---|
 | [Check sensitivity](check-sensitivity.md) | Does each check notice a defect planted in the code or the docs it guards? | [#79](https://github.com/davidelarocca/swift-harness/issues/79) |
+| [Drift score](drift.md) | Does the drift score move with real drift over a project's history? | [#80](https://github.com/davidelarocca/swift-harness/issues/80) |
 
 Evals with and without the plugin in real Claude Code sessions ([#8](https://github.com/davidelarocca/swift-harness/issues/8)) will be added here. The smoke runs so far are in [`tests/smoke/RESULTS.md`](../smoke/RESULTS.md).
