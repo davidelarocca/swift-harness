@@ -147,11 +147,29 @@ is_test() { grep -E '(^|/)[^/]*Tests?/|Tests?\.swift$'; }
 test_files() { swift_files | is_test; }
 source_files() { swift_files | grep -vE '(^|/)[^/]*Tests?/|Tests?\.swift$|(^|/)Package\.swift$'; }
 
-# $1 ERE of a check's API: test files that call it.
+# The helper types of the setup templates: their own files call their API, and their functions
+# are the API, not helpers of the project.
+TEMPLATE_TYPES='KeyboardCheck|LayoutContract|LayoutAudit|AccessibilityAudit|Snapshot|Screenshot|FocusOrder|PerformanceBudget'
+
+# $1 ERE of a check's API: test files that call it, directly or through a helper function
+# declared in a test file that calls it directly (an assertAccessibility() wrapping the audit).
 tests_using() {
-  local f
-  while IFS= read -r f; do
+  local f direct helpers
+  direct="$(while IFS= read -r f; do
     [ -n "$f" ] && grep -qE "$1" "$copy/$f" 2>/dev/null && printf '%s\n' "$f"
+  done <<<"$(test_files)")"
+  [ -n "$direct" ] || return 0
+  printf '%s\n' "$direct"
+  helpers="$(while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qE "(class|struct|enum|extension)[[:space:]]+($TEMPLATE_TYPES)([^A-Za-z0-9_]|$)" "$copy/$f" && continue
+    grep -oE 'func[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$copy/$f" | awk '{ print $2 }' | grep -v '^test'
+  done <<<"$direct" | sort -u | paste -sd'|' -)"
+  [ -n "$helpers" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qxF -- "$f" <<<"$direct" && continue
+    grep -qE "(^|[^A-Za-z0-9_])($helpers)\(" "$copy/$f" 2>/dev/null && printf '%s\n' "$f"
   done <<<"$(test_files)"
 }
 
@@ -164,7 +182,8 @@ signature_of() {
     names="$names $(basename "$f" .swift | sed 's/[0-9][0-9]*/#/g')"
     names="$names $(grep -oE '(class|struct|enum|actor)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$copy/$f" | awk '{ print $2 }' | sed 's/[0-9][0-9]*/#/g' | tr '\n' ' ')"
   done <<<"$(tests_using "$1")"
-  names="$(printf '%s\n' $names | grep -v '^$' | sort -u | paste -sd'|' -)"
+  # File names can hold regex characters (XCUIApplication+Layout).
+  names="$(printf '%s\n' $names | grep -v '^$' | sort -u | sed 's/[][\\.*^$+?(){}|]/\\&/g' | paste -sd'|' -)"
   [ -n "$names" ] && printf '(^|[^A-Za-z0-9_])(%s)([^A-Za-z0-9_]|$)' "$names"
 }
 
@@ -190,6 +209,18 @@ credit_regex() {
     layout-size) signature_of 'LayoutContract\.check|LayoutAudit\.' ;;
     accessibility) signature_of 'AccessibilityAudit\.|performAccessibilityAudit' ;;
     snapshot) signature_of 'Snapshot\.verify' ;;
+  esac
+}
+
+# $1 verify check: why it cannot notice anything in this project (no test calls its API, or
+# SwiftLint has no rule for it), or nothing.
+no_check() {
+  case "$1" in
+    lint) grep -q 'ds_hardcoded_padding' "$copy/.swiftlint.yml" 2>/dev/null || printf 'no ds_hardcoded_padding rule in .swiftlint.yml' ;;
+    keyboard) [ -n "$(tests_using 'KeyboardCheck\.')" ] || printf 'no test calls KeyboardCheck' ;;
+    layout-size) [ -n "$(tests_using 'LayoutContract\.check|LayoutAudit\.')" ] || printf 'no test calls LayoutContract.check or LayoutAudit' ;;
+    accessibility) [ -n "$(tests_using 'AccessibilityAudit\.|performAccessibilityAudit')" ] || printf 'no test runs an accessibility audit' ;;
+    snapshot) [ -n "$(tests_using 'Snapshot\.verify')" ] || printf 'no test calls Snapshot.verify' ;;
   esac
 }
 
@@ -510,7 +541,7 @@ printf 'Check sensitivity: %s\n' "$project"
 printf 'Without mutations: %s\n\n' "$base_summary"
 printf '| Operator | Site | Target | Result | Failed checks |\n|---|---|---|---|---|\n'
 
-killed=0 survived=0 nosite=0 notrun=0
+killed=0 survived=0 nosite=0 notrun=0 nocheck=0
 while IFS=$'\t' read -r op target _; do
   [ -z "$only" ] || [[ " $only " == *" $op "* ]] || continue
   is_verify=false
@@ -519,6 +550,11 @@ while IFS=$'\t' read -r op target _; do
     if [ "$verify" = true ]; then why="verify cannot run"; else why="needs --verify"; fi
     printf '| %s | - | %s | not run (%s) | - |\n' "$op" "$target" "$why"
     notrun=$((notrun + 1))
+    continue
+  fi
+  if [ "$is_verify" = true ] && why="$(no_check "$target")" && [ -n "$why" ]; then
+    printf '| %s | - | %s | no check (%s) | - |\n' "$op" "$target" "$why"
+    nocheck=$((nocheck + 1))
     continue
   fi
   rm -f "$work/changed"
@@ -564,6 +600,7 @@ while IFS=$'\t' read -r op target _; do
   cp -p "$work/orig/$f" "$copy/$f"
 done <<<"$OPERATORS"
 
-printf '\n%s killed, %s survived, %s with no site%s.\n' "$killed" "$survived" "$nosite" "$([ "$notrun" -eq 0 ] || printf ', %s not run' "$notrun")"
+printf '\n%s killed, %s survived, %s with no site%s%s.\n' "$killed" "$survived" "$nosite" \
+  "$([ "$nocheck" -eq 0 ] || printf ', %s with no check' "$nocheck")" "$([ "$notrun" -eq 0 ] || printf ', %s not run' "$notrun")"
 [ "$survived" -eq 0 ] || printf 'A survived mutation is a finding: explain it (a bug in the check, or out of its scope by design).\n'
 exit 0

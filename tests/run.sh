@@ -2853,13 +2853,22 @@ struct Favorite: View {
     }
 }
 EOF
+  # The audit through a helper of the project, in a file whose name has a "+".
   cat >"$p/Tests/AppUITests/AppUITests.swift" <<'EOF'
 import XCTest
 
 final class AppUITests: XCTestCase {
-    @MainActor func testTheScreenPassesTheAudit() throws { try AccessibilityAudit.check(XCUIApplication()) }
+    @MainActor func testTheScreenPassesTheAudit() throws { XCUIApplication().assertAudit(in: self) }
 }
 EOF
+  cat >"$p/Tests/AppUITests/XCUIApplication+Audit.swift" <<'EOF'
+import XCTest
+
+extension XCUIApplication {
+    @MainActor func assertAudit(in testCase: XCTestCase) { try? performAccessibilityAudit() }
+}
+EOF
+  printf 'custom_rules:\n  ds_hardcoded_padding:\n    regex: x\n' >"$p/.swiftlint.yml"
   cat >"$p/scripts/verify.sh" <<'EOF'
 #!/bin/bash
 cd "$(dirname "$0")/.." || exit 2
@@ -2890,6 +2899,7 @@ done
 expect_result "mutate --verify: the padding token becomes a literal" 0 'Badge\.swift:8 \(\.padding\(Spacing\.small\) became \.padding\(13\)\)' "$out"
 expect_result "mutate --verify: the shortcut comes from a view a KeyboardCheck test hosts" 0 'SaveBar\.swift:12 \(\.keyboardShortcut\(\.cancelAction\) removed\)' "$out"
 expect_result "mutate --verify: the first Screens view is made wider than Min, on the same line" 0 'LibraryView\.swift:5 \(LibraryView wrapped in \.frame\(minWidth: 600\), Min width 400\)' "$out"
+expect_result "mutate --verify: an audit called through a helper of the project is credited to accessibility" 0 '^\| a11y-label \| [^|]+ \| accessibility \| killed \| accessibility \|$' "$out"
 expect_result "mutate --verify: the summary counts all ten" 0 '^6 killed, 0 survived, 4 with no site\.$' "$out"
 if grep -q 'mutantBody' "$MV/Sources/Components/LibraryView.swift" || [ -d "$MV/.build" ]; then nok "mutate --verify: the project is not changed, and no .build is left behind"
 else ok "mutate --verify: the project is not changed, and no .build is left behind"; fi
@@ -2907,6 +2917,14 @@ out="$(mutate --project "$MV" --verify --only keyboard-shortcut --only layout-wi
 expect_result "mutate --verify: verify failing without mutations is named" 0 'verify fails already' "$out"
 expect_result "mutate --verify: it still kills a mutation with a new failure" 0 '^\| keyboard-shortcut \| [^|]+ \| keyboard \| killed \| keyboard \|$' "$out"
 expect_result "mutate --verify: a failure no check is credited with (a mutation that does not build) is 'verify', and the mutation survives" 0 '^\| layout-wide \| [^|]+ \| layout-size \| SURVIVED \| verify \|$' "$out"
+rm -f "$MV/old-failure" "$MV/build-breaks"
+
+# A check the project does not use cannot notice anything: said, and verify is not run for it.
+rm "$MV/.swiftlint.yml" "$MV/Tests/ComponentsTests/KeyboardTests.swift"
+out="$(mutate --project "$MV" --verify --only lint-literal --only keyboard-shortcut)"
+expect_result "mutate --verify: no padding rule in .swiftlint.yml is 'no check'" 0 '^\| lint-literal \| - \| lint \| no check \(no ds_hardcoded_padding rule in \.swiftlint\.yml\) \| - \|$' "$out"
+expect_result "mutate --verify: no test calling KeyboardCheck is 'no check'" 0 '^\| keyboard-shortcut \| - \| keyboard \| no check \(no test calls KeyboardCheck\) \| - \|$' "$out"
+expect_result "mutate --verify: ... counted apart" 0 '^0 killed, 0 survived, 0 with no site, 2 with no check\.$' "$out"
 
 # ---------- summary ----------
 
