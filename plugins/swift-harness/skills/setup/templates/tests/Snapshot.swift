@@ -31,6 +31,9 @@
 // A pixel differs when a color channel changes by more than `channelTolerance`; `tolerance:`
 // is the fraction of pixels allowed to differ (default 0).
 
+// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// swiftlint:disable cyclomatic_complexity function_body_length function_parameter_count identifier_name line_length
+
 #if os(macOS)
 import AppKit
 import Foundation
@@ -253,3 +256,5 @@ enum Snapshot {
     }
 }
 #endif
+
+// swiftlint:enable cyclomatic_complexity function_body_length function_parameter_count identifier_name line_length

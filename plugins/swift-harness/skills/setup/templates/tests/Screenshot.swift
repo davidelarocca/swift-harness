@@ -34,6 +34,9 @@
 // window, the image looks like an empty window and capture() reports it as blank. A view of
 // one color is saved like any other.
 
+// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// swiftlint:disable line_length
+
 #if os(macOS)
 import AppKit
 import Foundation
@@ -286,3 +289,5 @@ enum Screenshot {
     }
 }
 #endif
+
+// swiftlint:enable line_length

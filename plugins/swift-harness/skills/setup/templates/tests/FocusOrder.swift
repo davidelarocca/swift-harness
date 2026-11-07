@@ -26,6 +26,9 @@
 // `hasKeyboardFocus` attribute through a query, which works on macOS 26 and 27 but is not
 // documented. When no element reports focus, check() fails saying so rather than passing.
 
+// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// swiftlint:disable line_length
+
 import XCTest
 
 enum FocusOrder {
@@ -100,3 +103,5 @@ enum FocusOrder {
         }
     }
 }
+
+// swiftlint:enable line_length

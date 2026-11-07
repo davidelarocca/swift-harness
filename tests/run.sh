@@ -1066,6 +1066,18 @@ expect_verify "verify.sh: existing package with passing tests passes" 0 'verify 
 V="$(verify_project build-fails '-project App.xcodeproj' App '')"
 expect_verify "verify.sh: failing build fails" 1 'verify fast: FAIL' "$(FAKE_XCODEBUILD_EXIT=65 run_verify "$V")"
 
+# Xcode 27 with -quiet names failed tests only under "Failing tests:", one per indented line
+# (found by the mutation run of #79): without xcbeautify they must still reach Claude.
+mkdir -p "$TMP/fakes-failing"
+cp "$FAKES/swift" "$FAKES/swiftlint" "$TMP/fakes-failing/"
+printf '#!/bin/bash\nprintf "Failing tests:\\n\\tAppUITests.testTheFixedScreenPassesTheAudit()\\n\\n** TEST FAILED **\\n"\nexit 65\n' >"$TMP/fakes-failing/xcodebuild"
+chmod +x "$TMP/fakes-failing/xcodebuild"
+out="$(PATH="$TMP/fakes-failing:/usr/bin:/bin" "$V/scripts/verify.sh" full 2>&1)"
+expect_result "verify.sh: without xcbeautify, the names of failed tests are shown (Xcode 27 -quiet)" 1 'Failing tests:' "exit=$?
+$out"
+expect_result "verify.sh: ... with each test on its line" 1 'AppUITests\.testTheFixedScreenPassesTheAudit\(\)' "exit=1
+$out"
+
 # SH120-05: a project name with spaces must reach xcodebuild as one argument.
 V="$(verify_project spaced '-project My App.xcodeproj' App '')"
 : >"$TMP/xcodebuild-args"
@@ -2792,7 +2804,7 @@ expect_result "mutate: the fixture passes every check without mutations" 0 'With
 for op in registry-rename:registry layout-rename:layout docs-stale-link:docs security-relax:security contracts-forbidden:contracts; do
   expect_result "mutate: ${op%%:*} is killed by the ${op#*:} check, and only by it" 0 "^\| ${op%%:*} \| [^|]+:[0-9]+ \([^|]+\) \| ${op#*:} \| killed \| ${op#*:} \|$" "$out"
 done
-expect_result "mutate: the summary counts them" 0 '^5 killed, 0 survived, 0 with no site\.$' "$out"
+expect_result "mutate: the summary counts them" 0 '^5 killed, 0 survived, 0 with no site, 5 not run\.$' "$out"
 if [ "$(snapshot "$M")" = "$before" ]; then ok "mutate: the project itself is not changed"
 else nok "mutate: the project itself is not changed" "$(diff <(printf '%s\n' "$before") <(snapshot "$M") | head)"; fi
 expect_result "mutate: --only runs one operator" 0 '^1 killed, 0 survived, 0 with no site\.$' "$(mutate --project "$M" --only docs-stale-link)" 'registry-rename'
@@ -2821,8 +2833,80 @@ printf '{}\n' >"$M4/.claude/swift-harness.json"
 printf '# Notes\n\nSee `docs/NOTES.md` and [the web](https://example.com).\n' >"$M4/CLAUDE.md"
 printf '# Notes\n' >"$M4/docs/NOTES.md"
 out="$(mutate --project "$M4")"
-expect_result "mutate: operators with nothing to change report no site" 0 '^1 killed, 0 survived, 4 with no site\.$' "$out"
+expect_result "mutate: operators with nothing to change report no site" 0 '^1 killed, 0 survived, 4 with no site, 5 not run\.$' "$out"
 expect_result "mutate: a path in backticks is moved when there is no local link" 0 'CLAUDE\.md:3 \(docs/NOTES\.md now points to docs/NOTES-moved\.md\) \| docs \| killed' "$out"
+
+# --verify, with a fake scripts/verify.sh that prints what each check prints when the code
+# has the defect (tests/mutate-fixture.sh runs the real ones on Xcode). The run line has a
+# number that changes every run: numbers are ignored, so it is not a new problem.
+mutate_verify_project() { # $1 name
+  local p="$TMP/$1"
+  cp -R "$HERE/fixtures/mutate-verify" "$p"
+  mkdir -p "$p/scripts" "$p/Tests/AppUITests"
+  cat >"$p/Sources/Components/Favorite.swift" <<'EOF'
+import SwiftUI
+
+struct Favorite: View {
+    var body: some View {
+        Button {} label: { Image(systemName: "star") }
+            .accessibilityLabel("Favorite")
+    }
+}
+EOF
+  cat >"$p/Tests/AppUITests/AppUITests.swift" <<'EOF'
+import XCTest
+
+final class AppUITests: XCTestCase {
+    @MainActor func testTheScreenPassesTheAudit() throws { try AccessibilityAudit.check(XCUIApplication()) }
+}
+EOF
+  cat >"$p/scripts/verify.sh" <<'EOF'
+#!/bin/bash
+cd "$(dirname "$0")/.." || exit 2
+fail=0
+c=Sources/Components
+echo "Test run with 4 tests in 3 suites passed after 0.$RANDOM seconds with 0 issues."
+[ -f old-failure ] && { echo "Sources/Components/Old.swift:3:1: error: Line Length Violation (line_length)"; fail=1; }
+grep -q '\.padding(13)' $c/Badge.swift && { echo "$c/Badge.swift:8:9: error: Hardcoded padding Violation: Use a Spacing token. (ds_hardcoded_padding)"; fail=1; }
+grep -q 'keyboardShortcut(.cancelAction)' $c/SaveBar.swift || { echo "✘ Test returnSavesAndEscapeCancels() recorded an issue at KeyboardTests.swift:17:9: Expectation failed"; fail=1; }
+if grep -q mutantBody $c/LibraryView.swift; then
+  if [ -f build-breaks ]; then echo "$c/LibraryView.swift:5:40: error: cannot find 'mutantBody' in scope"
+  else echo "✘ Test library() recorded an issue at LayoutTests.swift:7:28: LibraryView needs 600 pt at Min 400"; fi
+  fail=1
+fi
+grep -q 'Spacing.small + 3' $c/Badge.swift && { echo "✘ Test badge() recorded an issue at SnapshotTests.swift:7:25: Badge-macos-120x40-light: 412 pixels differ"; fail=1; }
+grep -q accessibilityLabel $c/Favorite.swift || { printf 'Failing tests:\n\tAppUITests.testTheScreenPassesTheAudit()\n'; fail=1; }
+exit $fail
+EOF
+  chmod +x "$p/scripts/verify.sh"
+  printf '%s' "$p"
+}
+MV="$(mutate_verify_project mutate-verify)"
+out="$(mutate --project "$MV" --verify)"
+expect_result "mutate --verify: the run without mutations passes verify (a number that changes is not a problem)" 0 'Without mutations: .*, verify pass$' "$out"
+for op in lint-literal:lint keyboard-shortcut:keyboard layout-wide:layout-size a11y-label:accessibility snapshot-padding:snapshot; do
+  expect_result "mutate --verify: ${op%%:*} is killed by the ${op#*:} check, and only by it" 0 "^\| ${op%%:*} \| [^|]+:[0-9]+ \([^|]+\) \| ${op#*:} \| killed \| ${op#*:} \|$" "$out"
+done
+expect_result "mutate --verify: the padding token becomes a literal" 0 'Badge\.swift:8 \(\.padding\(Spacing\.small\) became \.padding\(13\)\)' "$out"
+expect_result "mutate --verify: the shortcut comes from a view a KeyboardCheck test hosts" 0 'SaveBar\.swift:12 \(\.keyboardShortcut\(\.cancelAction\) removed\)' "$out"
+expect_result "mutate --verify: the first Screens view is made wider than Min, on the same line" 0 'LibraryView\.swift:5 \(LibraryView wrapped in \.frame\(minWidth: 600\), Min width 400\)' "$out"
+expect_result "mutate --verify: the summary counts all ten" 0 '^6 killed, 0 survived, 4 with no site\.$' "$out"
+if grep -q 'mutantBody' "$MV/Sources/Components/LibraryView.swift" || [ -d "$MV/.build" ]; then nok "mutate --verify: the project is not changed, and no .build is left behind"
+else ok "mutate --verify: the project is not changed, and no .build is left behind"; fi
+
+out="$(mutate --project "$MV")"
+expect_result "mutate: without --verify, the verify operators are not run" 0 '^\| keyboard-shortcut \| - \| keyboard \| not run \(needs --verify\) \| - \|$' "$out"
+mv "$MV/scripts/verify.sh" "$MV/scripts/verify.off"
+out="$(mutate --project "$MV" --verify --only keyboard-shortcut)"
+expect_result "mutate --verify: without scripts/verify.sh, said and not run" 0 'verify not run \(no scripts/verify\.sh\)' "$out"
+expect_result "mutate --verify: ... and the operators are not run" 0 'not run \(verify cannot run\)' "$out"
+mv "$MV/scripts/verify.off" "$MV/scripts/verify.sh"
+
+touch "$MV/old-failure" "$MV/build-breaks"
+out="$(mutate --project "$MV" --verify --only keyboard-shortcut --only layout-wide)"
+expect_result "mutate --verify: verify failing without mutations is named" 0 'verify fails already' "$out"
+expect_result "mutate --verify: it still kills a mutation with a new failure" 0 '^\| keyboard-shortcut \| [^|]+ \| keyboard \| killed \| keyboard \|$' "$out"
+expect_result "mutate --verify: a failure no check is credited with (a mutation that does not build) is 'verify', and the mutation survives" 0 '^\| layout-wide \| [^|]+ \| layout-size \| SURVIVED \| verify \|$' "$out"
 
 # ---------- summary ----------
 

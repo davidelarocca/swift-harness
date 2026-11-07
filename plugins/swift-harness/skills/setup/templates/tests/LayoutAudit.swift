@@ -38,6 +38,9 @@
 //
 // UI tests run in `scripts/verify.sh full`, not in `fast`.
 
+// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// swiftlint:disable identifier_name large_tuple line_length nesting
+
 import XCTest
 
 enum LayoutAudit {
@@ -198,3 +201,5 @@ enum LayoutAudit {
         return "(\(n(r.minX)), \(n(r.minY)), \(n(r.width))x\(n(r.height)))"
     }
 }
+
+// swiftlint:enable identifier_name large_tuple line_length nesting

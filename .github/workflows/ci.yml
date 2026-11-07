@@ -23,7 +23,7 @@ jobs:
         run: |
           for f in plugins/swift-harness/scripts/*.sh \
                    plugins/swift-harness/skills/setup/templates/verify.sh \
-                   tests/run.sh tests/ios-fixture.sh tests/smoke/*.sh; do
+                   tests/run.sh tests/ios-fixture.sh tests/mutate-fixture.sh tests/smoke/*.sh; do
             bash -n "$f"
           done
 
@@ -35,7 +35,7 @@ jobs:
           shellcheck -S warning -x -P plugins/swift-harness/scripts \
             plugins/swift-harness/scripts/*.sh \
             plugins/swift-harness/skills/setup/templates/verify.sh \
-            tests/run.sh tests/ios-fixture.sh tests/smoke/*.sh
+            tests/run.sh tests/ios-fixture.sh tests/mutate-fixture.sh tests/smoke/*.sh
 
       - name: JSON manifests and templates
         run: |
@@ -154,6 +154,26 @@ jobs:
       # the tests on macOS and on an iPhone simulator, and a negative control fails on iOS only.
       - name: tests/ios-fixture.sh --full
         run: /bin/bash tests/ios-fixture.sh --full
+
+  mutate-fixture:
+    name: Check sensitivity (mutate.sh --verify on fixtures)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install SwiftLint
+        run: command -v swiftlint >/dev/null || brew install swiftlint
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swiftlint version
+
+      # scripts/mutate.sh --verify with real builds: a package with the setup templates
+      # (lint, KeyboardCheck, LayoutContract, Snapshot, its baseline approved on the runner) and
+      # the accessibility app (UI tests). Each operator must be killed by the check it targets.
+      - name: tests/mutate-fixture.sh --ui
+        run: /bin/bash tests/mutate-fixture.sh --ui
 
   accessibility-fixture:
     name: Accessibility audit fixture (UI tests)

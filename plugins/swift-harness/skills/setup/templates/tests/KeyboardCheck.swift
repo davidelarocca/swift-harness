@@ -31,6 +31,9 @@
 // test: FocusOrder.swift for the focus order, XCUIApplication.typeKey for the shortcuts.
 // Letters map to their key on a US keyboard; other layouts match by character.
 
+// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// swiftlint:disable large_tuple
+
 #if os(macOS)
 import AppKit
 import SwiftUI
@@ -119,3 +122,5 @@ final class KeyboardCheck {
     }
 }
 #endif
+
+// swiftlint:enable large_tuple

@@ -33,6 +33,9 @@
 // .claude/swift-harness.json, else docs/LAYOUT_CONTRACT.md. A sandboxed test host cannot read
 // the source tree: measure in a test target without a host app, or pass `contract:`.
 
+// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// swiftlint:disable cyclomatic_complexity identifier_name line_length
+
 #if os(macOS)
 import AppKit
 import Foundation
@@ -267,3 +270,5 @@ enum LayoutContract {
     }
 }
 #endif
+
+// swiftlint:enable cyclomatic_complexity identifier_name line_length
