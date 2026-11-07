@@ -84,8 +84,10 @@ run_xcodebuild() { # $1 action, $2 platform
       -derivedDataPath "$DERIVED_DATA" "$action" 2>&1 | xcbeautify --quiet
     return "${PIPESTATUS[0]}"
   fi
+  # Xcode 27 with -quiet names failed tests only under "Failing tests:", one per indented line.
   xcodebuild ${CONTAINER_ARGS[@]+"${CONTAINER_ARGS[@]}"} -scheme "$SCHEME" -destination "$dest" \
-    -derivedDataPath "$DERIVED_DATA" -quiet "$action" 2>&1 | grep -E 'error:|FAILED|Test Case .* failed|Testing failed|Build failed' | head -80
+    -derivedDataPath "$DERIVED_DATA" -quiet "$action" 2>&1 |
+    grep -E 'error:|FAILED|Test Case .* failed|Testing failed|Build failed|^Failing tests:|^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+\(\)$' | head -80
   return "${PIPESTATUS[0]}"
 }
 

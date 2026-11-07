@@ -37,6 +37,9 @@
 // baselines folder: `performance.path` in .claude/swift-harness.json, default `performance/`
 // at the project root. Commit that folder.
 
+// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// swiftlint:disable identifier_name line_length optional_data_string_conversion
+
 #if os(macOS)
 import Darwin
 import Foundation
@@ -206,3 +209,5 @@ enum PerformanceBudget {
     static func percent(_ x: Double) -> String { String(format: "%.1f%%", x * 100) }
 }
 #endif
+
+// swiftlint:enable identifier_name line_length optional_data_string_conversion
