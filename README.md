@@ -276,7 +276,7 @@ They start as warnings, which double as the migration to-do list. Switch a rule 
 
 A quality tool has to be checked itself. Every release goes through:
 
-- **577 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 572 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets.
+- **581 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 576 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md).
 - **A smoke test in real Claude Code sessions** (`tests/smoke/`): 23 scenarios for the hooks (snapshots, security settings, docs and performance budgets included), 6 for reusing UI components, 3 for product coherence, 6 for window sizes and 6 for screenshot review (some of them baselines without the plugin), with their invariants checked automatically. Every run is recorded with its cost ([results](tests/smoke/RESULTS.md)).
 
 What Claude did in those sessions:
