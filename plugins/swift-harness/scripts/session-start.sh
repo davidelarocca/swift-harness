@@ -46,6 +46,9 @@ if git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     # The snapshot baselines as they were at session start, for snapshot-watch.sh (#9).
     rm -f "$sess/snapshots-warned" "$sess/snapshots-approved"
     sh_snapshot_list "$(sh_snapshots)" >"$sess/snapshots-start"
+    # The performance baselines too (#33), for the same notice.
+    rm -f "$sess/performance-warned" "$sess/performance-approved"
+    sh_snapshot_list "$(sh_performance)" >"$sess/performance-start"
     # The docs problems already there at session start, for docs-watch.sh (#70).
     rm -f "$sess/docs-start" "$sess/docs-blocked" "$sess/docs-warned"
     sh_docs_on && "$(dirname "$0")/docs.sh" check "$SH_ROOT" 2>/dev/null | sh_docs_keys >"$sess/docs-start"

@@ -64,13 +64,15 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security"])[],
+  (keys - ["format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
   (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
   (if (.snapshots | type) == "object" then (.snapshots | keys - ["path"])[] | "snapshots." + . else empty end),
-  (if (.security | type) == "object" then (.security | keys - ["enabled"])[] | "security." + . else empty end)
+  (if (.security | type) == "object" then (.security | keys - ["enabled"])[] | "security." + . else empty end),
+  (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget"])[] | "docs." + . else empty end),
+  (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end)
 ' "$SH_CONFIG" | paste -sd, - | sed 's/,/, /g')"
 if [ -n "$unknown" ]; then
   row WARN "Config keys" "unknown, ignored by the hooks (typo?): $unknown"
@@ -115,6 +117,19 @@ problems="$(jq -r '
   check(["security"]; type == "object"; "security must be an object"),
   (if (.security | type) == "object" then
     check(["security", "enabled"]; type == "boolean"; "security.enabled must be true or false")
+  else empty end),
+  check(["docs"]; type == "object"; "docs must be an object"),
+  (if (.docs | type) == "object" then
+    check(["docs", "enabled"]; type == "boolean"; "docs.enabled must be true or false"),
+    check(["docs", "paths"]; type == "array" and all(.[]; type == "string"); "docs.paths must be a list of paths"),
+    check(["docs", "history"]; type == "array" and all(.[]; type == "string"); "docs.history must be a list of paths"),
+    check(["docs", "ignore"]; type == "array" and all(.[]; type == "string"); "docs.ignore must be a list of paths"),
+    check(["docs", "budget"]; type == "number" and . > 0; "docs.budget must be a number of bytes")
+  else empty end),
+  check(["performance"]; type == "object"; "performance must be an object"),
+  (if (.performance | type) == "object" then
+    check(["performance", "path"]; type == "string" and length > 0 and (startswith("/") | not) and (("/" + . + "/") | contains("/../") | not);
+      "performance.path must be a folder inside the project")
   else empty end)
 ' "$SH_CONFIG" | paste -sd ';' - | sed 's/;/; /g')"
 if [ -n "$problems" ]; then
@@ -408,6 +423,19 @@ else
     count="$(printf '%s\n' "$docs_out" | grep -c '^- ')"
     row FAIL "Docs references" "$count problem(s): $(printf '%s\n' "$docs_out" | grep '^- ' | head -3 | sed 's/^- //' | paste -sd ';' - | sed 's/;/; /g'). Problems already there when a session starts do not block it; fix them in the docs"
   fi
+fi
+
+# Performance baselines (#33): approved numbers the project's budget tests compare with.
+performance="$(sh_performance)"
+if [ ! -d "$SH_ROOT/$performance" ]; then
+  row INFO "Performance baselines" "none: $performance/ holds the numbers the performance budget tests compare with (tests/PerformanceBudget.swift from the setup templates), approved with /swift-harness:approve-performance"
+else
+  count="$(find "$SH_ROOT/$performance" -type f -name '*.json' | wc -l | tr -d ' ')"
+  made="$(find "$SH_ROOT/$performance" -type f -name '*.json' -exec jq -r '"\(.arch // "?") macOS \(.os // "?") \(.configuration // "?")"' {} + 2>/dev/null | sort -u | paste -sd, - | sed 's/,/, /g')"
+  waiting="$(find "$SH_ROOT/$SH_PERFORMANCE_CANDIDATES" -name '*.result.json' -exec jq -r 'select(.status != "passed" and .status != "unstable") | .status' {} + 2>/dev/null | grep -vc '^not-compared$')"
+  waits=""
+  [ "${waiting:-0}" -gt 0 ] && waits="; $waiting result(s) from the last test run wait for approval: /swift-harness:approve-performance"
+  row PASS "Performance baselines" "$count budget(s) made on $made; compared only on a Mac with the same architecture, macOS version and build configuration, where instructions are counted$waits"
 fi
 
 # Snapshot baselines (#9): approved images the project's snapshot tests compare with.
