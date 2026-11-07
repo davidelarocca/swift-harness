@@ -2509,6 +2509,95 @@ SWIFT
   rm -rf "$L"
 fi
 
+# ---------- performance budget (#33) ----------
+
+if grep -qx 'disable-model-invocation: true' "$SKILLS/approve-performance/SKILL.md" &&
+  grep -qF '/swift-harness:approve-performance' "$TEMPLATES/tests/PerformanceBudget.swift" &&
+  grep -qF '| `tests/PerformanceBudget.swift` |' "$PLUGIN/skills/setup/SKILL.md"; then
+  ok "performance: only the user approves baselines, the helper says how, and setup installs it"
+else nok "performance: only the user approves baselines, the helper says how, and setup installs it"; fi
+if link_ok "$HERE/fixtures/performance/Tests/LibraryTests/PerformanceBudget.swift" "$TEMPLATES/tests/PerformanceBudget.swift"; then
+  ok "performance: the fixture runs the template helper itself"
+else nok "performance: the fixture runs the template helper itself"; fi
+
+perf() { # performance.sh arguments; prints "exit=<code>" then the output
+  local out code
+  out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/performance.sh" "$@" 2>&1)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$out"
+}
+perf_digest() { CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/performance.sh" --status --project "$1" | sed -n 's/^Digest: //p'; }
+perf_candidate() { # $1 project, $2 name, $3 status, $4 instructions
+  local c="$1/.build/swift-harness/performance"
+  mkdir -p "$c"
+  printf '{"name":"%s","instructions":%s,"cpuMilliseconds":12.5,"arch":"arm64","os":"27.0","configuration":"debug","iterations":15,"spread":0.0001}\n' "$2" "$4" >"$c/$2.json"
+  printf '{"status": "%s", "reason": "%s: reason"}\n' "$3" "$2" >"$c/$2.result.json"
+}
+B="$(new_project performance)"
+expect_result "performance: nothing waiting is said plainly" 0 'No new numbers wait' "$(perf --status --project "$B")"
+perf_candidate "$B" Load missing 360000000
+perf_candidate "$B" Sort failed 590000000
+perf_candidate "$B" Scan passed 100
+rm -f "$B/.build/swift-harness/performance/Scan.json"
+out="$(perf --status --project "$B")"
+expect_result "performance: status lists what waits, with the numbers" 0 'Load: missing.*360 M instructions, 12\.5 ms CPU, on arm64, macOS 27\.0, debug.*Sort: failed' "$(head -1 <<<"$out")
+$(tail -n +2 <<<"$out" | tr '\n' ' ')" 'Scan'
+expect_result "performance: a wrong digest approves nothing" 1 'Nothing approved' "$(perf --approve 0000 --project "$B")"
+out="$(perf --approve "$(perf_digest "$B")" --project "$B" Load)"
+if grep -qF 'Approved: performance/Load.json (missing)' <<<"$out" && jq -e '.approved and .instructions == 360000000' "$B/performance/Load.json" >/dev/null &&
+  [ -e "$B/.build/swift-harness/performance/Sort.json" ] && [ ! -e "$B/.build/swift-harness/performance/Load.json" ]; then
+  ok "performance: approving one copies its numbers into performance/, the rest still waits"
+else nok "performance: approving one copies its numbers into performance/, the rest still waits" "$out"; fi
+expect_ask "$B" "$B/performance/Load.json" "guard: a performance baseline edit asks"
+git -C "$B" add -A && git -C "$B" commit -qm baselines
+hook session-start.sh "$B" '{"source":"startup"}' >/dev/null
+expect_result "snapshot-watch: an approved performance baseline says nothing" 0 '^exit=0$' \
+  "$(perf --approve "$(perf_digest "$B")" --project "$B" >/dev/null; swatch "$B")"
+jq '.instructions = 900000000' "$B/performance/Load.json" >"$TMP/pj" && mv "$TMP/pj" "$B/performance/Load.json"
+expect_result "snapshot-watch: a performance baseline changed without approval is shown" 0 'performance baselines in performance/ changed in this session without /swift-harness:approve-performance.*changed: performance/Load\.json' "$(swatch "$B")"
+before="$(fingerprint "$B")"
+jq '.instructions = 1' "$B/performance/Load.json" >"$TMP/pj" && mv "$TMP/pj" "$B/performance/Load.json"
+[ "$before" != "$(fingerprint "$B")" ] && ok "fingerprint: a changed performance baseline is a change to verify" || nok "fingerprint: a changed performance baseline is a change to verify"
+set_config "$B" '{"performance":{"path":"../outside"}}'
+expect_result "performance: a baselines folder outside the project is refused" 1 'inside the project' "$(perf --status --project "$B")"
+set_config "$B" '{"performance":{"pth":"x"},"docs":{"budget":"big"}}'
+out="$(doctor "$B")"
+expect_row "doctor: unknown docs and performance keys are named" "$out" WARN 'Config keys' 'performance\.pth'
+expect_row "doctor: a docs budget that is not a number fails" "$out" FAIL 'Config' 'docs\.budget must be a number'
+set_config "$B" '{}'
+
+# The template on the fixture, in real `swift test` runs. Without an instruction counter (a
+# virtual machine, such as a CI runner) the budget is not compared; with one, every case runs.
+if ! command -v swift >/dev/null 2>&1; then
+  printf 'skip  performance: swift not installed, the fixture was not run\n'
+else
+  F="$TMP/perf-fixture"
+  cp -RL "$HERE/fixtures/performance" "$F"
+  git -C "$F" init -q && mkdir -p "$F/.claude" && echo '{}' >"$F/.claude/swift-harness.json"
+  (cd "$F" && swift build --build-tests >/dev/null 2>&1)
+  ptest() { # env assignments; prints "exit=<code>" then the PerformanceBudget lines
+    local out code
+    out="$(cd "$F" && env "$@" swift test 2>&1)"
+    code=$?
+    printf 'exit=%s\n%s' "$code" "$(grep '^PerformanceBudget:' <<<"$out")"
+  }
+  out="$(ptest X=1)"
+  if grep -qF 'counts no instructions' <<<"$out"; then
+    expect_result "performance: with no instruction counter the budget is not compared, and does not fail" 0 'not-compared: this machine counts no instructions' "$out"
+    printf 'skip  performance: this machine counts no instructions, the comparisons were not run\n'
+  else
+    expect_result "performance: with no baseline the budget fails, with the numbers" 1 'missing: LoadLibrary-10k: no approved baseline yet: [0-9.]+ M instructions' "$out"
+    CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/performance.sh" --approve "$(perf_digest "$F")" --project "$F" >/dev/null
+    expect_result "performance: the same code passes its approved budget" 0 'passed: [0-9.]+ M instructions.*of the approved' "$(ptest X=1)"
+    expect_result "performance: decoding twice fails, with the numbers and the percentage" 1 'failed: LoadLibrary-10k: [0-9.]+ M instructions, [0-9.]+% over the approved' "$(ptest SLOW=1)"
+    expect_result "performance: other work in the process makes the result unstable, not a measurement" 1 'unstable: .*the iterations spread by' "$(ptest HOG=1)"
+    jq '.instructions *= 2' "$F/performance/LoadLibrary-10k.json" >"$TMP/pj" && mv "$TMP/pj" "$F/performance/LoadLibrary-10k.json"
+    expect_result "performance: a gain passes and leaves the numbers to approve" 0 'faster: [0-9.]+% fewer instructions' "$(ptest X=1)"
+    jq '.instructions /= 2 | .os = "13.0"' "$F/performance/LoadLibrary-10k.json" >"$TMP/pj" && mv "$TMP/pj" "$F/performance/LoadLibrary-10k.json"
+    expect_result "performance: a baseline from another macOS is not compared" 0 'not-compared: the baseline was made on arm64, macOS 13\.0' "$(ptest X=1)"
+  fi
+fi
+
 # ---------- docs references (#70) ----------
 
 docs_project() { # $1 name: a project whose docs point at files, headings and sections

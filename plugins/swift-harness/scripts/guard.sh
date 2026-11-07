@@ -43,6 +43,14 @@ if [ -z "$reason" ] && [ -n "$rel" ]; then
   fi
 fi
 
+# Performance baselines (#33): only /swift-harness:approve-performance writes them.
+if [ -z "$reason" ] && [ -n "$rel" ]; then
+  performance="$(sh_performance)"
+  if [ -n "$performance" ] && { [ "$rel" = "$performance" ] || [[ "$rel" == "$performance"/* ]]; }; then
+    reason="swift-harness: $performance/ holds the approved performance baselines. They change only when the user runs /swift-harness:approve-performance after looking at the new numbers. Approve this edit only if the user asked for it."
+  fi
+fi
+
 [ -n "$reason" ] || exit 0
 
 jq -n --arg reason "$reason" '{

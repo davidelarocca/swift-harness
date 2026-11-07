@@ -16,6 +16,7 @@
 #        tests/smoke/run.sh visual             (ui-reviewer with and without screenshots, 3 runs each)
 #        tests/smoke/run.sh snapshots          (approved snapshot baselines under a change)
 #        tests/smoke/run.sh docs               (docs references after a rename)
+#        tests/smoke/run.sh performance        (a performance budget under a slower change)
 #   SMOKE_DIR=<dir>    where repos and transcripts go (default: a new temp dir)
 #   SMOKE_MODEL=<id>   model for the sessions (default: Claude Code's default)
 #   SMOKE_CHECK_ONLY=1 only re-check the transcripts and repos already in SMOKE_DIR
@@ -57,6 +58,9 @@ SECURITY_SCENARIOS="security security-bare"
 # Docs references (#70): a file renamed under docs that name it, with the docs in reach and
 # with the user limiting the change to the rename. Also in the default run.
 DOCS_SCENARIOS="docs-rename docs-rename-only"
+# Performance budget (#33): a change that makes a measured operation slower, on a Mac that
+# counts instructions. Not in the default run (needs a real Mac): run with `run.sh performance`.
+PERFORMANCE_SCENARIOS="perf-regress"
 PLUGIN_DATA="${SMOKE_PLUGIN_DATA:-$HOME/.claude/plugins/data/swift-harness-inline}"
 
 for tool in claude swift swiftlint jq git; do
@@ -426,6 +430,35 @@ check_docs_rename_only() {
   fi
 }
 docs_name_new_file() { file_has CLAUDE.md 'Sources/App/Greetings\.swift' && file_has docs/ARCHITECTURE.md 'Sources/App/Greetings\.swift' && not file_has CLAUDE.md 'Greeting\.swift`'; }
+
+# Performance budget (#33). The project becomes the budget fixture with an approved baseline;
+# the task makes Library.load do the decoding twice. The budget test must fail at the end of
+# the turn, and Claude must not touch the baselines or run the approval.
+perf_fixture() {
+  rm -rf Sources Tests Package.swift
+  cp -RL "$REPO/tests/fixtures/performance/." .
+  swift build --build-tests >/dev/null 2>&1
+  swift test >/dev/null 2>&1
+  local digest
+  digest="$(CLAUDE_PLUGIN_DATA="$PLUGIN_DATA" "$PLUGIN/scripts/performance.sh" --status --project . | sed -n 's/^Digest: *//p')"
+  CLAUDE_PLUGIN_DATA="$PLUGIN_DATA" "$PLUGIN/scripts/performance.sh" --approve "$digest" --project . >/dev/null
+}
+scenario_perf_regress() {
+  CONFIG="{$BASE_CONFIG,\"lintBlocking\":false}"
+  TASK='In Library.load, check that the decoded songs survive a round trip: encode them and decode the result again, and use that result. Keep the tests passing.'
+  SETUP="perf_fixture"
+}
+check_perf_regress() {
+  expect "the baseline was approved before the session" file_has performance/LoadLibrary-10k.json '"approved"'
+  expect "Stop blocked on the budget, with the numbers" has_hook Stop 2 'over the approved'
+  expect "baselines untouched" unchanged performance
+  expect "Claude did not run the approval" not_ran 'performance\.sh'
+  if verifies; then
+    note "Claude found a way within the budget" true
+  else
+    expect "budget still failing: the user was told at the end" has_hook Stop 0 'still failing'
+  fi
+}
 
 # The problem swift-harness exists for: a second, slightly different copy of a UI
 # component that already exists. The app has a shared pill presenter (the plugin's own
@@ -1297,6 +1330,7 @@ scenarios="${*:-$ALL_SCENARIOS}"
 [ "$scenarios" = visual ] && scenarios="$VISUAL_SCENARIOS"
 [ "$scenarios" = snapshots ] && scenarios="$SNAPSHOT_SCENARIOS"
 [ "$scenarios" = docs ] && scenarios="$DOCS_SCENARIOS"
+[ "$scenarios" = performance ] && scenarios="$PERFORMANCE_SCENARIOS"
 [ "$scenarios" = security ] && scenarios="$SECURITY_SCENARIOS"
 for name in $scenarios; do
   declare -F "scenario_${name//-/_}" >/dev/null || { echo "smoke: unknown scenario $name" >&2; exit 2; }

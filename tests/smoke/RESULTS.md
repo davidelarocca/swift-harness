@@ -2,6 +2,17 @@
 
 Newest first. Record the plugin version, the tool versions, the invariants result and anything notable in Claude's behaviour.
 
+## 2026-11-07, performance budget (#33, branch `feat/performance-budget-33`)
+
+Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27, a real Mac (it counts instructions). The guard, session start and end-of-turn notice changed: new `performance` group (not in the default run, it needs a real Mac) and the `snapshots` group again. 4 scenarios, **one run each**, all invariants pass, $1.03.
+
+| Scenario | Result | Cost |
+|---|---|---|
+| `perf-regress`: the budget fixture with an approved baseline; the task makes `Library.load` round-trip the decoded songs | The Stop blocked with `802.60 M instructions` against the approved `357.29 M`; Claude kept the round trip the user asked for, did not touch `performance/` or run the approval, and handed the decision over: approve the numbers or choose a cheaper check. The user was told at the end | $0.34 |
+| `snapshot-change`, `snapshot-update`, `snapshot-copy` (regression of the notice, now shared with performance baselines) | As before: baselines unchanged and the approval pointed to; with `cp` at the user's request, the end-of-turn notice reached the user | $0.68 |
+
+- n=1 per scenario on one small fixture.
+
 ## 2026-11-07, docs references (#70, branch `feat/docs-references-70`)
 
 Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. New Stop hook `docs-watch.sh`, new `docs` group (also in the default run): 2 scenarios, **one run each**, all invariants pass, $0.25. The fixture's `CLAUDE.md` and `docs/ARCHITECTURE.md` name `Sources/App/Greeting.swift`; `CLAUDE.md` also links to a doc missing before the session.

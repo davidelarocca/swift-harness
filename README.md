@@ -70,6 +70,7 @@ flowchart LR
 | Skill (you run it) | `/swift-harness:setup` | Bootstraps or retrofits a project: `CLAUDE.md`, `.claude/rules/`, `docs/` (architecture hub, design system, component registry, product map, layout contract, ADR template), `.swiftlint.yml`, formatter config, `scripts/verify.sh`, hook config. Never overwrites existing files. |
 | Skill (you run it) | `/swift-harness:approve-verify` | Shows the project's verify command and the files it runs, then approves it for the end-of-turn check. Only you can run it. `/swift-harness:approve-verify revoke` removes the approval. |
 | Skill (you run it) | `/swift-harness:approve-snapshots` | Shows the new images that failing snapshot tests left (with the changed pixels in red), and copies the ones you approve into the baselines folder. Only you can run it: tests never write a baseline. |
+| Skill (you run it) | `/swift-harness:approve-performance` | Shows the new numbers that performance budget tests left (a first baseline, a regression, a gain, or another Mac), and copies the ones you accept into `performance/`. Only you can run it: tests and Claude never write a baseline. |
 | Skill (you run it) | `/swift-harness:approve-security` | Shows what changed in the app's security settings since your last approval (entitlements, App Transport Security, sandbox and hardened runtime build settings), says which changes weaken protection, and records them as the new baseline when you agree. Until then, the end-of-turn check fails. |
 | Skill (you run it) | `/swift-harness:doctor` | Read-only check of the setup: tools, config keys and values, leftover `{{...}}` placeholders, verify script and approval, formatter config, project structure and the last verification. One PASS / WARN / FAIL row per check, with the fix. Changes no file. |
 | Skill (you run it) | `/swift-harness:audit` | Read-only audit of architecture, UI consistency and code health. Produces a prioritized report and an incremental migration plan. |
@@ -229,6 +230,29 @@ try FocusOrder.check(app, ["search", "sort", "play", "shuffle", "trackList"])   
 </details>
 
 <details>
+<summary><b>Performance budgets with approved baselines</b></summary>
+
+An edit can make a key operation slower (work moved to the main actor, a list built eagerly, the same data decoded twice) and every test still passes. Setup offers a budget for the two or three operations that matter:
+
+```swift
+final class LibraryBudgetTests: XCTestCase {
+    func testLoadingTenThousandSongs() {
+        let data = Fixtures.library(count: 10_000)
+        XCTAssertEqual(PerformanceBudget.verify("LoadLibrary-10k") { _ = Library.load(data) }, [])
+    }
+}
+// LoadLibrary-10k: 584.29 M instructions, 65.2% over the approved 353.71 M (tolerance 5.0%); CPU time 24.01 ms, was 12.54 ms.
+```
+
+- `PerformanceBudget.verify` (from `templates/tests/PerformanceBudget.swift`) runs the operation 3 times to warm up, then 15 times, and compares the median count of instructions retired by the test process with a baseline you approved. More than 5% over fails with the numbers; more than 5% under passes and leaves the numbers to approve, so a gain can be kept. In a package test target it runs in `scripts/verify.sh fast`, so a regression blocks the end of the turn.
+- Why instructions: measured in [#33](https://github.com/davidelarocca/swift-harness/issues/33). On a Mac they vary by about 0.25% between runs of the same code, while time moves by a few percent, and much more on a busy machine. Decoding the same data twice raised them by 64%.
+- Baselines live in `performance/` (`performance.path`), pinned to the architecture, the macOS version and the build configuration. Tests never write them: `/swift-harness:approve-performance` does, after you look at the numbers. The guard asks before Claude edits the folder, and the end-of-turn notice reports changes made without approval.
+- Not compared, with the numbers printed: on virtual machines, such as GitHub's macOS runners, which count no instructions, and where time varies by ±20% between runs (a 64% regression hides in that noise); and on another architecture, macOS version or build configuration.
+- The count is for the whole test process. Tests running at the same time inflate it, so budgets go in an XCTest class, which runs one test at a time. When the iterations spread by more than 2%, the result is "unstable" and fails: it is not a measurement.
+
+</details>
+
+<details>
 <summary><b>The SwiftLint design system rules</b></summary>
 
 The generated `.swiftlint.yml` adds six custom rules that flag raw visual values outside the design system and tests, and one for Reduce Motion that applies everywhere:
@@ -343,6 +367,7 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `layout.path` | the layout contract, relative to the repo root; `LayoutContract.check` reads it from the same config | `docs/LAYOUT_CONTRACT.md` |
 | `screenshots.path` | where `Screenshot.capture` saves images and `ui-reviewer` looks for them, relative to the repo root | `.build/swift-harness/screenshots` |
 | `snapshots.path` | the approved snapshot baselines `Snapshot.verify` compares with, inside the repo; only `/swift-harness:approve-snapshots` writes there, and the guard asks before an edit | `snapshots` |
+| `performance.path` | the approved performance baselines `PerformanceBudget.verify` compares with, inside the repo; only `/swift-harness:approve-performance` writes there, and the guard asks before an edit | `performance` |
 | `security.enabled` | compare the app's security settings with the ones you approved at the end of each turn (`false` turns it off) | `true` |
 
 With `swift-format`, keep a `.swift-format` file in the repository root (setup creates one). Without it, swift-format applies its defaults, including 2-space indentation, to every file Claude edits, and SessionStart warns about it.
@@ -394,6 +419,7 @@ Next up: **v1.6.0, reliable sessions, keyboard and performance**: per-session st
 - **Snapshot baselines are pinned to one macOS version and display scale.** Text and controls draw differently on other versions, so on a Mac or runner that differs the images are reported as not compared, not as passed: compare on the Mac the baselines were made on (GitHub's runners usually run an older macOS). On macOS, `dynamicTypeSize` does not change how SwiftUI text is drawn, so larger text is a state the project draws itself. Focus, keyboard navigation and Reduce Motion are not covered by snapshots ([#52](https://github.com/davidelarocca/swift-harness/issues/52)).
 - With Xcode 26, `swift build` and `swift test` copy a package's asset catalog without compiling it, so design-system colors do not resolve in those test runs. Run color-dependent tests with `xcodebuild test`; Xcode 27 compiles the catalog either way.
 - **"Changed" is a list of file patterns, not the build graph.** In an Xcode project with synchronized folders, a resource of an unlisted type outside `Resources/` (say `App/data.json`) does not count as a change. A new SwiftLint or Xcode version does not invalidate a pass either: only the code and the plugin version do.
+- **Performance budgets hold on real Macs only.** CI runners are virtual machines with no instruction counter, so budgets are not compared there. A budget counts the work the CPU does, not time spent waiting (I/O, locks, a busy main thread), and it does not see hangs or memory growth.
 - The Stop check runs on your machine and takes as long as your fast verification. Keep `fast` under about two minutes.
 
 ## Contributing

@@ -178,6 +178,10 @@ sh_docs_keys() {
 # test result. New images wait in SH_SNAPSHOT_CANDIDATES.
 sh_snapshots() { local p; p="$(sh_cfg '.snapshots.path' 'snapshots')"; p="${p#./}"; printf '%s' "${p%/}"; }
 SH_SNAPSHOT_CANDIDATES=".build/swift-harness/snapshots"
+# Approved performance baselines (#33): compared by the project's budget tests, written only by
+# /swift-harness:approve-performance. Part of the fingerprint like the snapshot baselines.
+sh_performance() { local p; p="$(sh_cfg '.performance.path' 'performance')"; p="${p#./}"; printf '%s' "${p%/}"; }
+SH_PERFORMANCE_CANDIDATES=".build/swift-harness/performance"
 # "<sha256> <path>" for every file in the baselines folder, sorted, for snapshot-watch.sh.
 sh_snapshot_list() {
   [ -d "$SH_ROOT/$1" ] || return 0
@@ -226,8 +230,8 @@ sh_identity() {
 sh_fingerprint() {
   {
     git -C "$SH_ROOT" rev-parse HEAD 2>/dev/null
-    git -C "$SH_ROOT" diff HEAD -- "${SH_BUILD_INPUTS[@]}" "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" 2>/dev/null
-    git -C "$SH_ROOT" ls-files -z --others --exclude-standard -- "${SH_BUILD_INPUTS[@]}" "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" 2>/dev/null |
+    git -C "$SH_ROOT" diff HEAD -- "${SH_BUILD_INPUTS[@]}" "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" "$(sh_performance)" 2>/dev/null
+    git -C "$SH_ROOT" ls-files -z --others --exclude-standard -- "${SH_BUILD_INPUTS[@]}" "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" "$(sh_performance)" 2>/dev/null |
       while IFS= read -r -d '' f; do shasum "$SH_ROOT/$f" 2>/dev/null; done
   } | shasum | cut -d' ' -f1
 }
