@@ -56,6 +56,7 @@ ran=0      # builds and test runs
 linted=0   # SwiftLint runs (full mode), counted separately
 skipped=""
 checked=""   # platforms that got at least one build or test
+tested=""    # platforms whose tests ran (fast mode only builds a scheme)
 failed_on="" # platforms with a failing build or test
 
 step() { printf '\n== %s ==\n' "$1"; }
@@ -103,6 +104,7 @@ for pkg in ${PACKAGES[@]+"${PACKAGES[@]}"}; do
   fi
   ran=$((ran + 1))
   note_platform checked macOS
+  note_platform tested macOS
   swift test --package-path "$pkg" 2>&1 | tail -40
   [ "${PIPESTATUS[0]}" -eq 0 ] || { fail=1; note_platform failed_on macOS; }
 done
@@ -119,6 +121,7 @@ if [ -n "$SCHEME" ]; then
       step "xcodebuild $action ($SCHEME, $platform)"
       ran=$((ran + 1))
       note_platform checked "$platform"
+      [ "$action" = test ] && note_platform tested "$platform"
       run_xcodebuild "$action" "$platform" || { fail=1; note_platform failed_on "$platform"; }
     done
   fi
@@ -140,8 +143,17 @@ fi
 
 [ -z "$skipped" ] || printf '\nskipped:%s\n' "$skipped"
 
+# One line for the swift-harness hooks, versioned: the outcome and the platforms checked (built or
+# tested), tested and not checked. It can only lower the outcome the exit code gives, never raise it.
+result_line() { # $1 outcome, $2 platforms not checked
+  local list
+  list() { [ -n "$1" ] && printf '%s' "${1// /, }" || printf 'none'; }
+  printf 'swift-harness-result/1: %s; checked: %s; tested: %s; not checked: %s\n' "$1" "$(list "$checked")" "$(list "$tested")" "${2:-none}"
+}
+
 if [ "$fail" -ne 0 ]; then
   printf '\nverify %s: FAIL%s\n' "$MODE" "${failed_on:+ (failed on: ${failed_on// /, })}"
+  result_line failed
   exit 1
 fi
 if [ "$ran" -eq 0 ]; then
@@ -156,8 +168,10 @@ if [ -n "$unchecked" ]; then
   # Exit 0: nothing failed, and Claude cannot add the missing platform by itself.
   printf '\nverify %s: PARTIAL (passed on %s; not checked on %s: no SCHEME builds it, and swift test runs on this Mac only)\n' \
     "$MODE" "${checked// /, }" "$unchecked"
+  result_line partial "$unchecked"
   exit 0
 fi
 printf '\nverify %s: PASS (%s build/test check(s)%s; platforms: %s)\n' "$MODE" "$ran" \
   "$([ "$linted" -eq 0 ] || echo ' + SwiftLint')" "${checked// /, }"
+result_line passed
 exit 0

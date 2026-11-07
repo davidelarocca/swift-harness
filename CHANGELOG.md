@@ -1,5 +1,15 @@
 # Changelog
 
+## swift-harness 1.6.1 (2026-11-07)
+
+A partial verification is no longer recorded as a pass. Found by an external review of 1.6.0 and confirmed in the code.
+
+- Fix: a `PARTIAL` result of the generated `scripts/verify.sh` (a platform listed in `PLATFORMS` that no build or test reached, such as iOS in a packages-only project) exits 0 by design, and the end-of-turn check recorded it as a plain pass: `/swift-harness:doctor` and the checkpoint after a compaction said "passed on the current code", and Claude was never told. Now the script ends with a versioned line for the hooks, `swift-harness-result/1: <passed|partial|failed>; checked: <platforms>; tested: <platforms>; not checked: <platforms>` (in `fast` mode a scheme is built, not tested, and `tested` says so). The end-of-turn check reads the last such line, and the `PARTIAL` line of scripts generated before 1.6.1. It keeps the outcome and the platforms in the state folder. A partial pass does not block; the user (`systemMessage`) and Claude (`additionalContext`, which does not block) are told once for that code what was not checked. `doctor` and the checkpoint say `PARTIAL` with the platforms, and a full pass names the platforms built and tested. The line can only lower the outcome: an exit other than 0 is a failure whatever it says, and `failed` with exit 0 is a failure. A custom verify command without the line passes on exit 0 as before, with its platforms reported as unknown.
+- CI: the hook tests job installs SwiftLint, so the template rules' tests (concurrency, Reduce Motion) run there too instead of being skipped.
+- Roadmap: test isolation from real user data ([#68](https://github.com/davidelarocca/swift-harness/issues/68)) moves to the start of v1.8.0, before the navigation crawler and the injected faults, which run on real apps.
+
+**Upgrading:** nothing to do. A `scripts/verify.sh` generated before 1.6.1 is read through its `PARTIAL` line; copy the new template to get the full line (platforms built and tested).
+
 ## swift-harness 1.6.0 (2026-11-07)
 
 Reliable sessions and checks on what the app does, not only how the code looks: per-session state for parallel sessions, keyboard and focus checks, a layout audit from the accessibility tree on macOS and iOS, a docs reference check, and performance budgets that only you approve. Each check was measured before it was built: spikes on GitHub runners and a real Mac, published in the issues. Checked with 528 hook tests, UI test fixtures on macOS and an iPhone simulator in CI, smoke scenarios in real Claude Code sessions, and the docs of a real ~97k-line app.

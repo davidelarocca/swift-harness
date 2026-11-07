@@ -119,9 +119,16 @@ fi
 
 out="$(mktemp -t swift-harness-verify.XXXXXX)"
 status=0
+result=""
 if [ "$run_verify" = "true" ]; then
   (cd "$SH_ROOT" && bash -c "$command_line") >"$out" 2>&1
   status=$?
+  # The result line can only lower the outcome (SH160-01): "failed" with exit 0 is a failure.
+  result="$(sh_verify_result "$out")"
+  if [ "$status" -eq 0 ] && [ "${result%%$'\t'*}" = failed ]; then
+    printf '\n(The verify command exited 0, but its result line says failed.)\n' >>"$out"
+    status=1
+  fi
 elif [ "$verify_enabled" = "true" ]; then
   not_checked="the build and tests were not checked"
   [ -f "$SH_ROOT/$SH_CONTRACT" ] && not_checked="the build, tests and architecture contracts were not checked"
@@ -171,6 +178,21 @@ if [ "$status" -eq 0 ]; then
   if [ "$run_verify" = "true" ]; then
     printf '%s' "$fp" > "$state/passed"
     rm -f "$state/checked"
+    # What the pass covered (SH160-01), when the command says it.
+    rm -f "$state/coverage"
+    if [ -n "$result" ]; then
+      IFS=$'\t' read -r r_outcome r_checked r_tested r_unchecked <<<"$result"
+      printf '%s\noutcome: %s\nchecked: %s\ntested: %s\nnot checked: %s\n' "$fp" "$r_outcome" "$r_checked" "$r_tested" "$r_unchecked" >"$state/coverage"
+      if [ "$r_outcome" = partial ]; then
+        # Told once: this code is now recorded as passed, so the next Stop on it exits early.
+        printf '0' > "$sess/failures"
+        rm -f "$state/failed" "$out"
+        msg="'$command_line' passed on this code, but $r_unchecked was not checked (PARTIAL): only $r_checked is verified. Do not report $r_unchecked as verified."
+        jq -n --arg user "swift-harness: $msg" --arg claude "swift-harness: $msg Nothing to fix for this; say so in your answer if it matters." \
+          '{systemMessage: $user, hookSpecificOutput: {hookEventName: "Stop", additionalContext: $claude}}'
+        exit 0
+      fi
+    fi
   else
     printf '%s\n%s' "$fp" "$checks" > "$state/checked"
   fi

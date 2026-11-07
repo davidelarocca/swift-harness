@@ -468,8 +468,13 @@ fi
 
 if [ "$in_git" = true ] && [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
   fp="$(sh_identity)"
-  if [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ]; then
-    row PASS "Last verification" "the verify command passed on the current code"
+  outcome="$(sh_verify_coverage "$state" "$fp" outcome)"
+  if [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ] && [ "$outcome" = partial ]; then
+    row WARN "Last verification" "PARTIAL on the current code: the verify command passed on $(sh_verify_coverage "$state" "$fp" checked), but not checked on $(sh_verify_coverage "$state" "$fp" 'not checked') (no build or test ran for it)"
+  elif [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ] && [ -n "$outcome" ]; then
+    row PASS "Last verification" "the verify command passed on the current code: built on $(sh_verify_coverage "$state" "$fp" checked); tests ran on $(sh_verify_coverage "$state" "$fp" tested)"
+  elif [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ]; then
+    row PASS "Last verification" "the verify command passed on the current code; its output names no platforms"
   elif [ "$fp" = "$(head -1 "$state/checked" 2>/dev/null)" ]; then
     row WARN "Last verification" "only $(sed -n 2p "$state/checked") passed on the current code; build and tests were not run, because the verify command is disabled or not approved"
   elif [ "$fp" = "$(cat "$state/failed" 2>/dev/null)" ]; then
