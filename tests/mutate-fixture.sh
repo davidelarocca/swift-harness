@@ -69,7 +69,7 @@ expect "package: the run without mutations passes verify" 'Without mutations: .*
 for op in lint-literal:lint keyboard-shortcut:keyboard layout-wide:layout-size snapshot-padding:snapshot; do
   expect "package: ${op%%:*} is killed by the ${op#*:} check" "^\| ${op%%:*} \| [^|]+ \| ${op#*:} \| killed \| [^|]*${op#*:}" "$out"
 done
-expect "package: a11y-label has no site (no accessibility label)" '^\| a11y-label \| - \| accessibility \| no site' "$out"
+expect "package: a11y-label has no check (no test runs an accessibility audit)" '^\| a11y-label \| - \| accessibility \| no check' "$out"
 printf '%s\n' "$out" | grep -E '^\|' | sed 's/^/      /'
 
 # ---------- app with UI tests: accessibility ----------
