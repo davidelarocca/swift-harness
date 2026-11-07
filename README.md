@@ -73,6 +73,7 @@ flowchart LR
 | Skill (you run it) | `/swift-harness:approve-performance` | Shows the new numbers that performance budget tests left (a first baseline, a regression, a gain, or another Mac), and copies the ones you accept into `performance/`. Only you can run it: tests and Claude never write a baseline. |
 | Skill (you run it) | `/swift-harness:approve-security` | Shows what changed in the app's security settings since your last approval (entitlements, App Transport Security, sandbox and hardened runtime build settings), says which changes weaken protection, and records them as the new baseline when you agree. Until then, the end-of-turn check fails. |
 | Skill (you run it) | `/swift-harness:check-sensitivity` | Plants one defect at a time in a temporary copy of the project (a renamed registry entry or layout view, a stale docs link, a relaxed entitlement, a forbidden dependency; with `--verify`, through your tests and SwiftLint: a hardcoded padding, a removed keyboard shortcut or accessibility label, a view wider than its minimum, a changed padding) and reports which check caught each one. A defect no check notices is a finding to explain. The project is never changed. |
+| Skill (you run it) | `/swift-harness:drift` | Measures drift now or per commit of a git range: hardcoded design values against tokens, new components with the role of a registered one, and the problems of the registry, layout, docs and contracts checks, as one score per commit. Text or JSON. |
 | Skill (you run it) | `/swift-harness:doctor` | Read-only check of the setup: tools, config keys and values, leftover `{{...}}` placeholders, verify script and approval, formatter config, project structure and the last verification. One PASS / WARN / FAIL row per check, with the fix. Changes no file. |
 | Skill (you run it) | `/swift-harness:audit` | Read-only audit of architecture, UI consistency and code health. Produces a prioritized report and an incremental migration plan. |
 | Skill (you run it) | `/swift-harness:product-map` | Read-only map of the product from its code: entities, their pages, every place each one appears, relations, user-managed collections and action sets. Lists the gaps with evidence: items you cannot open from where they are shown, related items shown as plain text, lists you cannot rename or reorder, actions missing in some places. Writes `docs/PRODUCT_MAP.md` after you approve. |
@@ -276,7 +277,7 @@ They start as warnings, which double as the migration to-do list. Switch a rule 
 
 A quality tool has to be checked itself. Every release goes through:
 
-- **581 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 576 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md).
+- **596 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 591 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
 - **A smoke test in real Claude Code sessions** (`tests/smoke/`): 23 scenarios for the hooks (snapshots, security settings, docs and performance budgets included), 6 for reusing UI components, 3 for product coherence, 6 for window sizes and 6 for screenshot review (some of them baselines without the plugin), with their invariants checked automatically. Every run is recorded with its cost ([results](tests/smoke/RESULTS.md)).
 
 What Claude did in those sessions:
@@ -434,7 +435,7 @@ Issues, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.
 .claude-plugin/marketplace.json
 plugins/swift-harness/
   .claude-plugin/plugin.json
-  skills/        setup, approve-verify, approve-snapshots, approve-security, check-sensitivity, doctor, audit, product-map, port-to-ios, ui-change, design-system, feature, adr
+  skills/        setup, approve-verify, approve-snapshots, approve-security, check-sensitivity, drift, doctor, audit, product-map, port-to-ios, ui-change, design-system, feature, adr
   agents/        ui-reviewer
   hooks/         hooks.json
   scripts/       hook scripts (bash + jq)
