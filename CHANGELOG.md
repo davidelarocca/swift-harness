@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- New: check sensitivity, part 1 ([#79](https://github.com/davidelarocca/swift-harness/issues/79)). A check can pass for the wrong reason: the layout check of 1.4.0 accepted content 2000 pt wide on a real app while every test was green. `/swift-harness:check-sensitivity` (`scripts/mutate.sh`, user only) copies the project into a temporary folder (without `.git`, `.build` and DerivedData, with a fresh git repository), runs the registry, layout contract, docs, security and architecture contract checks once without mutations, then plants one defect at a time and runs them again: a Components entry renamed (registry), a Screens view renamed (layout), a local link or a path in backticks moved to a file that does not exist (docs), an entitlement relaxed (security), a target given a dependency on a sibling its contract does not allow (contracts). Each operator changes one site, chosen the same way every run, and the file is restored before the next one. A mutation is killed when a check fails with a problem it did not report before (line numbers ignored), so a check that already fails still counts. The report is a table: the site as `file:line`, the check it targets, killed or SURVIVED, and every check that noticed it. A survived mutation is a finding, not a failed run (exit 0). A new fixture, `tests/fixtures/mutate/`, is killed by every operator in `tests/run.sh`; a check turned off (`security.enabled` false, approved) is shown to let its mutation survive. Next: the checks that run inside `scripts/verify.sh full` (lint, keyboard, layout sizes, accessibility, snapshots), then results on a real app in `tests/evals/`.
+
 ## swift-harness 1.6.1 (2026-11-07)
 
 A partial verification is no longer recorded as a pass. Found by an external review of 1.6.0 and confirmed in the code.
