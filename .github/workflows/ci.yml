@@ -53,11 +53,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # SwiftLint runs the template rules' tests (concurrency, Reduce Motion); without it they skip.
+      - name: Install SwiftLint
+        run: command -v swiftlint >/dev/null || brew install swiftlint
+
       - name: Tool versions
         run: |
           /bin/bash --version | head -1
           jq --version
-          command -v swiftlint && swiftlint version || echo "swiftlint not installed"
+          swiftlint version
 
       # /bin/bash on macOS is 3.2, the version the hooks must support.
       - name: tests/run.sh

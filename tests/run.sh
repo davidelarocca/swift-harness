@@ -1114,6 +1114,7 @@ if [ "$(dest_args "$V" full | paste -sd'|' -)" = 'platform=macOS|platform=iOS Si
 else nok "verify.sh platforms: full tests iOS on the named simulator" "$(cat "$TMP/xcodebuild-args")"; fi
 out="$(run_verify "$V")"
 expect_verify "verify.sh platforms: a multiplatform pass names both platforms" 0 'verify fast: PASS \(2 build/test check\(s\); platforms: macOS, iOS\)' "$out"
+expect_verify "verify.sh platforms: in fast mode a scheme is built, not tested, and the hooks' line says so" 0 '^swift-harness-result/1: passed; checked: macOS, iOS; tested: none; not checked: none$' "$out"
 expect_verify "verify.sh platforms: each build step names its platform" 0 'xcodebuild build \(App, iOS\)' "$out"
 
 # The fake fails only for iOS destinations.
@@ -1123,7 +1124,8 @@ mkdir -p "$TMP/fakes-ios-fails"
 cp "$FAKES/swift" "$FAKES/swiftlint" "$TMP/fakes-ios-fails/"
 cp "$TMP/xcodebuild-ios-fails" "$TMP/fakes-ios-fails/xcodebuild"
 out="$(PATH="$TMP/fakes-ios-fails:/usr/bin:/bin" "$V/scripts/verify.sh" fast 2>&1; printf '\nexit=%s' $?)"
-if grep -q 'verify fast: FAIL' <<<"$out" && grep -q 'exit=1' <<<"$out" && grep -q 'failed on: iOS' <<<"$out"; then
+if grep -q 'verify fast: FAIL' <<<"$out" && grep -q 'exit=1' <<<"$out" && grep -q 'failed on: iOS' <<<"$out" &&
+  grep -qx 'swift-harness-result/1: failed; checked: macOS, iOS; tested: none; not checked: none' <<<"$out"; then
   ok "verify.sh platforms: a build failing only on iOS fails and names iOS"
 else nok "verify.sh platforms: a build failing only on iOS fails and names iOS" "$out"; fi
 
@@ -1131,6 +1133,7 @@ V="$(verify_project pkg-ios '' '' '"Packages/Core"' '"macOS" "iOS"' 'iPhone 16')
 mkdir -p "$V/Packages/Core"
 out="$(run_verify "$V")"
 expect_verify "verify.sh platforms: packages only, iOS listed, is PARTIAL and never PASS" 0 'verify fast: PARTIAL \(passed on macOS; not checked on iOS' "$out" 'verify fast: PASS'
+expect_verify "verify.sh platforms: PARTIAL also gives the hooks a versioned line" 0 '^swift-harness-result/1: partial; checked: macOS; tested: macOS; not checked: iOS$' "$out"
 
 V="$(verify_project bad-platform '-project App.xcodeproj' App '' '"macOS" "Android"')"
 expect_verify "verify.sh platforms: an unknown platform is NOT CONFIGURED" 1 'NOT CONFIGURED.*Android' "$(run_verify "$V")"
@@ -2508,6 +2511,49 @@ SWIFT
   else ok "motion: Motion.moving, a fade, a comment and a string are not reported"; fi
   rm -rf "$L"
 fi
+
+# ---------- a PARTIAL verification stays partial (SH160-01) ----------
+
+P="$(new_project partial)"
+printf '#!/bin/bash\nprintf "%%s\\n" "${FAKE_RESULT_LINE:-}"\nexit "${FAKE_RESULT_EXIT:-0}"\n' >"$P/scripts/verify.sh"
+git -C "$P" add -A && git -C "$P" commit -qm "verify that prints a given result line"
+approve "$P" >/dev/null
+hook session-start.sh "$P" '{"source":"startup"}' >/dev/null
+S_P="$(state_of "$P")"
+echo 'let app = 2' >"$P/Sources/App.swift"
+out="$(FAKE_RESULT_LINE='swift-harness-result/1: partial; checked: macOS; tested: macOS; not checked: iOS' gate_stop "$P")"
+expect_result "partial: a PARTIAL pass does not block, and the user is told what was not checked" 0 '"systemMessage": "swift-harness: .*passed on this code, but iOS was not checked' "$out"
+expect_result "partial: Claude is told too, as context that does not block" 0 '"hookEventName": "Stop".*"additionalContext": ".*iOS was not checked' "$(head -1 <<<"$out")
+$(tail -n +2 <<<"$out" | tr '\n' ' ')"
+expect_result "partial: the same code is not announced twice" 0 '^exit=0$' "$(FAKE_RESULT_LINE='swift-harness-result/1: partial; checked: macOS; tested: macOS; not checked: iOS' gate_stop "$P")"
+if [ "$(sed -n 2,5p "$S_P/coverage")" = 'outcome: partial
+checked: macOS
+tested: macOS
+not checked: iOS' ]; then ok "partial: the state keeps the outcome and the platforms checked, tested and not checked"
+else nok "partial: the state keeps the outcome and the platforms checked, tested and not checked" "$(cat "$S_P/coverage" 2>&1)"; fi
+expect_row "partial: doctor says the last verification left iOS unchecked" "$(doctor "$P")" WARN 'Last verification' 'PARTIAL.*not checked on iOS'
+expect_result "partial: the checkpoint after a compaction says it too" 0 'PARTIAL.*not checked on iOS' "exit=0
+$(hook session-start.sh "$P" '{"source":"compact"}')"
+
+echo 'let app = 3' >"$P/Sources/App.swift"
+FAKE_RESULT_LINE='verify fast: PARTIAL (passed on macOS; not checked on iOS, iPadOS: no SCHEME builds it, and swift test runs on this Mac only)' gate_stop "$P" >/dev/null
+expect_row "partial: the result line of a verify.sh generated before 1.6.1 is read too" "$(doctor "$P")" WARN 'Last verification' 'not checked on iOS, iPadOS'
+
+# The line can lower the outcome, never raise it.
+echo 'let app = 4' >"$P/Sources/App.swift"
+out="$(FAKE_RESULT_LINE='swift-harness-result/1: passed; checked: macOS; tested: macOS; not checked: none' FAKE_RESULT_EXIT=1 gate_stop "$P")"
+expect_result "partial: an exit other than 0 is a failure, whatever the line says" 2 'Verification failed' "$out"
+echo 'let app = 5' >"$P/Sources/App.swift"
+out="$(FAKE_RESULT_LINE="$(printf 'swift-harness-result/1: passed; checked: macOS; tested: macOS; not checked: none\nswift-harness-result/1: failed; checked: macOS; tested: macOS; not checked: none')" gate_stop "$P")"
+expect_result "partial: a failed line lowers an exit 0 to a failure; the last line counts" 2 'Verification failed' "$out"
+
+echo 'let app = 6' >"$P/Sources/App.swift"
+out="$(FAKE_RESULT_LINE='swift-harness-result/1: passed; checked: macOS, iOS; tested: none; not checked: none' gate_stop "$P")"
+expect_result "partial: a full pass says nothing" 0 '^exit=0$' "$out"
+expect_row "partial: after a full pass doctor gives the platforms it covered" "$(doctor "$P")" PASS 'Last verification' 'passed on the current code: built on macOS, iOS; tests ran on none'
+echo 'let app = 7' >"$P/Sources/App.swift"
+gate_stop "$P" >/dev/null
+expect_row "partial: a custom command with no result line passes, with its coverage unknown" "$(doctor "$P")" PASS 'Last verification' 'passed on the current code; its output names no platforms'
 
 # ---------- performance budget (#33) ----------
 

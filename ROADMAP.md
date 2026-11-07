@@ -26,6 +26,7 @@ Today every check on the running app looks at one state at one size. These look 
 
 | | What you get | Issue |
 |---|---|---|
+| 🪤 | **Test isolation first.** UI tests never touch the user's real data: a test-only store, launched through the tests, checked against a sentinel; a pitfalls template. The crawler and the injected faults below run on real apps, so this comes before them. | [#68](https://github.com/davidelarocca/swift-harness/issues/68) |
 | 🗺️ | **Real vs declared navigation.** A crawler walks the app through the accessibility tree and compares what it reaches with the product map: unreachable screens, missing links. | [#82](https://github.com/davidelarocca/swift-harness/issues/82) |
 | 🗣️ | **Interaction conventions.** One word per action, menu bar commands and standard shortcuts, empty, loading and error states, confirmation or Undo for destructive actions, pseudo-localization. | [#83](https://github.com/davidelarocca/swift-harness/issues/83) |
 | 🌩️ | **Faults and lifecycle.** Network, disk and permission failures injected in UI tests; save, relaunch and unsaved changes. | [#84](https://github.com/davidelarocca/swift-harness/issues/84) |
@@ -49,7 +50,6 @@ Waits for a real iOS port of a macOS app to check it on: the porting audit of 1.
 | | What you get | Issue |
 |---|---|---|
 | 👀 | **UI review ritual.** Three window sizes, a gallery of states from UI tests, a keyboard-only pass. | [#67](https://github.com/davidelarocca/swift-harness/issues/67) |
-| 🪤 | **Pitfalls and test isolation.** A pitfalls template, and UI tests that never touch the user's real data. | [#68](https://github.com/davidelarocca/swift-harness/issues/68) |
 | ⏱️ | **Try it in minutes.** A demo app where the plugin catches something in the first session, and a README organised by problem. | [#88](https://github.com/davidelarocca/swift-harness/issues/88) |
 
 Ideas parked until there is demand: a local, read-only view of the checks with evidence behind every edge and status ([#50](https://github.com/davidelarocca/swift-harness/discussions/50)); persistence migrations, localization, approval across worktrees, docs drift ([#38](https://github.com/davidelarocca/swift-harness/discussions/38)).

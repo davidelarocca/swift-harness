@@ -27,7 +27,10 @@ files="$(printf '%s\n' "$changed" | head -8 | paste -sd, - | sed 's/,/, /g')"
 [ "$n_changed" -le 8 ] || files="$files, and $((n_changed - 8)) more"
 
 fp="$(sh_identity)"
-if [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ]; then
+unchecked="$(sh_verify_coverage "$state" "$fp" 'not checked')"
+if [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ] && [ "$(sh_verify_coverage "$state" "$fp" outcome)" = partial ]; then
+  verified="PARTIAL on the current code ('$verify_cmd' passed on $(sh_verify_coverage "$state" "$fp" checked), not checked on $unchecked): do not report $unchecked as verified"
+elif [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ]; then
   verified="passed on the current code ('$verify_cmd')"
 elif [ "$fp" = "$(cat "$state/failed" 2>/dev/null)" ]; then
   verified="FAILED on the current code and not fixed since: the turn's end check reported it"

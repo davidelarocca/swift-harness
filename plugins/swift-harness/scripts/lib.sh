@@ -164,6 +164,40 @@ sh_registry_on() { [ "$(sh_cfg '.registry.enabled' 'true')" = "true" ] && [ -f "
 sh_layout() { local p; p="$(sh_cfg '.layout.path' 'docs/LAYOUT_CONTRACT.md')"; printf '%s' "${p#./}"; }
 sh_layout_on() { [ "$(sh_cfg '.layout.enabled' 'true')" = "true" ] && [ -f "$SH_ROOT/$(sh_layout)" ]; }
 
+# What a pass of the verify command covered (SH160-01). The generated verify.sh ends with
+#   swift-harness-result/1: <passed|partial|failed>; checked: <platforms>; tested: <platforms>; not checked: <platforms>
+# (lists ", "-separated or "none"); before 1.6.1 it printed only
+#   verify <mode>: PARTIAL (passed on ...; not checked on <platforms>: ...)
+# The last such line counts, and it can only lower the exit code's outcome: an exit other than 0
+# is a failure whatever it says. The Stop hook keeps the pass in <state>/coverage:
+#   <fingerprint> / outcome: <passed|partial> / checked: / tested: / not checked:
+# so doctor, the checkpoint and later reports read the same thing. A custom command with no such
+# line leaves no coverage: its pass is a pass, with its platforms unknown.
+sh_verify_result() { # $1 verify output (a file); prints "outcome\tchecked\ttested\tnot checked", or nothing
+  local line legacy
+  line="$(grep -E '^swift-harness-result/1: (passed|partial|failed)(;|$)' "$1" | tail -1)"
+  if [ -n "$line" ]; then
+    printf '%s' "${line#swift-harness-result/1: }" | awk -F'; ' '{
+      o = $1; c = t = n = "?"
+      for (i = 2; i <= NF; i++) {
+        if ($i ~ /^checked: /) c = substr($i, 10)
+        else if ($i ~ /^tested: /) t = substr($i, 9)
+        else if ($i ~ /^not checked: /) n = substr($i, 14)
+      }
+      printf "%s\t%s\t%s\t%s", o, c, t, n
+    }'
+    return
+  fi
+  legacy="$(sed -n -E 's/^verify (fast|full): PARTIAL \(passed on ([^;]*); not checked on ([^:]+):.*$/\2\t\3/p' "$1" | tail -1)"
+  [ -n "$legacy" ] && printf 'partial\t%s\t?\t%s' "${legacy%%$'\t'*}" "${legacy#*$'\t'}"
+}
+# The field $3 (outcome, checked, tested, not checked) of the coverage recorded for fingerprint
+# $2 in state folder $1, or nothing when there is none for it.
+sh_verify_coverage() {
+  [ "$(sed -n 1p "$1/coverage" 2>/dev/null)" = "$2" ] || return 0
+  sed -n "s/^$3: //p" "$1/coverage" | head -1
+}
+
 # Docs references (#70), checked by docs.sh at the end of each turn (docs-watch.sh) and by
 # doctor. Not part of the fingerprint: it reads Markdown only, so a docs edit never re-runs the
 # build. sh_docs_keys turns its problem lines into keys without line numbers (and without the

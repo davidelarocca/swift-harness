@@ -32,7 +32,7 @@ TEMPLATES="$PLUGIN/skills/setup/templates"
 WORK="${SMOKE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-smoke.XXXXXX")}"
 WORK="$(mkdir -p "$WORK" && cd "$WORK" && pwd -P)"
 
-ALL_SCENARIOS="guard broken-config stop-fails report-no-token legacy-violation clean-lint formatter-labels lint-missing verify-unapproved approve-verify doctor contract contract-explicit registry registry-nodocs registry-swift-only security docs-rename docs-rename-only"
+ALL_SCENARIOS="guard broken-config stop-fails report-no-token legacy-violation clean-lint formatter-labels lint-missing verify-unapproved approve-verify doctor contract contract-explicit registry registry-nodocs registry-swift-only security docs-rename docs-rename-only verify-partial"
 # Reuse of UI components (the skills, not the hooks), each with a baseline without the
 # plugin. Not in the default run: about $2 for the group. Run with `run.sh reuse`.
 REUSE_SCENARIOS="reuse-toast reuse-toast-bare reuse-toast-nocaller reuse-toast-nocaller-bare reuse-toast-undo reuse-toast-undo-bare"
@@ -395,6 +395,22 @@ check_registry_swift_only() {
   else
     expect "registry updated after the block: its check passes" registry_passes
   fi
+}
+
+# A PARTIAL verification (SH160-01): the package lists iOS, which swift test does not reach. The
+# Stop passes without blocking, and tells the user and Claude (additionalContext) what was not
+# checked; Claude must not claim iOS was verified.
+scenario_verify_partial() {
+  CONFIG="{$BASE_CONFIG,\"lintBlocking\":false}"
+  TASK='Add a public function farewell(for name: String) -> String to Sources/App/Greeting.swift that returns "Bye, <name>!".'
+  SETUP="sed -i '' 's/^PLATFORMS=.*/PLATFORMS=(\"macOS\" \"iOS\")/' scripts/verify.sh"
+}
+check_verify_partial() {
+  expect "farewell added" file_has Sources/App/Greeting.swift 'Bye, '
+  expect "Stop passed without blocking, told what was not checked" has_hook Stop 0 'iOS was not checked \(PARTIAL\)'
+  expect "Claude was told, as context" has_hook Stop 0 'additionalContext'
+  expect "never blocked for it" not has_hook Stop 2 'PARTIAL'
+  note "final message mentions iOS" result_has 'iOS'
 }
 
 # Docs references (#70). CLAUDE.md and the architecture doc name Greeting.swift; CLAUDE.md

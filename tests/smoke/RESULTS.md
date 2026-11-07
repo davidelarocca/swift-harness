@@ -2,6 +2,18 @@
 
 Newest first. Record the plugin version, the tool versions, the invariants result and anything notable in Claude's behaviour.
 
+## 2026-11-07, a partial verification stays partial (SH160-01, branch `fix/verify-partial-161`)
+
+Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The Stop hook changed: new `verify-partial` scenario (also in the default run) and the verify-related scenarios again. All invariants pass in the final runs, $0.69.
+
+| Scenario | Result | Cost |
+|---|---|---|
+| `verify-partial`: the package lists macOS and iOS, the task adds a function | The Stop passed without blocking; the user got the `systemMessage` and Claude the `additionalContext` (iOS not checked, PARTIAL). Claude's final answer: the verify script passed but iOS "wasn't built or tested, so that part is still unverified" | $0.12 |
+| `stop-fails`, `verify-unapproved`, `approve-verify` | As before: the failing check blocked and then the user was warned; the unapproved command did not run; the approval went through the skill | $0.42 |
+
+- The first `verify-partial` run used a task that breaks a test, so the verification failed and the partial case never came up (2 invariants failed for that reason). The task now keeps the tests passing.
+- n=1 per scenario on one small fixture.
+
 ## 2026-11-07, performance budget (#33, branch `feat/performance-budget-33`)
 
 Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27, a real Mac (it counts instructions). The guard, session start and end-of-turn notice changed: new `performance` group (not in the default run, it needs a real Mac) and the `snapshots` group again. 4 scenarios, **one run each**, all invariants pass, $1.03.
