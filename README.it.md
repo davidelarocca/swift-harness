@@ -70,6 +70,7 @@ flowchart LR
 | Skill (la lanci tu) | `/swift-harness:setup` | Prepara un progetto nuovo o esistente: `CLAUDE.md`, `.claude/rules/`, `docs/` (architettura, design system, registro componenti, product map, contratto di layout, template ADR), `.swiftlint.yml`, formatter, `scripts/verify.sh`, config degli hook. Non sovrascrive mai file esistenti. |
 | Skill (la lanci tu) | `/swift-harness:approve-verify` | Mostra il comando di verifica del progetto e i file che esegue, poi lo approva per il controllo a fine turno. Puoi lanciarla solo tu. `/swift-harness:approve-verify revoke` toglie l'approvazione. |
 | Skill (la lanci tu) | `/swift-harness:approve-snapshots` | Mostra le nuove immagini lasciate dagli snapshot test falliti (con i pixel cambiati in rosso) e copia quelle che approvi nella cartella delle baseline. Puoi lanciarla solo tu: i test non scrivono mai una baseline. |
+| Skill (la lanci tu) | `/swift-harness:approve-performance` | Mostra i nuovi numeri lasciati dai test del budget di prestazioni (una prima baseline, una regressione, un guadagno o un altro Mac) e copia in `performance/` quelli che accetti. Solo tu puoi lanciarla: né i test né Claude scrivono mai una baseline. |
 | Skill (la lanci tu) | `/swift-harness:approve-security` | Mostra cosa è cambiato nelle impostazioni di sicurezza dell'app dall'ultima approvazione (entitlements, App Transport Security, impostazioni di build di sandbox e hardened runtime), dice quali modifiche indeboliscono la protezione e le registra come nuova baseline se sei d'accordo. Fino ad allora il controllo a fine turno fallisce. |
 | Skill (la lanci tu) | `/swift-harness:doctor` | Controllo in sola lettura della configurazione: strumenti, chiavi e valori della config, segnaposto `{{...}}` rimasti, script di verifica e approvazione, config del formatter, struttura del progetto e ultima verifica. Una riga PASS / WARN / FAIL per controllo, con la correzione. Non modifica file. |
 | Skill (la lanci tu) | `/swift-harness:audit` | Audit in sola lettura di architettura, coerenza della UI e salute del codice, con report e piano di migrazione. |
@@ -100,6 +101,7 @@ Il costo fisso di contesto è di circa 770 token per sessione; le skill caricano
 - Un risultato vale per il codice e per la versione del plugin. Dopo un aggiornamento del plugin, un esito registrato dalla versione precedente non conta più. Il codice invariato non viene rieseguito da solo: il controllo gira alla fine del primo turno che cambia input della build, e fino ad allora `/swift-harness:doctor` mostra il codice come non verificato.
 - Un fallimento sopravvive a una nuova sessione: all'avvio o al resume Claude viene avvisato se l'ultima verifica è fallita sul codice attuale.
 - Funziona per worktree, quindi agenti paralleli verificano ciascuno la propria copia.
+- I docs si controllano a parte, con `scripts/docs.sh`, che legge solo Markdown: un link a un file o a un titolo che non esiste, un percorso tra backtick che non esiste (non in ADR, audit e archivi), una sezione nominata tra virgolette accanto a un documento che non ce l'ha, un import `@` di un file mancante, e i file letti in ogni sessione (`CLAUDE.md` e i suoi import) oltre `docs.budget` byte. Ogni problema viene dato come `file:riga`. Bloccano il turno, una volta, solo i problemi nuovi della sessione; quelli che c'erano già all'inizio li mostra `/swift-harness:doctor`. I docs non sono un input della build, quindi modificarli non rilancia mai il comando di verifica.
 
 </details>
 
@@ -145,7 +147,14 @@ Claude costruisce una schermata alla dimensione della sua preview. `docs/LAYOUT_
 
 Una view che accetta qualsiasi larghezza e non ne chiede nessuna non si può misurare, e il controllo fallisce dicendo cosa fare invece di passare: `NavigationSplitView`, `HSplitView`, `List` e `Table` tagliano ciò che non ci sta senza dirlo. Quasi tutte le finestre principali sono split view, quindi le pagine della colonna di dettaglio e la sidebar hanno righe proprie. Un contenuto che accetta qualsiasi larghezza ma ne ha una sua (testo che va a capo, o un `.frame(minWidth: 0, maxWidth: .infinity)` che nasconde il contenuto) non si può distinguere: passa con una nota nell'output dei test. Trovato su un'app di ~97k righe, dove entrambe le schermate principali passavano senza essere misurate.
 
-Il contenuto si misura senza il frame della finestra: un `.frame(minWidth:)` attorno a una view nasconde il contenuto più largo del frame, quindi il minimo della finestra va in una piccola view della finestra, misurata a parte. Non misurati: testo troncato, sovrapposizioni e dove si aprono i popover; sono controlli di review, sugli screenshot quando il progetto li cattura (sotto).
+Il contenuto si misura senza il frame della finestra: un `.frame(minWidth:)` attorno a una view nasconde il contenuto più largo del frame, quindi il minimo della finestra va in una piccola view della finestra, misurata a parte. Sull'app in esecuzione, un test di interfaccia guarda cosa mostra davvero la finestra. `LayoutAudit` (da `templates/tests/LayoutAudit.swift`) legge una volta l'albero di accessibilità e fallisce per ogni elemento tagliato dal bordo della sua finestra, sheet o popover fuori da una scroll view, e per ogni testo sopra un altro testo, con i frame:
+
+```swift
+LayoutAudit.shrinkWindow(app)   // macOS: trascina la finestra alla dimensione minima
+try LayoutAudit.check(app)      // 'play' is cut by the left edge: (417, 390, 150x24) in (510, 285, 280x312)
+```
+
+Funziona su macOS e su un simulatore iOS (iPhone, iPad, il testo dinamico più grande con `LayoutAudit.largestText`), misurato su un fixture in CI: due pulsanti tagliati e due etichette sovrapposte vengono trovati, una lista che scorre oltre il suo bordo no, la schermata corretta passa. I frame dell'albero non sono ritagliati, ed è questo che rende misurabile un bordo. Trova anche l'overflow che `.frame(minWidth: 0, maxWidth: .infinity)` nasconde a `LayoutContract`. Non misurati: testo troncato dal proprio frame, contenuto sotto la barra di stato di iOS, e dove si aprono i popover; sono controlli di review, sugli screenshot quando il progetto li cattura (sotto).
 
 </details>
 
@@ -184,9 +193,53 @@ Un componente condiviso cambiato per una schermata può spostare tutte le altre 
 </details>
 
 <details>
+<summary><b>Tastiera, ordine del focus e Riduci movimento</b></summary>
+
+Un componente che funziona solo col puntatore, o una schermata in cui il Tab salta qua e là, passa ogni altro controllo. Il setup offre due helper di test, costruiti su ciò che un test riesce a vedere su macOS 26 e 27 (misurato):
+
+```swift
+let keys = KeyboardCheck.host { SaveBar(onSave: { saved = true }, onCancel: { cancelled = true }) }
+keys.press(.return)                        // l'azione predefinita
+keys.press(.escape)                        // annulla, onExitCommand, onKeyPress
+keys.press("f", modifiers: .command)       // la sua scorciatoia
+
+try FocusOrder.check(app, ["search", "sort", "play", "shuffle", "trackList"])   // un test di interfaccia
+```
+
+- `KeyboardCheck` (test unitari, da `templates/tests/KeyboardCheck.swift`) ospita una view in una finestra fuori schermo e le manda tasti; il test verifica cosa ha fatto l'azione. In un target di test di un package gira in `scripts/verify.sh fast`. Non può controllare il Tab né l'ordine del focus (un processo di test non ha il ciclo delle view da tastiera), i comandi di menu, né le scorciatoie che differiscono solo per Maiuscolo (SwiftUI le confonde in un processo di test; l'app vera no).
+- `FocusOrder` (test di interfaccia, da `templates/tests/FocusOrder.swift`) preme Tab nell'app avviata e controlla che il focus visiti i controlli nell'ordine dato, torni al primo, e che Maiuscolo-Tab torni indietro. I controlli entrano nel ciclo del Tab solo con la navigazione da tastiera attiva in Impostazioni di Sistema: se è spenta il test viene **saltato**, mai superato. La CI la accende con `defaults write -g AppleKeyboardUIMode -int 2`. macOS non ha un'API pubblica per il focus da tastiera nei test di interfaccia; l'helper legge un attributo non documentato e fallisce, invece di passare, se smette di funzionare.
+- Riduci movimento non si può attivare da un test (`accessibilityReduceMotion` è di sola lettura). Il riferimento del design system ha `@ReduceMotion`, che un test o una preview sovrascrivono con `.environment(\.reduceMotionOverride, true)`, e `Motion.moving(_:reduced:)`, che toglie un'animazione di movimento o trasforma una transizione di movimento in una dissolvenza. La regola `ds_motion_without_reduce` segnala le transizioni di movimento che lo saltano.
+- Resta alla review: azioni raggiungibili solo con clic o hover, anelli di focus, Esc sulla UI presentata, scorciatoie di menu e animazioni avviate con `withAnimation`.
+
+</details>
+
+<details>
+<summary><b>Budget di prestazioni con baseline approvate</b></summary>
+
+Una modifica può rendere più lenta un'operazione chiave (lavoro spostato sul main actor, una lista costruita tutta subito, gli stessi dati decodificati due volte) e tutti i test continuano a passare. Il setup offre un budget per le due o tre operazioni che contano:
+
+```swift
+final class LibraryBudgetTests: XCTestCase {
+    func testLoadingTenThousandSongs() {
+        let data = Fixtures.library(count: 10_000)
+        XCTAssertEqual(PerformanceBudget.verify("LoadLibrary-10k") { _ = Library.load(data) }, [])
+    }
+}
+// LoadLibrary-10k: 584.29 M instructions, 65.2% over the approved 353.71 M (tolerance 5.0%); CPU time 24.01 ms, was 12.54 ms.
+```
+
+- `PerformanceBudget.verify` (da `templates/tests/PerformanceBudget.swift`) esegue l'operazione 3 volte per scaldarla, poi 15, e confronta la mediana delle istruzioni eseguite dal processo di test con una baseline che hai approvato. Oltre il 5% in più fallisce con i numeri; oltre il 5% in meno passa e lascia i numeri da approvare, così un guadagno si può tenere. In un target di test di un package gira in `scripts/verify.sh fast`, quindi una regressione blocca la fine del turno.
+- Perché le istruzioni: misurato in [#33](https://github.com/davidelarocca/swift-harness/issues/33). Su un Mac variano di circa lo 0,25% tra un'esecuzione e l'altra dello stesso codice, mentre il tempo si muove di qualche punto percentuale, e molto di più su una macchina occupata. Decodificare due volte gli stessi dati le ha alzate del 64%.
+- Le baseline stanno in `performance/` (`performance.path`), legate all'architettura, alla versione di macOS e alla configurazione di build. I test non le scrivono mai: lo fa `/swift-harness:approve-performance`, dopo che hai visto i numeri. Il guard chiede conferma prima che Claude modifichi la cartella, e l'avviso di fine turno segnala le modifiche fatte senza approvazione.
+- Non confrontati, con i numeri stampati: sulle macchine virtuali, come i runner macOS di GitHub, che non contano le istruzioni e dove il tempo varia del ±20% tra un'esecuzione e l'altra (una regressione del 64% si nasconde in quel rumore); e su un'altra architettura, versione di macOS o configurazione di build.
+- Il conteggio è dell'intero processo di test. I test eseguiti in contemporanea lo gonfiano, quindi i budget vanno in una classe XCTest, che esegue un test alla volta. Quando le iterazioni si discostano di più del 2%, il risultato è "unstable" e fallisce: non è una misura.
+
+</details>
+
+<details>
 <summary><b>Le regole SwiftLint del design system</b></summary>
 
-Il `.swiftlint.yml` generato aggiunge sei regole che segnalano valori visivi scritti a mano fuori dal design system e dai test: colori, dimensioni dei font, padding, spaziature degli stack, raggi degli angoli e durate delle animazioni. Partono come warning, che fanno anche da lista della migrazione; quando il conteggio di una regola arriva a zero, portala a `error`. L'elenco completo con esempi è nel [README in inglese](README.md#how-it-works).
+Il `.swiftlint.yml` generato aggiunge sei regole che segnalano valori visivi scritti a mano fuori dal design system e dai test, più una per Riduci movimento che vale ovunque (`ds_motion_without_reduce`): colori, dimensioni dei font, padding, spaziature degli stack, raggi degli angoli e durate delle animazioni. Partono come warning, che fanno anche da lista della migrazione; quando il conteggio di una regola arriva a zero, portala a `error`. L'elenco completo con esempi è nel [README in inglese](README.md#how-it-works).
 
 </details>
 
@@ -194,8 +247,8 @@ Il `.swiftlint.yml` generato aggiunge sei regole che segnalano valori visivi scr
 
 Uno strumento di qualità va verificato a sua volta. Ogni release passa da:
 
-- **273 controlli automatici** di hook, template e skill (`tests/run.sh`), eseguiti in CI con la `/bin/bash` 3.2 di macOS, più ShellCheck e la compilazione dei file Swift di riferimento.
-- **Uno smoke test in sessioni reali di Claude Code** (`tests/smoke/`): 16 scenari per gli hook, 6 sul riuso dei componenti UI e 3 sulla coerenza di prodotto (4 sono baseline senza il plugin), con gli invarianti verificati in automatico. Ultima esecuzione completa degli scenari degli hook: 62 invarianti su 62 rispettati ([risultati](tests/smoke/RESULTS.md)).
+- **528 controlli automatici** di hook, template e skill (`tests/run.sh`), eseguiti in CI con la `/bin/bash` 3.2 di macOS, più ShellCheck e la compilazione dei file Swift di riferimento.
+- **Uno smoke test in sessioni reali di Claude Code** (`tests/smoke/`): 23 scenari per gli hook (compresi snapshot, impostazioni di sicurezza, docs e budget di prestazioni), 6 sul riuso dei componenti UI, 3 sulla coerenza di prodotto, 6 sulle dimensioni delle finestre e 6 sulla review degli screenshot (alcuni sono baseline senza il plugin), con gli invarianti verificati in automatico. Ogni esecuzione è registrata con il suo costo ([risultati](tests/smoke/RESULTS.md)).
 
 Cosa ha fatto Claude in quelle sessioni:
 
@@ -262,6 +315,8 @@ Da Claude Code 2.1.275 le prime due righe diventano una: `/plugin install swift-
 - `verify.inputs`: file o cartelle coperti dall'approvazione oltre ai file che il comando nomina, per esempio uno script chiamato tra virgolette o tramite `make`.
 - `protectedPaths`: prefissi relativi alla radice del repository che richiedono conferma prima di un Edit o Write (`../` e symlink vengono risolti, anche quando la voce stessa è un symlink).
 - `layout.path`, `layout.enabled`: il contratto di layout (default `docs/LAYOUT_CONTRACT.md`) e il suo controllo a fine turno. `screenshots.path`: dove `Screenshot.capture` salva le immagini (default `.build/swift-harness/screenshots`). `snapshots.path`: le baseline approvate degli snapshot test, dentro il repository (default `snapshots`); solo `/swift-harness:approve-snapshots` ci scrive, e il guard chiede conferma prima di una modifica.
+- `docs.enabled`, `docs.paths`, `docs.history`, `docs.ignore`, `docs.budget`: il controllo dei riferimenti nei docs a fine turno (default `true`), i file e le cartelle controllati (default `CLAUDE.md`, `AGENTS.md`, `docs`), i registri del passato dove i percorsi che non esistono più sono attesi (default `docs/adr`, `docs/audit`, `docs/archive`, `docs/HISTORY.md`, `CHANGELOG.md`; i link si controllano comunque), le cartelle nominate prima di esistere (default la cartella degli snapshot e `docs/audit`), e i byte che possono occupare i file letti in ogni sessione (default `20000`, circa 4 byte per token).
+- `performance.path`: le baseline approvate dei budget di prestazioni, dentro il repository (default `performance`); solo `/swift-harness:approve-performance` ci scrive, e il guard chiede conferma prima di una modifica.
 - `security.enabled`: confronta a fine turno le impostazioni di sicurezza dell'app con quelle che hai approvato (default `true`). Spegnerlo è a sua volta una modifica da approvare. La prima baseline viene registrata alla prima sessione e risulta "non revisionata" in `/swift-harness:doctor` finché non la approvi.
 - `registry.sources`: le cartelle del design system in cui cercare view, modifier e stili che mancano dal registro. `registry.path` cambia il file del registro (default `docs/COMPONENT_REGISTRY.md`), `registry.enabled: false` spegne il controllo.
 - `scripts/verify.sh` non dichiara mai PASS senza aver eseguito almeno un controllo: senza scheme né package fallisce con `NOT CONFIGURED`, e un package elencato ma inesistente è un fallimento. `PLATFORMS` elenca dove lo scheme viene compilato e testato (`"macOS"`, `"iOS"` o entrambi): in `fast` iOS si compila per un simulatore qualsiasi, senza avviarlo; in `full` i test girano su `IOS_SIMULATOR`. Se una piattaforma elencata non ha avuto né build né test (solo package: `swift test` gira su questo Mac), il risultato è `PARTIAL`, mai `PASS`.
@@ -270,20 +325,21 @@ La tabella completa delle opzioni è nel [README in inglese](README.md#configura
 
 ## Roadmap
 
-Prossima tappa: **v1.6.0, porting assistito da macOS a iOS**, a fette verificate. Il README dice ancora "macOS" finché un'app iOS reale non passa. Tutto nella [roadmap](ROADMAP.md).
+Prossima tappa: **v1.7.0, un harness misurato**: se ogni controllo trova ciò che dichiara (difetti piantati apposta), la deriva lungo la storia, un riepilogo delle prove per turno, un registro locale di ciò che è stato intercettato con un report, e valutazioni con e senza il plugin. Poi la v1.8.0 controlla l'app in esecuzione nel tempo, e la v1.9.0 è il porting assistito da macOS a iOS, che aspetta un porting reale. Il README dice "macOS" finché un'app iOS reale non passa. Tutto nella [roadmap](ROADMAP.md).
 
 ## Limiti
 
 - **L'approvazione del comando di verifica copre i file che il comando nomina, non tutto ciò che legge.** Il comando viene diviso sugli spazi, non interpretato come shell: con virgolette o sintassi shell e senza `verify.inputs`, l'approvazione risulta `approved, partial coverage` (anche in `/swift-harness:doctor`), ed elencare gli script in `verify.inputs` li copre. Un input fuori dal progetto, o una cartella con un link che porta fuori, non si può coprire, quindi l'approvazione viene rifiutata. Un `Makefile` dietro `make verify`, o uno script incluso con `source` da `verify.sh`, può cambiare senza una nuova approvazione. Approvare significa anche fidarsi della build del progetto (Run Script di Xcode, manifest e plugin di SwiftPM). Vedi [SECURITY.md](SECURITY.md).
 - **Il controllo del registro riguarda le voci, non il riuso.** Dimostra che ogni voce punta a una dichiarazione reale e trova view, modifier, layout e stili non elencati in `registry.sources`. Non decide se una view nuova duplica una esistente. Modificare solo il registro rifà anche la verifica veloce a fine turno, perché il registro fa parte dello stato controllato.
-- **Il contratto di layout misura lo spazio, non l'aspetto.** Dimostra che una schermata non chiede più spazio di quello che la finestra le dà a ogni dimensione, e che la finestra dichiara le sue dimensioni. Testo troncato, sovrapposizioni e popover che escono dalla finestra restano alla review. Uno split view, una `List` o una `Table` si misurano attraverso le pagine che contengono, con righe proprie, e un frame elastico riceve solo una nota; lì il controllo più forte è un test di interfaccia sulla finestra vera. I test di misura non girano in un target di test ospitato da un'app sandboxed, che non può leggere `docs/`: usa un package o un target senza app ospite, oppure passa `contract:`. Per ora solo macOS; le size class di iOS arrivano con [#40](https://github.com/davidelarocca/swift-harness/issues/40).
+- **Il contratto di layout misura lo spazio, non l'aspetto.** Dimostra che una schermata non chiede più spazio di quello che la finestra le dà a ogni dimensione, e che la finestra dichiara le sue dimensioni. Testo troncato e popover che escono dalla finestra restano alla review; contenuto tagliato o sovrapposto lo trova `LayoutAudit` nei test di interfaccia. Uno split view, una `List` o una `Table` si misurano attraverso le pagine che contengono, con righe proprie, e un frame elastico riceve solo una nota; lì il controllo più forte è un test di interfaccia sulla finestra vera. I test di misura non girano in un target di test ospitato da un'app sandboxed, che non può leggere `docs/`: usa un package o un target senza app ospite, oppure passa `contract:`. Per ora solo macOS; le size class di iOS arrivano con [#40](https://github.com/davidelarocca/swift-harness/issues/40).
 - **La review sugli screenshot è un giudizio, non un controllo.** Le immagini sono prove per il reviewer; una riga disallineata non fa fallire nulla. La cattura richiede una sessione con window server (Xcode, `swift test`, runner macOS di GitHub) e un target di test che possa leggere e scrivere il progetto: un'app ospite sandboxed non può, quindi usa un package o un target senza app ospite, oppure passa `sizes:`, `source:` e un `output:` scrivibile. Le immagini dipendono dalla versione di macOS e dalla scala del display. Per ora solo macOS.
 - **I contratti di architettura coprono solo i target SwiftPM.** Le dipendenze tra target Xcode, e gli import che la build permette tramite una dipendenza transitiva, non sono controllati.
 - **Il guard sui percorsi protetti non è una sandbox.** Copre solo i tool Edit, Write e MultiEdit; un comando shell eseguito via Bash può comunque modificare un file protetto. Una modifica del genere ti viene segnalata a fine turno (il file, cambiato o cancellato), dopo che è avvenuta: rilevamento, non prevenzione. Per limiti rigidi usa le [regole di permesso](https://code.claude.com/docs/en/permissions) di Claude Code (`deny`).
 - I file Swift di riferimento della skill `design-system` sono esempi da adattare, non una libreria.
-- **Le baseline degli snapshot sono legate a una versione di macOS e a una scala del display.** Testo e controlli si disegnano diversamente su altre versioni, quindi su un Mac o un runner diverso le immagini risultano non confrontate, non superate: confronta sul Mac su cui sono state fatte (i runner di GitHub di solito hanno un macOS più vecchio). Su macOS `dynamicTypeSize` non cambia il disegno del testo SwiftUI, quindi il testo più grande è uno stato che il progetto disegna da sé. Focus, navigazione da tastiera e Riduci movimento non sono coperti dagli snapshot ([#52](https://github.com/davidelarocca/swift-harness/issues/52)).
+- **Le baseline degli snapshot sono legate a una versione di macOS e a una scala del display.** Testo e controlli si disegnano diversamente su altre versioni, quindi su un Mac o un runner diverso le immagini risultano non confrontate, non superate: confronta sul Mac su cui sono state fatte (i runner di GitHub di solito hanno un macOS più vecchio). Su macOS `dynamicTypeSize` non cambia il disegno del testo SwiftUI, quindi il testo più grande è uno stato che il progetto disegna da sé. Focus, navigazione da tastiera e Riduci movimento non sono coperti dagli snapshot: li controllano `KeyboardCheck` e `FocusOrder` (sopra).
 - Con Xcode 26, `swift build` e `swift test` copiano il catalogo degli asset di un package senza compilarlo, quindi in quei test i colori del design system non si trovano. Esegui i test che dipendono dai colori con `xcodebuild test`; Xcode 27 compila il catalogo in ogni caso.
 - **"Cambiato" è una lista di pattern di file, non il grafo della build.** In un progetto Xcode con cartelle sincronizzate, una risorsa di un tipo non elencato fuori da `Resources/` (per esempio `App/data.json`) non conta come modifica. Nemmeno una nuova versione di SwiftLint o di Xcode invalida una verifica superata: contano solo il codice e la versione del plugin.
+- **I budget di prestazioni valgono solo su Mac veri.** I runner della CI sono macchine virtuali senza contatore di istruzioni, quindi lì i budget non vengono confrontati. Un budget conta il lavoro della CPU, non il tempo passato ad aspettare (I/O, lock, un main thread occupato), e non vede blocchi né crescita della memoria.
 - La verifica a fine turno gira sulla tua macchina e dura quanto la tua verifica veloce: tieni `fast` sotto i due minuti circa.
 
 ## Contribuire
