@@ -106,8 +106,8 @@ save() { # $1 file, relative to the copy
 # $1 file, $2 heading, $3 column header: appends "Moved" to the first data row's cell in that
 # column of the table under the heading. Prints "<line>\t<old>\t<new>" or nothing.
 mutate_cell() {
-  local f="$copy/$1" result
-  result="$(awk -F'|' -v heading="$2" -v column="$3" -v OFS='|' '
+  local f="$copy/$1"
+  awk -F'|' -v heading="$2" -v column="$3" -v OFS='|' '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
     !done && /^#+[ \t]/ { h = $0; sub(/^#+[ \t]+/, "", h); in_section = (trim(h) == heading); col = 0; seen_sep = 0 }
     !done && in_section && /^[ \t]*\|/ {
@@ -124,12 +124,11 @@ mutate_cell() {
         }
       }
     }
-    { print }' "$f" 2>"$work/site" >"$f.mutated")" || true
+    { print }' "$f" 2>"$work/site" >"$f.mutated" || true
   [ -s "$work/site" ] || { rm -f "$f.mutated"; return 0; }
   save "$1"
   mv "$f.mutated" "$f"
-  result="$(cat "$work/site")"
-  printf '%s\n' "$result"
+  cat "$work/site"
 }
 
 site_registry_rename() {
