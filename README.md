@@ -96,7 +96,7 @@ The always-on context cost is about 770 tokens per session. Skills load their fu
 <details>
 <summary><b>How the end-of-turn check behaves</b></summary>
 
-- The verify command runs only after you approve it with `/swift-harness:approve-verify`. The approval covers the project path, the command and the content of each file the command names, and is stored outside the repository. Until then, or after any of those change, the check does not run it and tells you once per code state; `lintBlocking` still applies.
+- The verify command runs only after you approve it with `/swift-harness:approve-verify`. The approval covers the project path, the command and the content of each file the command names, and is stored outside the repository. Another git worktree of the same repository inherits it when the command and those files are identical (any difference asks again; another clone never inherits). Until then, or after any of those change, the check does not run it and tells you once per code state; `lintBlocking` still applies.
 - Code unchanged since the session started or since the last successful check: nothing runs. The starting state is a baseline, not a pass: if it was already broken, the first change in the session runs the check and shows it.
 - Code changed and the check fails: Claude is blocked and receives the last 60 lines of output.
 - Claude tries to stop again without changing anything: it may stop, and you get a warning.
@@ -290,7 +290,7 @@ They start as warnings, which double as the migration to-do list. Switch a rule 
 
 A quality tool has to be checked itself. Every release goes through:
 
-- **684 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 679 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
+- **690 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 685 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
 - **A smoke test in real Claude Code sessions** (`tests/smoke/`): 23 scenarios for the hooks (snapshots, security settings, docs and performance budgets included), 6 for reusing UI components, 3 for product coherence, 6 for window sizes and 6 for screenshot review (some of them baselines without the plugin), with their invariants checked automatically. Every run is recorded with its cost ([results](tests/smoke/RESULTS.md)).
 
 What Claude did in those sessions:
