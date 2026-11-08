@@ -3177,6 +3177,51 @@ else nok "html: no script, no external resource, and a policy that forbids them"
 if grep -q 'Source: <code>' "$page" && [ "$(grep -o 'Source: <code>' "$page" | wc -l | tr -d ' ')" = 2 ]; then ok "html: each section names its source file"
 else nok "html: each section names its source file"; fi
 
+# ---------- guest mode (#71) ----------
+
+G="$TMP/guest"
+mkdir -p "$G/Scripts" "$G/Sources/App" "$G/docs"
+git -C "$G" init -q
+git -C "$G" config user.email test@example.com
+git -C "$G" config user.name test
+printf '# Own rules\n\nRun `Scripts/check.sh` before a pull request.\n' >"$G/CLAUDE.md"
+printf '# Agents\n\nThe coordinator owns docs/.\n' >"$G/AGENTS.md"
+printf '# Plan\n' >"$G/docs/PLAN.md"
+printf '#!/bin/bash\necho own-check >>"${GUEST_LOG:-/dev/null}"\nexit "${GUEST_EXIT:-0}"\n' >"$G/Scripts/check.sh"
+chmod +x "$G/Scripts/check.sh"
+echo 'let app = 1' >"$G/Sources/App/App.swift"
+printf 'indent: 2\n' >"$G/.swiftformat"
+git -C "$G" add -A && git -C "$G" commit -qm "a project with its own rules and checks"
+gs() { "$SCRIPTS/setup-guest.sh" "$@" 2>&1; }
+out="$(gs --project "$G" --fast 'Scripts/check.sh fast' --full 'Scripts/check.sh full')"
+if [ "$(git -C "$G" status --short | sort | paste -sd' ' -)" = '?? .claude/ ?? Scripts/verify.sh' ] && [ "$(jq -r .verify.command "$G/.claude/swift-harness.json")" = 'Scripts/verify.sh fast' ]; then
+  ok "guest: setup adds only the config and verify.sh, in the project's own Scripts/ folder (one folder on macOS)"
+else nok "guest: setup adds only the config and verify.sh, in the project's own Scripts/ folder (one folder on macOS)" "$(git -C "$G" status --short)"; fi
+if [ "$(jq -c '[.guest, .format, .lint]' "$G/.claude/swift-harness.json")" = '[true,"swiftformat","none"]' ]; then
+  ok "guest: the project's own formatter config is used, SwiftLint stays off without one"
+else nok "guest: the project's own formatter config is used, SwiftLint stays off without one" "$(cat "$G/.claude/swift-harness.json")"; fi
+expect_result "guest: setup refuses when a file is there, and writes nothing" 1 'already there: \.claude/swift-harness\.json Scripts/verify\.sh' "exit=$(gs --project "$G" --fast x >/dev/null; echo $?)
+$(gs --project "$G" --fast x)"
+approve "$G" >/dev/null
+hook session-start.sh "$G" '{"source":"startup"}' >"$TMP/guest-start.out" 2>&1
+expect_result "guest: session start tells Claude the project's own rules come first" 0 'guest mode\. This project.s own agent rules and docs' "exit=0
+$(cat "$TMP/guest-start.out")"
+GL="$TMP/guest.log"; : >"$GL"
+echo 'let app = 2' >"$G/Sources/App/App.swift"
+GUEST_LOG="$GL" hook stop-verify.sh "$G" >/dev/null 2>&1
+if [ "$(cat "$GL")" = own-check ]; then ok "guest: the end-of-turn check runs the project's own command"
+else nok "guest: the end-of-turn check runs the project's own command" "$(cat "$GL")"; fi
+echo 'let app = 3' >"$G/Sources/App/App.swift"
+expect_result "guest: the project's command failing blocks the turn" 2 'Verification failed' "$(GUEST_EXIT=1 ev_stop "$G")"
+git -C "$G" checkout -q -- Sources/App/App.swift
+if [ "$(git -C "$G" status --short | sort | paste -sd' ' -)" = '?? .claude/ ?? Scripts/verify.sh' ]; then ok "guest: after the hooks ran, still nothing else changed"
+else nok "guest: after the hooks ran, still nothing else changed" "$(git -C "$G" status --short)"; fi
+expect_row "guest: doctor shows the mode and the project's own rules" "$(doctor "$G")" INFO Mode 'guest: .*CLAUDE\.md, AGENTS\.md are the source of truth'
+expect_result "guest: --full defaults to the fast command, --no-docs turns the docs check off" 0 'FULL=.Scripts/check\.sh.' "exit=0
+$(G2="$TMP/guest2"; mkdir -p "$G2"; gs --project "$G2" --fast 'Scripts/check.sh' --no-docs >/dev/null; jq -r '.docs.enabled' "$G2/.claude/swift-harness.json"; grep FULL= "$G2/scripts/verify.sh")" 'true'
+expect_result "guest: without --fast it is a usage error" 2 'usage' "exit=$(gs --project "$G" >/dev/null; echo $?)
+$(gs --project "$G")"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
