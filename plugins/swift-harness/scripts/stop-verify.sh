@@ -60,7 +60,12 @@ fp="$(sh_identity)"
 # the session folder (the checkpoint reads it) and to the project folder (doctor, the evals).
 ev_lines="$sess/evidence.lines"
 : >"$ev_lines"
-ev() { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >>"$ev_lines"; }
+# A check that ran gets its duration in whole seconds since ev_t0 (the shell's SECONDS).
+ev_t0=$SECONDS
+ev() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${3:-}" "${4:-}" >>"$ev_lines"; }
+ev_ran() { ev "$1" "$2" "${3:-}" "$((SECONDS - ev_t0))"; } # $1 name, $2 result, $3 detail
+# Catch log lines written from here carry the code they are about (#110).
+SH_CATCH_CODE="$fp"
 ev_write() { # $1 outcome, $2 note
   local json
   json="$(jq -n --arg outcome "$1" --arg note "${2:-}" --arg code "$fp" --arg session "$(sh_session_id)" \
@@ -68,14 +73,38 @@ ev_write() { # $1 outcome, $2 note
     {version: 1, time: $time, session: $session, code: $code, outcome: $outcome}
     + (if $note == "" then {} else {note: $note} end)
     + {checks: ($lines | split("\n") | map(select(length > 0) | split("\t")
-        | {name: .[0], result: .[1]} + (if (.[2] // "") == "" then {} else {detail: .[2]} end)))}')" || return 0
+        | {name: .[0], result: .[1]} + (if (.[2] // "") == "" then {} else {detail: .[2]} end)
+          + (if (.[3] // "") == "" then {} else {seconds: (.[3] | tonumber)} end)))}')" || return 0
   printf '%s\n' "$json" >"$sess/evidence.json.tmp" && mv "$sess/evidence.json.tmp" "$sess/evidence.json"
   printf '%s\n' "$json" >"$state/evidence.json.tmp" && mv "$state/evidence.json.tmp" "$state/evidence.json"
+  ev_history "$json"
+}
+# History of the records (#110): one line each in evidence-history.jsonl, bounded by count
+# (SWIFT_HARNESS_HISTORY_MAX, 2000) and by age (the retention of session folders). A record that
+# only says nothing ran again on the code of the previous one is not repeated. Trimming takes a
+# lock, so two sessions appending at once lose nothing.
+ev_history() { # $1 the record as JSON
+  local file="$state/evidence-history.jsonl" line max last
+  line="$(printf '%s' "$1" | jq -c . 2>/dev/null)" || return 0
+  if [ "$(printf '%s' "$line" | jq -r .outcome)" = unchanged ] && [ -s "$file" ]; then
+    last="$(tail -n 1 "$file" | jq -r '[.code, .outcome] | join(" ")' 2>/dev/null)"
+    [ "$last" = "$fp unchanged" ] && return 0
+  fi
+  printf '%s\n' "$line" >>"$file" 2>/dev/null || return 0
+  max="${SWIFT_HARNESS_HISTORY_MAX:-2000}"
+  case "$max" in '' | *[!0-9]*) max=2000 ;; esac
+  local cutoff oldest
+  cutoff="$(date -u -v-"${SH_SESSION_MAX_DAYS}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$SH_SESSION_MAX_DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)"
+  oldest="$(head -n 1 "$file" | jq -r '.time // ""' 2>/dev/null)"
+  [ "$(wc -l <"$file" | tr -d ' ')" -gt "$max" ] || [[ "$oldest" < "$cutoff" ]] || return 0
+  mkdir "$state/evidence-history.lock" 2>/dev/null || return 0
+  jq -c --arg cutoff "$cutoff" 'select((.time // "") >= $cutoff)' "$file" 2>/dev/null | tail -n "$max" >"$file.tmp" && mv "$file.tmp" "$file"
+  rmdir "$state/evidence-history.lock" 2>/dev/null
 }
 # The checks of the last record on this same code, when this turn ran nothing new.
 ev_keep() {
   [ "$(jq -r '.code // empty' "$state/evidence.json" 2>/dev/null)" = "$fp" ] || return 0
-  jq -r '.checks[] | [.name, .result, (.detail // "")] | @tsv' "$state/evidence.json" 2>/dev/null >>"$ev_lines"
+  jq -r '.checks[] | [.name, .result, (.detail // ""), (.seconds // "" | tostring)] | @tsv' "$state/evidence.json" 2>/dev/null >>"$ev_lines"
 }
 # "name (detail), ..." of the checks that did not run this turn, or nothing.
 ev_missing() {
@@ -204,6 +233,7 @@ out="$(mktemp -t swift-harness-verify.XXXXXX)"
 status=0
 result=""
 if [ "$run_verify" = "true" ]; then
+  ev_t0=$SECONDS
   (cd "$SH_ROOT" && bash -c "$command_line") >"$out" 2>&1
   status=$?
   # The result line can only lower the outcome (SH160-01): "failed" with exit 0 is a failure.
@@ -212,13 +242,13 @@ if [ "$run_verify" = "true" ]; then
     printf '\n(The verify command exited 0, but its result line says failed.)\n' >>"$out"
     status=1
   fi
-  if [ "$status" -ne 0 ]; then ev "$command_line" failed "exit $status"
+  if [ "$status" -ne 0 ]; then ev_ran "$command_line" failed "exit $status"
   elif [ -n "$result" ]; then
     IFS=$'\t' read -r e_outcome e_checked e_tested e_unchecked <<<"$result"
-    if [ "$e_outcome" = partial ]; then ev "$command_line" partial "checked on $e_checked, tested on $e_tested; not checked on $e_unchecked"
-    else ev "$command_line" passed "checked on $e_checked, tested on $e_tested"; fi
+    if [ "$e_outcome" = partial ]; then ev_ran "$command_line" partial "checked on $e_checked, tested on $e_tested; not checked on $e_unchecked"
+    else ev_ran "$command_line" passed "checked on $e_checked, tested on $e_tested"; fi
   else
-    ev "$command_line" passed "exit 0; the command does not say which platforms it checked"
+    ev_ran "$command_line" passed "exit 0; the command does not say which platforms it checked"
   fi
 elif [ "$verify_enabled" = "true" ]; then
   not_checked="the build and tests were not checked"
@@ -230,22 +260,25 @@ if [ "$lint_missing" = "true" ]; then
   [ "$status" -ne 0 ] || status=1
 elif [ "$lint_gate" = "true" ]; then
   printf '\n== SwiftLint (lintBlocking) ==\n' >>"$out"
-  if recheck_lint >>"$out"; then ev "SwiftLint (lintBlocking)" passed "the files that failed after an edit"
-  else ev "SwiftLint (lintBlocking)" failed "files still failing: $(grep -c . "$state/lint-pending")"; [ "$status" -ne 0 ] || status=1; fi
+  ev_t0=$SECONDS
+  if recheck_lint >>"$out"; then ev_ran "SwiftLint (lintBlocking)" passed "the files that failed after an edit"
+  else ev_ran "SwiftLint (lintBlocking)" failed "files still failing: $(grep -c . "$state/lint-pending")"; [ "$status" -ne 0 ] || status=1; fi
 fi
 if [ "$run_contracts" = "true" ]; then
   printf '\n== Architecture contracts ==\n' >>"$out"
-  if "$(dirname "$0")/contracts.sh" "$SH_ROOT" >>"$out" 2>&1; then ev "architecture contracts" passed "$SH_CONTRACT"
-  else ev "architecture contracts" failed "$SH_CONTRACT"; [ "$status" -ne 0 ] || status=1; fi
+  ev_t0=$SECONDS
+  if "$(dirname "$0")/contracts.sh" "$SH_ROOT" >>"$out" 2>&1; then ev_ran "architecture contracts" passed "$SH_CONTRACT"
+  else ev_ran "architecture contracts" failed "$SH_CONTRACT"; [ "$status" -ne 0 ] || status=1; fi
 fi
 
 if [ "$run_registry" = "true" ]; then
+  ev_t0=$SECONDS
   registry_out="$("$(dirname "$0")/registry.sh" check "$SH_ROOT" 2>&1)"
   # Exit 3: a registry in another format is reported by doctor, never blocks.
   case $? in
-    0) ev "component registry" passed ;;
+    0) ev_ran "component registry" passed ;;
     1)
-      ev "component registry" failed "$(grep -c '^- ' <<<"$registry_out") problem(s)"
+      ev_ran "component registry" failed "$(grep -c '^- ' <<<"$registry_out") problem(s)"
       printf '\n== Component registry ==\n%s\n' "$registry_out" >>"$out"
       [ "$status" -ne 0 ] || status=1
       ;;
@@ -254,12 +287,13 @@ if [ "$run_registry" = "true" ]; then
 fi
 
 if [ "$run_layout" = "true" ]; then
+  ev_t0=$SECONDS
   layout_out="$("$(dirname "$0")/layout.sh" check "$SH_ROOT" 2>&1)"
   # Exit 3: a contract in another format is reported by doctor, never blocks.
   case $? in
-    0) ev "layout contract" passed "the contract's rows; the sizes are measured by the tests" ;;
+    0) ev_ran "layout contract" passed "the contract's rows; the sizes are measured by the tests" ;;
     1)
-      ev "layout contract" failed "$(grep -c '^- ' <<<"$layout_out") problem(s)"
+      ev_ran "layout contract" failed "$(grep -c '^- ' <<<"$layout_out") problem(s)"
       printf '\n== Layout contract ==\n%s\n' "$layout_out" >>"$out"
       [ "$status" -ne 0 ] || status=1
       ;;
@@ -268,10 +302,11 @@ if [ "$run_layout" = "true" ]; then
 fi
 
 if [ "$run_security" = "true" ]; then
+  ev_t0=$SECONDS
   if security_out="$("$(dirname "$0")/security.sh" check --project "$SH_ROOT" 2>&1)"; then
-    ev "security settings" passed "unchanged since the approved state"
+    ev_ran "security settings" passed "unchanged since the approved state"
   else
-    ev "security settings" failed "changed since the approved state"
+    ev_ran "security settings" failed "changed since the approved state"
     printf '\n== Security settings ==\n%s\n' "$security_out" >>"$out"
     [ "$status" -ne 0 ] || status=1
   fi
@@ -319,8 +354,8 @@ failures=$((failures + 1))
 printf '%s' "$fp" > "$state/failed"
 ev_write failed
 # Catch log (#86): each failing check, once per block.
-awk -F'\t' '$2 == "failed" { print $1 "\t" $3 }' "$ev_lines" | while IFS=$'\t' read -r name detail; do
-  sh_catch "$name" blocked "attempt $failures of $max_attempts${detail:+: $detail}"
+awk -F'\t' '$2 == "failed" { print $1 "\t" $3 "\t" $4 }' "$ev_lines" | while IFS=$'\t' read -r name detail seconds; do
+  sh_catch "$name" blocked "attempt $failures of $max_attempts${detail:+: $detail}" "$seconds"
   grep -qxF -- "$name" "$sess/blocked-checks" 2>/dev/null || printf '%s\n' "$name" >>"$sess/blocked-checks"
 done
 

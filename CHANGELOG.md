@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- New: evidence over time ([#110](https://github.com/davidelarocca/swift-harness/issues/110)). The end-of-turn records are kept as a history, `evidence-history.jsonl` in the project's state folder, one line per record:
+  - **Bounds:** at most 2000 lines (`SWIFT_HARNESS_HISTORY_MAX`), and no older than the retention of session folders. A record that only says nothing ran again on the code of the previous one is not repeated.
+  - **Concurrency:** trimming takes a lock, so two sessions appending at once lose nothing.
+  - **Durations:** each check that ran has its duration in whole seconds.
+  - **Catch log:** lines written by the end-of-turn check carry the code identity they are about, and a block carries the check's duration.
+  - **Report:** `/swift-harness:report` counts the records of the period by outcome, with the time the checks took.
+
+  Nothing else changes. It is the base for evals over a series of sessions (#8) and for adapters that start in observation (#105).
 - New: the adoption audit reads what a project's lint and formatter look at ([#104](https://github.com/davidelarocca/swift-harness/issues/104), [#105](https://github.com/davidelarocca/swift-harness/issues/105)). From `.swiftlint.yml` (`disabled_rules`, `opt_in_rules`, `only_rules`), `.swiftformat` (`--disable`, `--rules`) and `.swift-format` (rules set to false), as text: a lint that passes does not look at the rules it turns off. An experiment planted defects in a copy of two open-source apps and a real app, and ran the projects' own checks on them ([`tests/evals/adapter-sensitivity.md`](tests/evals/adapter-sensitivity.md)). The results:
   - NetNewsWire's strict SwiftLint, clean in CI, caught 1 of 5 lint defect classes; Ice's caught 3 of 5.
   - Every miss came from the config, readable without running anything.
