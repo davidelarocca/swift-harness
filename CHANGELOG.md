@@ -7,6 +7,7 @@
 - Fix: `check.sh` with no plugin data folder printed an empty list of folders. It now says what to do.
 - New: scripts the approval does not cover are named ([#127](https://github.com/davidelarocca/swift-harness/issues/127)). An approved script that calls another one: if the second changes, nothing asks again. `/swift-harness:approve-verify` and `/swift-harness:doctor` now list the scripts the approved files name and the approval does not cover, with the `verify.inputs` entry to add. They read the files as text and run nothing, so a mention in a comment counts and a path built at run time is not seen.
 - New: a one-time permit for a Codex edit of a protected file. The guard refused it again even after the user agreed. Now the user runs `bash .codex/swift-harness-hook.sh --allow <file>` in their own terminal: one permit, for that file, in that checkout, for one patch within an hour, in the catch log. A patch that also touches another protected file is refused whole, and the permit stays.
+- Fix: the adoption audit could write an `awk` error to stderr, at random, on a CI file with two YAML problems: it printed a second line after a reader had stopped. It failed a test on one CI run.
 - Docs: what Codex does not cover: its shell commands are not guarded, only reported, and a new worktree without the local files gets no notice. Hooks are trusted per checkout.
 
 ## swift-harness 1.8.0 (2026-11-08)

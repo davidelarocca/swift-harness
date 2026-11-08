@@ -3831,6 +3831,13 @@ echo 'print(2)' >"$UC/scripts/helper.py"
 if approval "$UC" --status | grep -q '^Status: not approved'; then ok "approval: once covered, a change to that script asks again"
 else nok "approval: once covered, a change to that script asks again" "$(approval "$UC" --status)"; fi
 
+# A CI file with two problems: one row, and nothing on stderr (awk's END runs after exit).
+AY="$TMP/audit-yaml"; mkdir -p "$AY/.github/workflows"
+printf 'on: [push\njobs:\n  a: "b\n' >"$AY/.github/workflows/ci.yml"
+out="$("$SCRIPTS/audit.sh" --project "$AY" 2>"$TMP/ay.err")"
+if [ ! -s "$TMP/ay.err" ] && grep -q 'cannot be read as YAML: a quote that does not close (line 3)' <<<"$out"; then ok "audit: a CI file with two problems gives the first, and nothing on stderr"
+else nok "audit: a CI file with two problems gives the first, and nothing on stderr" "$(cat "$TMP/ay.err"; printf '%s' "$out" | grep -n 'YAML')"; fi
+
 # A one-time permit for a Codex edit of a protected file.
 PX="$(new_project codex-permit)"
 PERM="$(patch_input $'*** Begin Patch\n*** Update File: Sources/Audio/Engine.swift\n@@\n-let engine = 1\n+let engine = 2\n*** End Patch')"
