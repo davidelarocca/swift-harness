@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## swift-harness 1.8.0 (2026-11-08)
+
+Adoption on real projects. A project that already has its own agent rules, docs, checks and several agents gets the harness without being reshaped: it looks first (a read-only audit), wraps what is there (the project's docs check, its commands, timed), protects the project's own files, and runs the same checks for Codex and other agents, with one approval across worktrees. Measured on a real ~97k-line app with its own tools, on a copy. Checked with 756 hook tests, real Codex sessions on a fixture, and the full smoke run in real Claude Code sessions (24 scenarios, 0 failed invariants).
+
+**Upgrading:** nothing to do for a project set up before. Everything new is either a command you run (the audit, `time-commands.sh`, `check.sh`, `setup-guest.sh --codex`) or a configuration you choose (`docs.command`, `docs.blocking`, `verify.retryFailed`). A guest project set up with 1.7.0 keeps its config: to protect its own agent rules, add them to `protectedPaths` (as `setup-guest.sh` now does), for example `"protectedPaths": ["AGENTS.md", "CLAUDE.md"]`.
+
 
 - New: guest mode kept local, and new worktrees ([#71](https://github.com/davidelarocca/swift-harness/issues/71), [#105](https://github.com/davidelarocca/swift-harness/issues/105)). `setup-guest.sh` gains three options:
   - `--local` keeps the two files out of the repository, through `.git/info/exclude`, which every worktree shares. Neither git nor other agents see them.
