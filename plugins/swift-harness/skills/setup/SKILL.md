@@ -2,6 +2,7 @@
 name: setup
 description: Bootstrap or retrofit the swift-harness method in a Swift/SwiftUI macOS project - CLAUDE.md, path-scoped rules, design system docs, component registry, ADRs, SwiftLint/formatter config, verify script and quality-gate config. Use when the user asks to set up, initialize or onboard a project to swift-harness.
 disable-model-invocation: true
+argument-hint: "[guest]"
 ---
 
 # Set up swift-harness in a project
@@ -9,6 +10,21 @@ disable-model-invocation: true
 Goal: leave the project with persistent instructions, a documented design system, a component registry and active quality gates, without overwriting anything the project already has.
 
 Templates live in `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/`. Placeholders look like `{{NAME}}`.
+
+## Guest mode
+
+Use it when the arguments (`$ARGUMENTS`) say `guest`, or when the project already has its own agent rules, docs and checks that must not change. For example, other agents read them, or the branch must stay mergeable with one where work continues; ask if unsure. In guest mode, do steps 1 and 2, then only this, and skip steps 3 to 8:
+
+1. Find the project's own commands, read only: build and tests (`swift build`, `swift test`, `xcodebuild` with its scheme), and its docs or other checks (a script under `Scripts/`, a `Makefile` target), from its `CLAUDE.md`, `AGENTS.md`, README or CI. Propose a fast command for the end of each turn (build and the quick tests, under about two minutes) and a full one for before merging. Ask the user to confirm or change them, in one AskUserQuestion call.
+2. Run:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/scripts/setup-guest.sh" --project . --fast "<fast command>" --full "<full command>" [--no-docs]
+   ```
+
+   Add `--no-docs` when the project's own commands already check its docs. The script writes `.claude/swift-harness.json` (`"guest": true`) and `scripts/verify.sh`, and nothing else. It leaves the formatter and SwiftLint off unless the project has their config. It refuses if either file exists: then show the user the existing file and stop.
+3. Do not create or edit `CLAUDE.md`, `AGENTS.md`, `.claude/rules/`, `docs/` or any template. Do not commit.
+4. Finish: show `git status --short` (only the two new files), say that the user approves the verify command with `/swift-harness:approve-verify` before it runs, and that the plugin can be loaded with `--plugin-dir` in one worktree only.
 
 ## 1. Safety first
 

@@ -64,7 +64,7 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
+  (keys - ["guest", "format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
   (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
@@ -82,6 +82,7 @@ fi
 
 problems="$(jq -r '
   def check(path; ok; msg): if (getpath(path) != null) and (getpath(path) | ok | not) then msg else empty end;
+  check(["guest"]; type == "boolean"; "guest must be true or false"),
   check(["format"]; . == "swiftformat" or . == "swift-format" or . == "none"; "format must be swiftformat, swift-format or none"),
   check(["lint"]; . == "swiftlint" or . == "none"; "lint must be swiftlint or none"),
   check(["lintBlocking"]; type == "boolean"; "lintBlocking must be true or false"),
@@ -343,6 +344,12 @@ else
 fi
 
 # ---------- project structure ----------
+
+# Guest mode (#71): the project's own agent rules and docs are the source of truth.
+if [ "$(sh_cfg '.guest' 'false')" = true ]; then
+  own="$(for f in CLAUDE.md AGENTS.md .claude/rules; do [ -e "$SH_ROOT/$f" ] && printf '%s\n' "$f"; done | paste -sd, - | sed 's/,/, /g')"
+  row INFO "Mode" "guest: only .claude/swift-harness.json and the verify script are swift-harness's; the project's own ${own:-rules and docs} are the source of truth, and setup does not add its templates"
+fi
 
 packages_found="$(cd "$SH_ROOT" && find . -maxdepth 3 -name Package.swift -not -path '*/.build/*' 2>/dev/null |
   sed 's|^\./||' | sort | paste -sd, - | sed 's/,/, /g')"
