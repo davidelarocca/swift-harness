@@ -343,7 +343,7 @@ La tabella completa delle opzioni è nel [README in inglese](README.md#configura
 
 ## Roadmap
 
-Prossima tappa: **v1.8.0, percezione in movimento**: l'app in esecuzione nel tempo (navigazione reale contro quella dichiarata, convenzioni di interazione, guasti iniettati, un compito di accessibilità svolto solo tramite l'albero di accessibilità), e valutazioni con e senza il plugin su una serie di sessioni. Poi la v1.9.0 è il porting assistito da macOS a iOS, che aspetta un porting reale. Il README dice "macOS" finché un'app iOS reale non passa. Tutto nella [roadmap](ROADMAP.md).
+Prossima tappa: **v1.8.0, adozione su progetti reali**: un progetto con le sue regole, i suoi controlli e i suoi agenti adotta il harness senza essere stravolto (un audit di adozione, adattatori per i suoi controlli, un solo motore per ogni agente, approvazione condivisa tra worktree, un comando veloce cronometrato), e una demo che lo mostra in pochi minuti. Poi la v1.9.0 controlla l'app in esecuzione nel tempo, con valutazioni su una serie di sessioni, e la v2.0.0 è il porting assistito da macOS a iOS, che aspetta un porting reale. I metodi presi da altri campi sono studiati in un programma di ricerca, ciascuno contro una baseline semplice prima di diventare una funzione. Il README dice "macOS" finché un'app iOS reale non passa. Tutto nella [roadmap](ROADMAP.md).
 
 ## Limiti
 
