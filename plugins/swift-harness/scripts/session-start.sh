@@ -11,7 +11,10 @@ if ! sh_has_jq; then
     echo "swift-harness: jq is not installed, so its quality hooks are inactive. Tell the user to run: brew install jq"
   exit 0
 fi
-sh_init || exit 0
+if ! sh_init; then
+  sh_guest_missing_notice
+  exit 0
+fi
 
 verify_cmd="$(sh_cfg '.verify.command' 'scripts/verify.sh fast')"
 

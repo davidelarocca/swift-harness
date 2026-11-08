@@ -515,6 +515,24 @@ sh_platforms() { # $1 project root
     END { for (i = 1; i <= n; i++) if (order[i] in line) print line[order[i]] }'
 }
 
+# A worktree without swift-harness's files, in a repository set up with guest mode --local
+# (#71): the files are kept out of git, so a new worktree starts without them, and every hook
+# would do nothing in silence. Tell the user and Claude, with the command that prepares it.
+# Writes nothing.
+sh_guest_missing_notice() {
+  local common src w msg
+  [ -n "${SH_ROOT:-}" ] || return 0
+  common="$(git -C "$SH_ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 0
+  common="$(cd "$SH_ROOT" && cd "$common" 2>/dev/null && pwd -P)" || return 0
+  grep -qxF '/.claude/swift-harness.json' "$common/info/exclude" 2>/dev/null || return 0
+  src="$(git -C "$SH_ROOT" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | while IFS= read -r w; do
+    w="$(cd "$w" 2>/dev/null && pwd -P)" || continue
+    [ "$w" != "$SH_ROOT" ] && [ -f "$w/.claude/swift-harness.json" ] && { printf '%s' "$w"; break; }
+  done)"
+  msg="swift-harness: this repository uses swift-harness with its files kept out of git (guest mode, --local), and this worktree does not have them, so no check runs here: no build or tests at the end of a turn, no evidence record. To prepare it: \"$(dirname "${BASH_SOURCE[0]}")/setup-guest.sh\" --project \"$SH_ROOT\" --from \"${src:-<a checkout that has them>}\" --local, then approve the verify command."
+  jq -n --arg msg "$msg" '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $msg}}'
+}
+
 # Initialise SH_ROOT and SH_CONFIG. Returns 1 when the project has not opted in.
 sh_init() {
   sh_has_jq || return 1
