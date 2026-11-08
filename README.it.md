@@ -12,8 +12,9 @@
 
 <p align="center">
   <b>Un plugin di Claude Code per app macOS native.</b><br>
-  Un metodo "riusa prima di creare" per il design system SwiftUI e controlli di qualità automatici (formattazione, lint, build, test),<br>
-  così Claude resta coerente mentre il progetto cresce.
+  Un metodo "riusa prima di creare" per il design system SwiftUI e controlli a fine di ogni turno<br>
+  (build e test, lint, layout, accessibilità, snapshot, impostazioni di sicurezza, documentazione),<br>
+  così Claude resta coerente mentre il progetto cresce, e vedi cosa è stato controllato e cosa è stato fermato.
 </p>
 
 <p align="center">
@@ -40,11 +41,12 @@
 
 I piani step by step tengono ogni sessione concentrata, ma non impediscono la deriva tra uno step e l'altro. Con la crescita del progetto lo stesso elemento (una pillola di notifica, un bottone con hover, un popover) viene ricostruito in modo leggermente diverso in ogni feature, i valori grezzi si spargono nelle view e arrivano bug visivi e strutturali.
 
-swift-harness interviene su tre livelli:
+swift-harness interviene su quattro livelli:
 
 1. **Il design system sta nel codice**, non nei documenti: token e componenti condivisi in un Swift package locale.
 2. **Claude sa dove guardare**: un `CLAUDE.md` corto, rules legate ai percorsi, un registro dei componenti e gli ADR, caricati solo quando servono.
 3. **I controlli sono automatici**, non richieste: gli hook formattano, controllano e verificano, quindi "non mettere valori a mano" diventa qualcosa che Claude non può saltare.
+4. **Il harness si misura, non si dà per buono**: difetti piantati apposta mostrano quale controllo trova cosa, uno score di deriva segue la coerenza del progetto commit per commit, e ogni turno finisce con un riepilogo di cosa è stato controllato e cosa no.
 
 ## Come funziona
 
@@ -67,11 +69,14 @@ flowchart LR
 
 | Tipo | Nome | Cosa fa |
 |---|---|---|
-| Skill (la lanci tu) | `/swift-harness:setup` | Prepara un progetto nuovo o esistente: `CLAUDE.md`, `.claude/rules/`, `docs/` (architettura, design system, registro componenti, product map, contratto di layout, template ADR), `.swiftlint.yml`, formatter, `scripts/verify.sh`, config degli hook. Non sovrascrive mai file esistenti. |
+| Skill (la lanci tu) | `/swift-harness:setup` | Prepara un progetto nuovo o esistente: `CLAUDE.md`, `.claude/rules/`, `docs/` (architettura, design system, registro componenti, product map, contratto di layout, template ADR), `.swiftlint.yml`, formatter, `scripts/verify.sh`, config degli hook. Non sovrascrive mai file esistenti. `/swift-harness:setup guest` aggiunge solo `.claude/swift-harness.json` e uno `scripts/verify.sh` che lancia i comandi del progetto, per un progetto che tiene le sue regole, la sua documentazione e i suoi controlli. |
 | Skill (la lanci tu) | `/swift-harness:approve-verify` | Mostra il comando di verifica del progetto e i file che esegue, poi lo approva per il controllo a fine turno. Puoi lanciarla solo tu. `/swift-harness:approve-verify revoke` toglie l'approvazione. |
 | Skill (la lanci tu) | `/swift-harness:approve-snapshots` | Mostra le nuove immagini lasciate dagli snapshot test falliti (con i pixel cambiati in rosso) e copia quelle che approvi nella cartella delle baseline. Puoi lanciarla solo tu: i test non scrivono mai una baseline. |
 | Skill (la lanci tu) | `/swift-harness:approve-performance` | Mostra i nuovi numeri lasciati dai test del budget di prestazioni (una prima baseline, una regressione, un guadagno o un altro Mac) e copia in `performance/` quelli che accetti. Solo tu puoi lanciarla: né i test né Claude scrivono mai una baseline. |
 | Skill (la lanci tu) | `/swift-harness:approve-security` | Mostra cosa è cambiato nelle impostazioni di sicurezza dell'app dall'ultima approvazione (entitlements, App Transport Security, impostazioni di build di sandbox e hardened runtime), dice quali modifiche indeboliscono la protezione e le registra come nuova baseline se sei d'accordo. Fino ad allora il controllo a fine turno fallisce. |
+| Skill (la lanci tu) | `/swift-harness:check-sensitivity` | Pianta un difetto alla volta in una copia temporanea del progetto (una voce del registro o una vista del layout rinominata, un link della documentazione rotto, un entitlement allargato, una dipendenza vietata; con `--verify`, attraverso i tuoi test e SwiftLint: un padding a mano, una scorciatoia o un'etichetta di accessibilità tolta, una vista più larga del minimo, un padding cambiato) e dice quale controllo l'ha trovato. Un difetto che nessuno trova è un risultato da spiegare. Il progetto non viene mai modificato. |
+| Skill (la lanci tu) | `/swift-harness:drift` | Misura la deriva ora o per ogni commit di un intervallo git: valori di design a mano contro token, componenti nuovi con il ruolo di uno registrato, e i problemi dei controlli di registro, layout, documentazione e contratti, in un solo score per commit. Testo o JSON. |
+| Skill (la lanci tu) | `/swift-harness:report` | Cosa hanno fermato i controlli in questo progetto, da un registro locale tenuto dagli hook: blocchi a fine turno e come sono finiti (corretti da Claude, lasciati fallire), segnalazioni di lint e del registro, domande prima di modifiche protette, le tue approvazioni, e i controlli che non sono girati, con il perché. `html` scrive una pagina statica. Niente lascia la tua macchina. |
 | Skill (la lanci tu) | `/swift-harness:doctor` | Controllo in sola lettura della configurazione: strumenti, chiavi e valori della config, segnaposto `{{...}}` rimasti, script di verifica e approvazione, config del formatter, struttura del progetto e ultima verifica. Una riga PASS / WARN / FAIL per controllo, con la correzione. Non modifica file. |
 | Skill (la lanci tu) | `/swift-harness:audit` | Audit in sola lettura di architettura, coerenza della UI e salute del codice, con report e piano di migrazione. |
 | Skill (la lanci tu) | `/swift-harness:product-map` | Mappa del prodotto ricavata dal codice, in sola lettura: entità, le loro pagine, ogni punto in cui compaiono, relazioni, raccolte gestite dall'utente e azioni. Elenca i buchi con le prove: elementi che non si aprono da dove sono mostrati, entità collegate mostrate come testo semplice, liste che non si possono rinominare o riordinare, azioni che mancano in alcuni punti. Scrive `docs/PRODUCT_MAP.md` dopo la tua approvazione. |
@@ -237,6 +242,16 @@ final class LibraryBudgetTests: XCTestCase {
 </details>
 
 <details>
+<summary><b>Misurare il harness: riepilogo delle prove, registro, deriva e sensibilità dei controlli</b></summary>
+
+- **Un riepilogo a ogni fine turno.** Il controllo di fine turno scrive cosa ha eseguito, su quale codice, con quale risultato, e perché qualcosa non è girato (comando di verifica non approvato, SwiftLint mancante). Te lo dice solo quando qualcosa non è stato controllato; `/swift-harness:doctor` e il checkpoint dopo una compattazione lo mostrano. La skill `ui-change` e l'agente `ui-reviewer` marcano ogni affermazione come *measured*, *seen* o *inferred*.
+- **Registro e `/swift-harness:report`.** Ogni blocco, segnalazione, domanda e controllo saltato, e come è finito (corretto da Claude, lasciato fallire, approvato da te), in un registro locale. Il report lo riassume in testo, JSON o una pagina HTML statica. Niente lascia la tua macchina.
+- **`/swift-harness:drift`.** Valori di design a mano contro token, componenti quasi duplicati e problemi dei controlli, per ogni commit di un intervallo. Su quattro anni di un'app SwiftUI open source: [tests/evals/drift.md](tests/evals/drift.md).
+- **`/swift-harness:check-sensitivity`.** Pianta un difetto alla volta in una copia del progetto e dice quale controllo l'ha trovato; `--verify` lancia anche i tuoi test e SwiftLint. Sulle fixture ogni difetto viene trovato dal suo controllo; su un'app reale quello sopravvissuto è spiegato: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md).
+
+</details>
+
+<details>
 <summary><b>Le regole SwiftLint del design system</b></summary>
 
 Il `.swiftlint.yml` generato aggiunge sei regole che segnalano valori visivi scritti a mano fuori dal design system e dai test, più una per Riduci movimento che vale ovunque (`ds_motion_without_reduce`): colori, dimensioni dei font, padding, spaziature degli stack, raggi degli angoli e durate delle animazioni. Partono come warning, che fanno anche da lista della migrazione; quando il conteggio di una regola arriva a zero, portala a `error`. L'elenco completo con esempi è nel [README in inglese](README.md#how-it-works).
@@ -247,7 +262,7 @@ Il `.swiftlint.yml` generato aggiunge sei regole che segnalano valori visivi scr
 
 Uno strumento di qualità va verificato a sua volta. Ogni release passa da:
 
-- **542 controlli automatici** di hook, template e skill (`tests/run.sh`) su un Mac, e 537 in CI con la `/bin/bash` 3.2 di macOS: lì i confronti dei budget di prestazioni sono sostituiti da un solo controllo "non confrontato", perché le macchine virtuali della CI non contano le istruzioni. Più ShellCheck e la compilazione dei file Swift di riferimento.
+- **653 controlli automatici** di hook, template e skill (`tests/run.sh`) su un Mac, e 648 in CI con la `/bin/bash` 3.2 di macOS: lì i confronti dei budget di prestazioni sono sostituiti da un solo controllo "non confrontato", perché le macchine virtuali della CI non contano le istruzioni. Più ShellCheck, la compilazione dei file Swift di riferimento, e un giro di sensibilità dei controlli con build vere (`tests/mutate-fixture.sh`): ogni difetto piantato viene trovato dal suo controllo.
 - **Uno smoke test in sessioni reali di Claude Code** (`tests/smoke/`): 23 scenari per gli hook (compresi snapshot, impostazioni di sicurezza, docs e budget di prestazioni), 6 sul riuso dei componenti UI, 3 sulla coerenza di prodotto, 6 sulle dimensioni delle finestre e 6 sulla review degli screenshot (alcuni sono baseline senza il plugin), con gli invarianti verificati in automatico. Ogni esecuzione è registrata con il suo costo ([risultati](tests/smoke/RESULTS.md)).
 
 Cosa ha fatto Claude in quelle sessioni:
@@ -317,6 +332,9 @@ Da Claude Code 2.1.275 le prime due righe diventano una: `/plugin install swift-
 - `layout.path`, `layout.enabled`: il contratto di layout (default `docs/LAYOUT_CONTRACT.md`) e il suo controllo a fine turno. `screenshots.path`: dove `Screenshot.capture` salva le immagini (default `.build/swift-harness/screenshots`). `snapshots.path`: le baseline approvate degli snapshot test, dentro il repository (default `snapshots`); solo `/swift-harness:approve-snapshots` ci scrive, e il guard chiede conferma prima di una modifica.
 - `docs.enabled`, `docs.paths`, `docs.history`, `docs.ignore`, `docs.budget`: il controllo dei riferimenti nei docs a fine turno (default `true`), i file e le cartelle controllati (default `CLAUDE.md`, `AGENTS.md`, `docs`), i registri del passato dove i percorsi che non esistono più sono attesi (default `docs/adr`, `docs/audit`, `docs/archive`, `docs/HISTORY.md`, `CHANGELOG.md`; i link si controllano comunque), le cartelle nominate prima di esistere (default la cartella degli snapshot e `docs/audit`), e i byte che possono occupare i file letti in ogni sessione (default `20000`, circa 4 byte per token).
 - `performance.path`: le baseline approvate dei budget di prestazioni, dentro il repository (default `performance`); solo `/swift-harness:approve-performance` ci scrive, e il guard chiede conferma prima di una modifica.
+- `uiTests.isolation`: gli argomenti di avvio o le chiavi d'ambiente che danno all'app il suo archivio e le sue preferenze di test nei test UI (per esempio `"-UITestingSuite"`); `/swift-harness:doctor` avvisa per un file di test UI che lancia l'app senza, direttamente o tramite un helper di avvio. `uiTests.launchHelpers`: altri helper di avvio, se il nome non contiene "launch".
+- `guest`: modalità ospite, le regole e la documentazione del progetto sono la fonte di verità; la imposta `/swift-harness:setup guest` (default `false`).
+- `scope`: contratti di perimetro per branch, `[{"branch": "ios-port", "paths": ["App-iOS/"], "base": "main"}]` (`branch` può finire con `*`). A fine turno su quel branch, i file cambiati da quando è partito da `base` fuori da `paths` (committati o no) e i commit di `base` non ancora uniti vengono detti una volta a te e a Claude; non blocca mai.
 - `security.enabled`: confronta a fine turno le impostazioni di sicurezza dell'app con quelle che hai approvato (default `true`). Spegnerlo è a sua volta una modifica da approvare. La prima baseline viene registrata alla prima sessione e risulta "non revisionata" in `/swift-harness:doctor` finché non la approvi.
 - `registry.sources`: le cartelle del design system in cui cercare view, modifier e stili che mancano dal registro. `registry.path` cambia il file del registro (default `docs/COMPONENT_REGISTRY.md`), `registry.enabled: false` spegne il controllo.
 - `scripts/verify.sh` non dichiara mai PASS senza aver eseguito almeno un controllo: senza scheme né package fallisce con `NOT CONFIGURED`, e un package elencato ma inesistente è un fallimento. `PLATFORMS` elenca dove lo scheme viene compilato e testato (`"macOS"`, `"iOS"` o entrambi): in `fast` iOS si compila per un simulatore qualsiasi, senza avviarlo; in `full` i test girano su `IOS_SIMULATOR`. Se una piattaforma elencata non ha avuto né build né test (solo package: `swift test` gira su questo Mac), il risultato è `PARTIAL`, mai `PASS`. Lo script termina con una riga per gli hook, `swift-harness-result/1: <passed|partial|failed>; checked: macOS; tested: macOS; not checked: iOS`: il controllo a fine turno conserva un pass parziale come parziale, dice una volta a te e a Claude cosa non è stato controllato, senza bloccare, e `/swift-harness:doctor` e il checkpoint dopo una compattazione dicono lo stesso. La riga può solo abbassare l'esito: un exit diverso da 0 è un fallimento, qualunque cosa dica. In modalità `fast` uno scheme viene compilato, non testato, e anche questo è nella riga. Un comando di verifica personalizzato senza questa riga passa comunque con exit 0, con le piattaforme indicate come sconosciute.
@@ -325,7 +343,7 @@ La tabella completa delle opzioni è nel [README in inglese](README.md#configura
 
 ## Roadmap
 
-Prossima tappa: **v1.7.0, un harness misurato**: se ogni controllo trova ciò che dichiara (difetti piantati apposta), la deriva lungo la storia, un riepilogo delle prove per turno, un registro locale di ciò che è stato intercettato con un report, e valutazioni con e senza il plugin. Poi la v1.8.0 controlla l'app in esecuzione nel tempo, e la v1.9.0 è il porting assistito da macOS a iOS, che aspetta un porting reale. Il README dice "macOS" finché un'app iOS reale non passa. Tutto nella [roadmap](ROADMAP.md).
+Prossima tappa: **v1.8.0, percezione in movimento**: l'app in esecuzione nel tempo (navigazione reale contro quella dichiarata, convenzioni di interazione, guasti iniettati, un compito di accessibilità svolto solo tramite l'albero di accessibilità), e valutazioni con e senza il plugin su una serie di sessioni. Poi la v1.9.0 è il porting assistito da macOS a iOS, che aspetta un porting reale. Il README dice "macOS" finché un'app iOS reale non passa. Tutto nella [roadmap](ROADMAP.md).
 
 ## Limiti
 
@@ -340,6 +358,7 @@ Prossima tappa: **v1.7.0, un harness misurato**: se ogni controllo trova ciò ch
 - Con Xcode 26, `swift build` e `swift test` copiano il catalogo degli asset di un package senza compilarlo, quindi in quei test i colori del design system non si trovano. Esegui i test che dipendono dai colori con `xcodebuild test`; Xcode 27 compila il catalogo in ogni caso.
 - **"Cambiato" è una lista di pattern di file, non il grafo della build.** In un progetto Xcode con cartelle sincronizzate, una risorsa di un tipo non elencato fuori da `Resources/` (per esempio `App/data.json`) non conta come modifica. Nemmeno una nuova versione di SwiftLint o di Xcode invalida una verifica superata: contano solo il codice e la versione del plugin.
 - **I budget di prestazioni valgono solo su Mac veri.** I runner della CI sono macchine virtuali senza contatore di istruzioni, quindi lì i budget non vengono confrontati. Un budget conta il lavoro della CPU, non il tempo passato ad aspettare (I/O, lock, un main thread occupato), e non vede blocchi né crescita della memoria.
+- **Le misure contano ciò che gli hook hanno visto.** Il registro conta come blocco anche un blocco corretto nello stesso turno; non sa cosa sarebbe successo senza. La sensibilità dei controlli pianta un difetto per operatore, quindi un difetto trovato mostra che un controllo vede quel tipo di difetto, non che copre ogni schermata. I componenti quasi duplicati sono riconosciuti dal nome.
 - La verifica a fine turno gira sulla tua macchina e dura quanto la tua verifica veloce: tieni `fast` sotto i due minuti circa.
 
 ## Contribuire
