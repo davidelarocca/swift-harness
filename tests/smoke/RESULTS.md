@@ -2,6 +2,17 @@
 
 Newest first. Record the plugin version, the tool versions, the invariants result and anything notable in Claude's behaviour.
 
+## 2026-11-08, branch scope and guest mode (#72, #71, branch `feat/branch-scope-72`)
+
+Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. New Stop hook `scope-watch.sh` and the guest note at session start: two new scenarios in the default run, all invariants pass, $0.21.
+
+| Scenario | Result | Cost |
+|---|---|---|
+| `scope`: branch `ios-port` with scope `App-iOS/`, the task changes the shared `Greeting.swift` | The Stop hook named the file as outside the scope, to the user and to Claude, and did not block. Claude's final message explained it ("shared files … come into this branch through a merge"), and left the change because the user asked for it, uncommitted. | $0.10 |
+| `guest`: `"guest": true`, the project's own `AGENTS.md` | SessionStart said guest mode; only `Greeting.swift` changed; build and tests pass | $0.11 |
+
+- n=1 per scenario on one small fixture.
+
 ## 2026-11-08, catch log (#86, branch `feat/catch-log-86`)
 
 Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. Every hook writes to the catch log. Two targeted runs, all invariants pass, $0.55 and $0.41.
