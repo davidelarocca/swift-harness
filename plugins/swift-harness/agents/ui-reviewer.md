@@ -36,7 +36,11 @@ You get a list of changed files or a git range. If you get neither, review `git 
 Return only this:
 
 - Verdict: `pass`, `pass with notes`, or `changes needed`.
-- Findings, most severe first: severity (high, medium, low), `file:line` (and the image, for check 11), what is wrong, the concrete fix (for duplicates, name the existing component to use).
+- Findings, most severe first: severity (high, medium, low), `file:line` (and the image, for check 11), what is wrong, the concrete fix (for duplicates, name the existing component to use), and its evidence, one of:
+  - *measured*: a check or test reported it (the SwiftLint rule, the test name);
+  - *seen*: a screenshot or the accessibility tree shows it (the image path, the element);
+  - *inferred*: read from the code only (say what would confirm it).
+  Never mark a finding measured or seen without naming the output or image it comes from.
 - Registry, product map and layout contract updates needed, as ready-to-paste table rows.
 
 No praise, no restating the diff. If something could not be checked, say which and why.

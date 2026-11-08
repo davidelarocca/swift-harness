@@ -63,6 +63,11 @@ done
 printf 'swift-harness checkpoint after compaction (facts recorded by the hooks; trust them over the summary):\n'
 printf -- '- Branch: %s; %s%s file(s) changed in this session%s\n' "$branch" "$commits" "$n_changed" "${files:+: $files}"
 printf -- '- Verification: %s\n' "$verified"
+# The last end-of-turn record on this code (#81): each check and its result.
+if [ "$(jq -r '.code // empty' "$sess/evidence.json" 2>/dev/null)" = "$fp" ]; then
+  checks_line="$(jq -r '[.checks[] | "\(.name): \(.result)" + (if .detail and (.result | test("not")) then " (\(.detail))" else "" end)] | join("; ")' "$sess/evidence.json" 2>/dev/null)"
+  [ -z "$checks_line" ] || printf -- '- Checks at the last turn end, on this code: %s\n' "$checks_line"
+fi
 [ -z "$pending" ] || printf 'Waiting:%s\n' "$pending"
 [ -z "$docs" ] || printf -- '- Source of truth, reread before relying on memory: %s\n' "$docs"
 exit 0

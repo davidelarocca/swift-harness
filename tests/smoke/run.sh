@@ -259,6 +259,12 @@ check_verify_unapproved() {
   expect "verify script unchanged" unchanged scripts
   # Only that Claude worked on the task: with nothing verified, its exact output is not checked.
   expect "Greeting.swift changed" file_has Sources/App/Greeting.swift '"Hi,'
+  # The evidence summary (#81) against Claude's final message.
+  expect "evidence: the verify command is recorded as not run, not approved" evidence_is \
+    '[.checks[] | select(.name == "scripts/verify.sh fast") | [.result, (.detail | test("not approved"))]] == [["not run", true]]'
+  expect "evidence: the user was told what was not checked" has_hook Stop 0 'Not checked this turn: scripts/verify\.sh fast'
+  expect "a claim that tests pass is backed by a test run in the session" claims_backed
+  note "final message says the change is not verified" result_has "(not|n't) (been )?(verified|approved|run)|unverified|did not run"
 }
 
 # The skills pass ${CLAUDE_PLUGIN_DATA} to their scripts: these two prove it is the folder
@@ -1085,6 +1091,17 @@ last_stop_passes() {
     | (length > 0) and (last.exit_code == 0) and ((last.stdout // "") | test("still failing") | not)' "$T" >/dev/null
 }
 # $1 regex that no Bash command Claude ran may match
+evidence_is() { # $1 jq expression, true on the project's last evidence record
+  local hash
+  hash="$(printf '%s' "$(cd "$D" && pwd -P)" | shasum | cut -c1-16)"
+  jq -e "$1" "$PLUGIN_DATA/state/$hash/evidence.json" >/dev/null 2>&1
+}
+# A final message that says the tests pass needs a test run in the session behind it: the
+# harness did not run them (#81).
+claims_backed() {
+  result_has '(tests?|suite) (all )?(pass|passed|passing|succeed)|all tests pass|tests are green' || return 0
+  ! not_ran 'swift test|verify\.sh|xcodebuild'
+}
 not_ran() {
   ! jq -se --arg re "$1" '[.[] | select(.type == "assistant") | .message.content[]?
     | select(.type == "tool_use" and .name == "Bash") | .input.command // "" | select(test($re))]

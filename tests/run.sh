@@ -968,6 +968,12 @@ for f in "$TEMPLATES/CLAUDE.md" "$TEMPLATES/docs/ARCHITECTURE.md" "$TEMPLATES/ru
 done
 if [ -z "$bad" ]; then ok "layout: CLAUDE.md, ARCHITECTURE.md, the UI rule, ui-change and ui-reviewer consult the contract"
 else nok "layout: CLAUDE.md, ARCHITECTURE.md, the UI rule, ui-change and ui-reviewer consult the contract" "$bad"; fi
+bad=""
+for f in "$SKILLS/ui-change/SKILL.md" "$PLUGIN/agents/ui-reviewer.md"; do
+  for w in measured seen inferred; do grep -q "\*$w\*" "$f" || bad="$bad $(basename "$f"):$w"; done
+done
+if [ -z "$bad" ]; then ok "evidence: ui-change and ui-reviewer mark claims measured, seen or inferred (#81)"
+else nok "evidence: ui-change and ui-reviewer mark claims measured, seen or inferred (#81)" "$bad"; fi
 # #40: UI guidance per platform. iOS conventions are named, and the macOS-only helpers say so.
 bad=""
 for f in "$SKILLS/ui-change/SKILL.md" "$PLUGIN/agents/ui-reviewer.md" "$SKILLS/design-system/SKILL.md" "$TEMPLATES/rules/ui-features.md"; do
@@ -3039,6 +3045,59 @@ if [ "$(printf '%s\n' "$out" | sed 1d | jq -r .commit | paste -sd' ' -)" = "$(fo
   ok "drift: --every 3 keeps the first commit of each three, and the last"
 else nok "drift: --every 3 keeps the first commit of each three, and the last" "$out"; fi
 expect_result "drift: --every needs a positive number" 2 'usage' "$(drift history HEAD --every 0 --project "$DR")"
+
+# ---------- evidence summary (#81) ----------
+
+ev_stop() { # $1 project, $2 optional extra JSON; prints "exit=<code>" then stdout+stderr
+  local out code
+  out="$(hook stop-verify.sh "$1" "${2:-}" 2>&1)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$out"
+}
+ev_of() { jq -c "$2" "$(state_of "$1")/evidence.json" 2>/dev/null; } # $1 project, $2 jq filter
+E="$(new_project evidence)"
+hook session-start.sh "$E" '{"source":"startup"}' >/dev/null
+out="$(ev_stop "$E")"
+if [ "$(ev_of "$E" '[.outcome, .note]')" = '["unchanged","no build input changed in this session: nothing ran, and the starting code is not verified"]' ]; then
+  ok "evidence: no change in the session is recorded as such, with the starting code not verified"
+else nok "evidence: no change in the session is recorded as such, with the starting code not verified" "$(cat "$(state_of "$E")/evidence.json" 2>&1)"; fi
+echo 'let app = 2' >"$E/Sources/App.swift"
+out="$(ev_stop "$E")"
+if [ "$(ev_of "$E" '[.outcome, (.checks | map(select(.name == "scripts/verify.sh fast")))]')" = '["passed",[{"name":"scripts/verify.sh fast","result":"passed","detail":"exit 0; the command does not say which platforms it checked"}]]' ]; then
+  ok "evidence: a pass records the command, its result and what it says it covered"
+else nok "evidence: a pass records the command, its result and what it says it covered" "$(cat "$(state_of "$E")/evidence.json")"; fi
+expect_result "evidence: a clean pass sends the user nothing" 0 '^exit=0$' "$out"
+if cmp -s "$(state_of "$E")/evidence.json" "$(state_of "$E")/sessions/test/evidence.json"; then ok "evidence: written for the session and for the project"
+else nok "evidence: written for the session and for the project"; fi
+ev_stop "$E" >/dev/null
+if [ "$(ev_of "$E" '[.outcome, (.checks | map(.name))]')" = '["unchanged",["scripts/verify.sh fast","security settings"]]' ]; then ok "evidence: the same code again keeps the checks that passed on it"
+else nok "evidence: the same code again keeps the checks that passed on it" "$(cat "$(state_of "$E")/evidence.json")"; fi
+echo 'let app = 3' >"$E/Sources/App.swift"
+out="$(FAKE_VERIFY_EXIT=1 ev_stop "$E")"
+if [ "$(ev_of "$E" '[.outcome, .checks[0].result, .checks[0].detail]')" = '["failed","failed","exit 1"]' ]; then ok "evidence: a failure is recorded with the exit code"
+else nok "evidence: a failure is recorded with the exit code" "$(cat "$(state_of "$E")/evidence.json")"; fi
+expect_result "evidence: with nothing skipped, the block says nothing about unchecked parts" 2 'Verification failed' "$out" 'Not checked this turn'
+
+# A registry in another format is not checked: the user is told once, with what did pass.
+printf '# Components\n\nA list, not a table.\n' >"$E/docs/COMPONENT_REGISTRY.md" 2>/dev/null || { mkdir -p "$E/docs"; printf '# Components\n\nA list, not a table.\n' >"$E/docs/COMPONENT_REGISTRY.md"; }
+echo 'let app = 4' >"$E/Sources/App.swift"
+out="$(ev_stop "$E")"
+expect_result "evidence: a check that could not read its input is 'not checked', and the user is told" 0 'checked this turn: scripts/verify\.sh fast, security settings; not checked: component registry \(the registry has no Components table with Name and File columns\)' "$out"
+if [ "$(ev_of "$E" '.checks | map(.name + ": " + .result)')" = '["scripts/verify.sh fast: passed","component registry: not checked","security settings: passed"]' ]; then ok "evidence: ... and it is in the record"
+else nok "evidence: ... and it is in the record" "$(cat "$(state_of "$E")/evidence.json")"; fi
+rm "$E/docs/COMPONENT_REGISTRY.md"
+
+# Not approved: the existing notice says what was not checked, the contracts included.
+printf '{"version":1,"packages":{}}\n' >"$E/docs/architecture-contracts.json"
+printf '#!/bin/bash\necho changed\n' >"$E/scripts/verify.sh"
+echo 'let app = 5' >"$E/Sources/App.swift"
+out="$(ev_stop "$E")"
+expect_result "evidence: not approved, the notice lists the verify command and the contracts as not checked" 0 'Not checked this turn: scripts/verify\.sh fast \(the verify command is not approved: /swift-harness:approve-verify\), architecture contracts \(they run only with the approved verify command\)' "$out"
+if [ "$(ev_of "$E" '[.outcome, .note, (.checks | map(.result))]')" = '["checked","the checks that ran passed; the build and tests did not run",["not run","not run","passed"]]' ]; then ok "evidence: ... recorded as checked, not passed: the build and tests did not run"
+else nok "evidence: ... recorded as checked, not passed: the build and tests did not run" "$(cat "$(state_of "$E")/evidence.json")"; fi
+expect_row "evidence: doctor shows the last turn's checks and what was not checked" "$(doctor "$E")" WARN "Last turn's checks" 'Not checked: scripts/verify\.sh fast \(the verify command is not approved'
+expect_result "evidence: the checkpoint after a compaction lists them" 0 'Checks at the last turn end, on this code: scripts/verify\.sh fast: not run \(the verify command is not approved: /swift-harness:approve-verify\); architecture contracts: not run \(they run only with the approved verify command\); security settings: passed' "exit=0
+$(compact "$E")"
 
 # ---------- summary ----------
 

@@ -482,6 +482,13 @@ if [ "$in_git" = true ] && [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
   else
     row INFO "Last verification" "no result for the current code: the check runs at the end of the next turn that changes build inputs"
   fi
+  # The last end-of-turn record (#81), when it is about the current code.
+  if [ "$(jq -r '.code // empty' "$state/evidence.json" 2>/dev/null)" = "$fp" ]; then
+    ev_summary="$(jq -r '[.checks[] | "\(.name): \(.result)"] | join("; ")' "$state/evidence.json" 2>/dev/null)"
+    ev_missing="$(jq -r '[.checks[] | select(.result | test("^not")) | .name + (if .detail then " (" + .detail + ")" else "" end)] | join(", ")' "$state/evidence.json" 2>/dev/null)"
+    if [ -n "$ev_missing" ]; then row WARN "Last turn's checks" "${ev_summary:-none}. Not checked: $ev_missing"
+    elif [ -n "$ev_summary" ]; then row PASS "Last turn's checks" "$ev_summary"; fi
+  fi
   if [ "$lint_blocking" = true ] && [ -s "$state/lint-pending" ]; then
     row WARN "Lint pending" "failed SwiftLint at the last check: $(head -5 "$state/lint-pending" | paste -sd, - | sed 's/,/, /g')"
   fi
