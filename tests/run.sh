@@ -3606,9 +3606,10 @@ else nok "check: as a git pre-commit hook, a failing check stops the commit and 
 TC="$TMP/timing"; mkdir -p "$TC"
 tc() { local o c; o="$("$SCRIPTS/time-commands.sh" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
 before="$(snapshot "$TC")"
-out="$(tc --project "$TC" --budget 1 -- "sleep 0.3" "false" "sleep 0.4" "sleep 0.5")"
-expect_result "timing: each command runs twice, with median, worst time and exits" 0 '\| `sleep 0\.3` \| 0\.[0-9]+, 0\.[0-9]+ \| 0\.[0-9]+ \| 0\.[0-9]+ \| 0, 0 \|' "$out"
-expect_result "timing: fast takes the commands in order while their worst times fit the budget" 0 '^- fast: sleep 0\.3 && sleep 0\.4 \(worst 0\.[0-9]+ s\)$' "$out"
+# Wide margins, so a slow CI machine cannot change the split: 0.1 + 0.2 s fit a 3 s budget, 4 s does not.
+out="$(tc --project "$TC" --budget 3 -- "sleep 0.1" "false" "sleep 0.2" "sleep 4")"
+expect_result "timing: each command runs twice, with median, worst time and exits" 0 '\| `sleep 0\.1` \| [0-9]+\.[0-9]+, [0-9]+\.[0-9]+ \| [0-9.]+ \| [0-9]+\.[0-9]+ \| 0, 0 \|' "$out"
+expect_result "timing: fast takes the commands in order while their worst times fit the budget" 0 '^- fast: sleep 0\.1 && sleep 0\.2 \(worst [0-9]+\.[0-9]+ s\)$' "$out"
 expect_result "timing: a failing command is left out, and said" 0 '^- failed, left out: false' "$out"
 if [ "$(snapshot "$TC")" = "$before" ]; then ok "timing: the script itself writes nothing"
 else nok "timing: the script itself writes nothing"; fi
