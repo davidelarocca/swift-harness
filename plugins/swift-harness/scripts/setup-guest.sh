@@ -10,6 +10,10 @@
 # --local keeps both files out of the repository: they go into .git/info/exclude, which every
 # worktree of the repository shares, so neither git nor other agents see them.
 # --from DIR copies both files from another checkout of the same project (a new worktree).
+# --codex [--data DIR] also writes .codex/hooks.json and a launcher, .codex/swift-harness-hook.sh
+# (#122): Codex runs the same hooks, through codex-hook.sh, with the same plugin data folder as
+# Claude Code (--data, else CLAUDE_PLUGIN_DATA, else the only swift-harness data folder), so one
+# approval covers both agents. Codex asks to trust project hooks once (/hooks).
 # --ui-isolation ARG (repeatable) declares the launch arguments that keep UI tests off the
 # user's real data (uiTests.isolation, #68), so doctor checks every UI test that launches the app.
 # --retry-failed sets verify.retryFailed (#108): a failing verify command runs once more, and a
@@ -44,6 +48,8 @@ docs_command=""
 owned=""
 retry=false
 isolation=""
+codex=false
+data=""
 observe=false
 local_only=false
 from=""
@@ -60,6 +66,8 @@ while [ $# -gt 0 ]; do
     --docs-observe) observe=true; shift ;;
     --local) local_only=true; shift ;;
     --from) [ $# -ge 2 ] || usage; from="$2"; shift 2 ;;
+    --codex) codex=true; shift ;;
+    --data) [ $# -ge 2 ] && [ -n "$2" ] || usage; data="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -78,6 +86,16 @@ verify="$root/$sdir/verify.sh"
 exists=""
 [ -e "$config" ] && exists="$exists .claude/swift-harness.json"
 [ -e "$verify" ] && exists="$exists $sdir/verify.sh"
+[ "$codex" = false ] || [ ! -e "$root/.codex/hooks.json" ] || exists="$exists .codex/hooks.json"
+# The plugin data folder the Codex launcher uses, found before anything is written.
+if [ "$codex" = true ] && [ -z "$data" ]; then
+  data="${CLAUDE_PLUGIN_DATA:-}"
+  if [ -z "$data" ]; then
+    c="$(ls -d "$HOME"/.claude/plugins/data/swift-harness-* 2>/dev/null)"
+    [ "$(printf '%s\n' "$c" | grep -c .)" -eq 1 ] && data="$c"
+  fi
+  [ -n "$data" ] || { echo "setup-guest: --codex needs the plugin data folder Claude Code uses: pass --data DIR" >&2; exit 1; }
+fi
 if [ -n "$exists" ]; then
   echo "setup-guest: already there:$exists. Nothing written: merge by hand, or remove them first." >&2
   exit 1
@@ -89,7 +107,7 @@ exclude_locally() {
   common="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)" || { echo "setup-guest: --local needs a git repository" >&2; return 1; }
   common="$(cd "$root" && cd "$common" && pwd -P)" || return 1
   mkdir -p "$common/info" && touch "$common/info/exclude"
-  for file in .claude/swift-harness.json "$sdir/verify.sh"; do
+  for file in .claude/swift-harness.json "$sdir/verify.sh" ${codex_files:-}; do
     grep -qxF "/$file" "$common/info/exclude" || printf '/%s\n' "$file" >>"$common/info/exclude"
   done
 }
@@ -100,10 +118,18 @@ if [ -n "$from" ]; then
   ssdir=scripts
   for d in "$src"/[sS][cC][rR][iI][pP][tT][sS]; do [ -d "$d" ] && { ssdir="${d##*/}"; break; }; done
   [ -f "$src/.claude/swift-harness.json" ] && [ -f "$src/$ssdir/verify.sh" ] || { echo "setup-guest: $src has no guest setup to copy" >&2; exit 2; }
+  if [ -f "$src/.codex/hooks.json" ] && [ -e "$root/.codex/hooks.json" ]; then
+    echo "setup-guest: $root/.codex/hooks.json is already there: nothing was copied. Merge the Codex hooks by hand." >&2; exit 1
+  fi
   mkdir -p "$root/.claude" "$root/$sdir" || exit 1
   cp "$src/.claude/swift-harness.json" "$config" && cp -p "$src/$ssdir/verify.sh" "$verify" || exit 1
+  if [ -f "$src/.codex/hooks.json" ] && [ -f "$src/.codex/swift-harness-hook.sh" ]; then
+    mkdir -p "$root/.codex" && cp "$src/.codex/hooks.json" "$root/.codex/hooks.json" && cp -p "$src/.codex/swift-harness-hook.sh" "$root/.codex/swift-harness-hook.sh" || exit 1
+    codex_files=".codex/hooks.json .codex/swift-harness-hook.sh"
+  fi
   [ "$local_only" = false ] || exclude_locally || exit 1
   printf '%s\n%s\n' "$config" "$verify"
+  [ -z "${codex_files:-}" ] || printf '%s\n%s\n' "$root/.codex/hooks.json" "$root/.codex/swift-harness-hook.sh"
   exit 0
 fi
 
@@ -150,6 +176,35 @@ quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
   printf 'esac\n'
 } >"$verify" || exit 1
 chmod +x "$verify"
+
+# Codex (#122): the same hooks, through a launcher that finds the plugin and the data folder.
+if [ "$codex" = true ]; then
+  plugin="$(cd "$(dirname "$0")/.." && pwd -P)"
+  mkdir -p "$root/.codex" || exit 1
+  {
+    printf '#!/bin/bash\n'
+    printf '# swift-harness for Codex hooks, written by setup-guest.sh --codex (#122). It finds the plugin\n'
+    printf '# (the installed one, else the folder recorded at setup) and uses the plugin data folder of\n'
+    printf '# Claude Code, so one approval of the verify command covers both agents.\n'
+    printf 'plugin="$(jq -r %s "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null)"\n' "'.plugins[\"swift-harness@swift-harness\"][0].installPath // empty'"
+    printf '[ -x "$plugin/scripts/codex-hook.sh" ] || plugin=%s\n' "$(quote "$plugin")"
+    printf 'export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-%s}"\n' "$data"
+    printf 'exec "$plugin/scripts/codex-hook.sh" "$@"\n'
+  } >"$root/.codex/swift-harness-hook.sh" && chmod +x "$root/.codex/swift-harness-hook.sh" || exit 1
+  launch='bash "$(git rev-parse --show-toplevel)/.codex/swift-harness-hook.sh"'
+  jq -n --arg l "$launch" '
+    def h($s; $t): {type: "command", command: "\($l) \($s)", timeout: $t};
+    {description: "swift-harness checks (guest mode), written by setup-guest.sh --codex",
+     hooks: {
+       SessionStart: [{hooks: [h("session-start.sh"; 60)]}],
+       PreToolUse: [{matcher: "^(apply_patch|Edit|Write)$", hooks: [h("guard.sh"; 30)]}],
+       PostToolUse: [{matcher: "^(apply_patch|Edit|Write)$", hooks: [h("post-edit.sh"; 120)]}],
+       Stop: [{hooks: [h("stop-verify.sh"; 900), h("docs-watch.sh"; 60), h("scope-watch.sh"; 30),
+                       h("contract-watch.sh"; 30), h("snapshot-watch.sh"; 30), h("protected-watch.sh"; 30)]}]}}' \
+    >"$root/.codex/hooks.json" || exit 1
+  codex_files=".codex/hooks.json .codex/swift-harness-hook.sh"
+fi
 [ "$local_only" = false ] || exclude_locally || exit 1
 
 printf '%s\n%s\n' "$config" "$verify"
+[ "$codex" = false ] || printf '%s\n%s\n' "$root/.codex/hooks.json" "$root/.codex/swift-harness-hook.sh"

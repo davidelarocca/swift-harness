@@ -69,9 +69,9 @@ ev_ran() { ev "$1" "$2" "${3:-}" "$((SECONDS - ev_t0))"; } # $1 name, $2 result,
 SH_CATCH_CODE="$fp"
 ev_write() { # $1 outcome, $2 note
   local json
-  json="$(jq -n --arg outcome "$1" --arg note "${2:-}" --arg code "$fp" --arg session "$(sh_session_id)" \
+  json="$(jq -n --arg outcome "$1" --arg note "${2:-}" --arg code "$fp" --arg session "$(sh_session_id)" --arg agent "${SH_AGENT:-claude}" \
     --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile lines "$ev_lines" '
-    {version: 1, time: $time, session: $session, code: $code, outcome: $outcome}
+    {version: 1, time: $time, session: $session, agent: $agent, code: $code, outcome: $outcome}
     + (if $note == "" then {} else {note: $note} end)
     + {checks: ($lines | split("\n") | map(select(length > 0) | split("\t")
         | {name: .[0], result: .[1]} + (if (.[2] // "") == "" then {} else {detail: .[2]} end)
@@ -181,7 +181,7 @@ if [ -n "$docs_cmd" ]; then
         if ! sh_docs_blocking; then
           sh_catch "$adapter_name" observed "$a_n new problem line(s); not blocking (docs.blocking is false)" "$a_secs"
         elif [ "$a_key" = "$(cat "$sess/docs-adapter-blocked" 2>/dev/null)" ]; then
-          sh_catch "$adapter_name" left-failing "the same new problems; Claude stopped without fixing them" "$a_secs"
+          sh_catch "$adapter_name" left-failing "the same new problems; $(sh_agent_name) stopped without fixing them" "$a_secs"
         else
           printf '%s' "$a_key" >"$sess/docs-adapter-blocked"
           sh_catch "$adapter_name" blocked "$a_n new problem line(s)" "$a_secs"
@@ -288,8 +288,8 @@ if [ "$fp" = "$failed_fp" ]; then
   : >"$ev_lines"; ev_keep; ev_write failed "the code is the one that failed before: nothing ran again"
   if [ "$(sh_in '.stop_hook_active')" = "true" ]; then
     printf '0' > "$sess/failures"
-    ev_log_end left-failing "Claude stopped without fixing it; the user was told"
-    warn_user "swift-harness: '$checks' is still failing. Claude stopped without fixing it."
+    ev_log_end left-failing "$(sh_agent_name) stopped without fixing it; the user was told"
+    warn_user "swift-harness: '$checks' is still failing. $(sh_agent_name) stopped without fixing it."
   fi
   exit 0
 fi

@@ -3650,6 +3650,75 @@ else nok "guest --from: a new worktree gets the same two files, still out of git
 expect_result "guest --from: refuses when the worktree already has them" 1 'already there' "exit=$("$SCRIPTS/setup-guest.sh" --project "$GW" --from "$GL" >/dev/null 2>&1; echo $?)
 $("$SCRIPTS/setup-guest.sh" --project "$GW" --from "$GL" 2>&1)"
 
+# ---------- Codex (#122) ----------
+
+# A Codex hook input: $1 cwd, then extra JSON (object).
+codex_hook() { # $1 hook script, $2 cwd, $3 extra JSON
+  jq -nc --arg cwd "$2" --argjson extra "${3:-{\}}" '{cwd: $cwd, session_id: "codex-1", turn_id: "t1"} + $extra' |
+    CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/codex-hook.sh" "$1"
+}
+patch_input() { # $1 patch text
+  jq -nc --arg p "$1" '{hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: {command: $p}}'
+}
+X="$(new_project codex)"
+PROT="$(patch_input $'*** Begin Patch\n*** Update File: Sources/App.swift\n@@\n-let app = 1\n+let app = 2\n*** Update File: Sources/Audio/Engine.swift\n@@\n-let engine = 1\n+let engine = 2\n*** End Patch')"
+out="$(codex_hook guard.sh "$X" "$PROT")"
+if [ "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$out" 2>/dev/null)" = deny ] && grep -q 'Sources/Audio' <<<"$out" && grep -q 'only after they agree' <<<"$out"; then
+  ok "codex: an apply_patch that touches a protected path is denied, with the reason and how to ask the user"
+else nok "codex: an apply_patch that touches a protected path is denied, with the reason and how to ask the user" "$out"; fi
+if tail -1 "$(state_of "$X")/catches.jsonl" 2>/dev/null | jq -e '.agent == "codex" and .kind == "blocked" and (.what | test("refused"))' >/dev/null; then
+  ok "codex: the refusal is logged as a block, not a question"
+else nok "codex: the refusal is logged as a block, not a question" "$(tail -1 "$(state_of "$X")/catches.jsonl" 2>&1)"; fi
+out="$(codex_hook guard.sh "$X" "$(patch_input $'*** Begin Patch\n*** Add File: Sources/New.swift\n+let n = 1\n*** End Patch')")"
+if [ -z "$out" ]; then ok "codex: an apply_patch outside protected paths passes"
+else nok "codex: an apply_patch outside protected paths passes" "$out"; fi
+out="$(codex_hook guard.sh "$X" "$(patch_input $'*** Begin Patch\n*** Update File: Sources/Tool.swift\n*** Move to: Sources/Audio/Tool.swift\n*** End Patch')")"
+if [ "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$out" 2>/dev/null)" = deny ]; then ok "codex: a move into a protected path is denied"
+else nok "codex: a move into a protected path is denied" "$out"; fi
+out="$(codex_hook guard.sh "$X" '{"tool_name":"Bash","tool_input":{"command":"ls"}}')"
+if [ -z "$out" ]; then ok "codex: a shell command is not read as a patch"
+else nok "codex: a shell command is not read as a patch" "$out"; fi
+
+codex_hook session-start.sh "$X" '{"hook_event_name":"SessionStart","source":"startup"}' >/dev/null
+echo 'let app = 3' >"$X/Sources/App.swift"
+out="$(FAKE_VERIFY_EXIT=1 codex_hook stop-verify.sh "$X" '{"hook_event_name":"Stop","stop_hook_active":false}' 2>&1)"; code=$?
+if [ "$code" = 2 ] && grep -q 'Verification failed' <<<"$out" && [ "$(ev_of "$X" '[.agent, .outcome]')" = '["codex","failed"]' ]; then
+  ok "codex: a failing check at the end of the turn blocks, and the record names the agent"
+else nok "codex: a failing check at the end of the turn blocks, and the record names the agent" "exit=$code $out $(ev_of "$X" .)"; fi
+if tail -1 "$(state_of "$X")/catches.jsonl" 2>/dev/null | jq -e '.agent == "codex"' >/dev/null; then ok "codex: the catch log names the agent"
+else nok "codex: the catch log names the agent" "$(cat "$(state_of "$X")/catches.jsonl" 2>&1)"; fi
+echo 'let app = 4' >"$X/Sources/App.swift"
+out="$(FAKE_VERIFY_EXIT=0 codex_hook stop-verify.sh "$X" '{"hook_event_name":"Stop","stop_hook_active":true}' 2>&1)"; code=$?
+if [ "$code" = 0 ] && [ "$(ev_of "$X" '[.agent, .outcome]')" = '["codex","passed"]' ]; then ok "codex: the fix passes at the next end of turn"
+else nok "codex: the fix passes at the next end of turn" "exit=$code $out $(ev_of "$X" .)"; fi
+
+GC="$TMP/guest-codex"; mkdir -p "$GC"; git -C "$GC" init -q
+git -C "$GC" config user.email t@example.com; git -C "$GC" config user.name t
+echo x >"$GC/README.md"; echo x >"$GC/AGENTS.md"; git -C "$GC" add -A && git -C "$GC" commit -qm init
+"$SCRIPTS/setup-guest.sh" --project "$GC" --fast 'swift build' --codex --data "$TMP/data" --local >/dev/null
+if [ "$(jq -c '.hooks | [keys, .PreToolUse[0].matcher, (.Stop[0].hooks | length)]' "$GC/.codex/hooks.json")" = '[["PostToolUse","PreToolUse","SessionStart","Stop"],"^(apply_patch|Edit|Write)$",6]' ] &&
+  [ -x "$GC/.codex/swift-harness-hook.sh" ] && [ -z "$(git -C "$GC" status --short)" ]; then
+  ok "guest --codex: writes the Codex hooks and their launcher, kept out of git with --local"
+else nok "guest --codex: writes the Codex hooks and their launcher, kept out of git with --local" "$(git -C "$GC" status --short; cat "$GC/.codex/hooks.json" 2>&1)"; fi
+out="$(cd "$GC" && jq -nc --arg cwd "$GC" '{cwd: $cwd, session_id: "c", hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: {command: "*** Begin Patch\n*** Update File: AGENTS.md\n*** End Patch"}}' |
+  HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA='' bash "$GC/.codex/swift-harness-hook.sh" guard.sh)"
+if [ "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$out" 2>/dev/null)" = deny ]; then
+  ok "guest --codex: the launcher finds the plugin without an installed one, and the guard runs"
+else nok "guest --codex: the launcher finds the plugin without an installed one, and the guard runs" "$out"; fi
+if grep -qF "CLAUDE_PLUGIN_DATA:-$TMP/data}" "$GC/.codex/swift-harness-hook.sh"; then ok "guest --codex: the launcher uses the same data folder as Claude Code"
+else nok "guest --codex: the launcher uses the same data folder as Claude Code" "$(cat "$GC/.codex/swift-harness-hook.sh")"; fi
+GCW="$TMP/guest-codex-wt"
+git -C "$GC" worktree add -q "$GCW" -b other 2>/dev/null
+"$SCRIPTS/setup-guest.sh" --project "$GCW" --from "$GC" >/dev/null
+if cmp -s "$GC/.codex/hooks.json" "$GCW/.codex/hooks.json" && [ -x "$GCW/.codex/swift-harness-hook.sh" ] && [ -z "$(git -C "$GCW" status --short)" ]; then
+  ok "guest --from: a new worktree gets the Codex hooks too, still out of git"
+else nok "guest --from: a new worktree gets the Codex hooks too, still out of git" "$(git -C "$GCW" status --short)"; fi
+mkdir -p "$TMP/guest-codex2"
+expect_result "guest --codex: needs the data folder when it cannot tell" 1 'pass --data' "exit=$(HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA='' "$SCRIPTS/setup-guest.sh" --project "$TMP/guest-codex2" --fast 'swift build' --codex >/dev/null 2>&1; echo $?)
+$(HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA='' "$SCRIPTS/setup-guest.sh" --project "$TMP/guest-codex2" --fast 'swift build' --codex 2>&1)"
+if [ -z "$(ls -A "$TMP/guest-codex2")" ]; then ok "guest --codex: without a data folder, nothing is written"
+else nok "guest --codex: without a data folder, nothing is written" "$(ls -A "$TMP/guest-codex2")"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

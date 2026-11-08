@@ -47,7 +47,8 @@ Use it when the arguments (`$ARGUMENTS`) say `guest`, or when the project alread
    Options the user may choose:
    - `--docs-observe`: the project's docs check runs and is recorded, never blocking;
    - `--local`: the two files stay out of the repository (in `.git/info/exclude`, shared by every worktree), for a repository whose files other people or agents own;
-   - for a new worktree of a project already set up this way, `setup-guest.sh --project <worktree> --from <checkout> [--local]` copies the two files.
+   - for a new worktree of a project already set up this way, `setup-guest.sh --project <worktree> --from <checkout> [--local]` copies the two files (and the Codex hooks, if the checkout has them);
+   - `--codex`: other agents work on the project with Codex. It also writes `.codex/hooks.json` and its launcher `.codex/swift-harness-hook.sh`, so Codex runs the same guard, post-edit checks and end-of-turn check, with the same approval and evidence. If it says it cannot tell the plugin data folder, pass `--data "${CLAUDE_PLUGIN_DATA}"`. Tell the user that Codex asks once to trust the project hooks (`/hooks` in Codex).
 3. Do not create or edit `CLAUDE.md`, `AGENTS.md`, `.claude/rules/`, `docs/` or any template. Do not commit.
 4. Finish: show `git status --short` (only the two new files), say that the user approves the verify command with `/swift-harness:approve-verify` before it runs, and that the plugin can be loaded with `--plugin-dir` in one worktree only.
 

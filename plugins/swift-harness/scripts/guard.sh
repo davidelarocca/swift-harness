@@ -52,7 +52,12 @@ if [ -z "$reason" ] && [ -n "$rel" ]; then
 fi
 
 [ -n "$reason" ] || exit 0
-sh_catch guard asked "${rel:-a file}: ${reason#swift-harness: }"
+# Codex cannot ask from a hook: codex-hook.sh turns the question into a refusal (#122).
+if [ "${SH_AGENT:-claude}" = codex ]; then
+  sh_catch guard blocked "${rel:-a file}: refused, Codex cannot ask: ${reason#swift-harness: }"
+else
+  sh_catch guard asked "${rel:-a file}: ${reason#swift-harness: }"
+fi
 
 jq -n --arg reason "$reason" '{
   hookSpecificOutput: {
