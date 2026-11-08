@@ -258,6 +258,26 @@ final class LibraryBudgetTests: XCTestCase {
 </details>
 
 <details>
+<summary><b>The same checks for other agents, git hooks and CI</b></summary>
+
+`scripts/check.sh` runs the end-of-turn check outside Claude Code, with the same approval, the same evidence record and the same catch log, as a session named after the agent (`--agent codex`). It exits 0 when the verify command passed on this code, 1 when a check failed, and 3 when the verify command did not run (not approved, or turned off). It finds the plugin's data folder by itself, or takes `CLAUDE_PLUGIN_DATA`. Recipes, with the plugin installed from the marketplace:
+
+```bash
+# where the plugin is installed (it changes with each version)
+SH="$(jq -r '.plugins["swift-harness@swift-harness"][0].installPath' ~/.claude/plugins/installed_plugins.json)"
+
+# .git/hooks/pre-commit: the commit stops when a check fails
+"$SH/scripts/check.sh" --agent git-hook
+
+# another agent's rules (AGENTS.md): before you finish, run this and fix what it reports
+"$SH/scripts/check.sh" --agent codex
+```
+
+In CI there is no approval folder: run the project's verify command itself there.
+
+</details>
+
+<details>
 <summary><b>Measuring the harness: evidence, catch log, drift and check sensitivity</b></summary>
 
 - **Evidence at every turn end.** The end-of-turn check writes what it ran, on which code, with which result, and why anything did not run (verify command not approved, SwiftLint missing). You hear about it only when something was not checked; `/swift-harness:doctor` and the checkpoint after a compaction show it. The `ui-change` skill and the `ui-reviewer` agent mark each claim *measured*, *seen* or *inferred*.
@@ -290,7 +310,7 @@ They start as warnings, which double as the migration to-do list. Switch a rule 
 
 A quality tool has to be checked itself. Every release goes through:
 
-- **707 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 702 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
+- **718 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 713 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
 - **A smoke test in real Claude Code sessions** (`tests/smoke/`): 23 scenarios for the hooks (snapshots, security settings, docs and performance budgets included), 6 for reusing UI components, 3 for product coherence, 6 for window sizes and 6 for screenshot review (some of them baselines without the plugin), with their invariants checked automatically. Every run is recorded with its cost ([results](tests/smoke/RESULTS.md)).
 
 What Claude did in those sessions:
