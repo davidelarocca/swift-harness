@@ -3303,6 +3303,81 @@ expect_result "scope: commits of the base not merged into the branch are counted
 git -C "$B" switch -q main
 expect_result "scope: on a branch without a scope entry, nothing" 0 '^exit=0$' "$(scope)"
 
+# ---------- adoption audit (#104) ----------
+
+AD="$TMP/adopt"
+mkdir -p "$AD/Sources/App" "$AD/Tests/AppTests" "$AD/UITests" "$AD/scripts" "$AD/.github/workflows" "$AD/App.xcodeproj" "$AD/App" "$AD/Config" "$AD/docs"
+git -C "$AD" init -q
+printf '# Demo\n\nRuns on macOS and iOS.\n' >"$AD/README.md"
+printf '# Agents\n\nBuild with `swift build`. Before a pull request run `scripts/check-docs.sh`.\n' >"$AD/AGENTS.md"
+printf '@AGENTS.md\n' >"$AD/CLAUDE.md"
+printf -- '--indent 2\n' >"$AD/.swiftformat"
+cat >"$AD/Package.swift" <<'EOF'
+// swift-tools-version: 6.0
+import PackageDescription
+let package = Package(
+    name: "Demo",
+    platforms: [.macOS(.v14)],
+    targets: [
+        .target(name: "App"),
+        .testTarget(
+            name: "AppTests",
+            dependencies: ["App"]
+        ),
+    ]
+)
+EOF
+echo 'let app = 1' >"$AD/Sources/App/App.swift"
+printf 'import Testing\n@Test func ok() {}\n' >"$AD/Tests/AppTests/AppTests.swift"
+printf 'import XCTest\nextension XCUIApplication {\n    func assertAudit() { try? performAccessibilityAudit() }\n}\n' >"$AD/UITests/AuditHelpers.swift"
+printf 'import XCTest\nfinal class LibraryUITests: XCTestCase {\n    func testLibrary() { let app = XCUIApplication(); app.launchArguments = ["-UITesting"]; app.launch(); app.assertAudit() }\n}\n' >"$AD/UITests/LibraryUITests.swift"
+# Anything run from the project leaves a sentinel: the scripts, and git through core.fsmonitor.
+for s in build check-docs fsmonitor; do printf '#!/bin/bash\ntouch "%s/RAN-%s"\n' "$AD" "$s" >"$AD/scripts/$s.sh"; chmod +x "$AD/scripts/$s.sh"; done
+printf 'swift build\n' >>"$AD/scripts/build.sh"
+git -C "$AD" config core.fsmonitor "$AD/scripts/fsmonitor.sh"
+printf 'build:\n\tswift build\n' >"$AD/Makefile"
+printf 'name: ci\non: push\njobs:\n  build:\n    runs-on: macos-latest\n    steps:\n      - run: scripts/build.sh\n      - run: swift test\n' >"$AD/.github/workflows/ci.yml"
+printf 'jobs:\n  a: [unclosed\n' >"$AD/.github/workflows/broken.yml"
+printf 'garbage, not an Xcode project\n' >"$AD/App.xcodeproj/project.pbxproj"
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n\t<key>com.apple.security.app-sandbox</key>\n\t<true/>\n</dict>\n</plist>\n' >"$AD/App/App.entitlements"
+printf 'API_TOKEN=sk-test-SECRET-123\n' >"$AD/.env"
+printf 'KEY = sk-test-SECRET-456\n' >"$AD/Config/Secrets.xcconfig"
+for i in 1 2 3; do printf '# Note %s\n' "$i" >"$AD/docs/note$i.md"; done
+head -c 3000 /dev/zero | tr '\0' 'a' >"$AD/docs/huge.md"
+AFAKE="$TMP/audit-fakes"; ALOG="$TMP/audit-fakes.log"; mkdir -p "$AFAKE"; : >"$ALOG"
+for t in swift xcodebuild python3 make xcrun git bash-project; do printf '#!/bin/bash\necho "%s $*" >>"%s"\n' "$t" "$ALOG" >"$AFAKE/$t"; chmod +x "$AFAKE/$t"; done
+audit() { local o c; o="$(PATH="$AFAKE:$PATH" CLAUDE_PLUGIN_DATA="$TMP/audit-data" SWIFT_HARNESS_AUDIT_MAX_BYTES=2000 "$SCRIPTS/audit.sh" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+before="$(snapshot "$AD")"
+out="$(audit --project "$AD")"
+json="$(audit --project "$AD" --json)"
+if [ "$(snapshot "$AD")" = "$before" ] && [ ! -e "$TMP/audit-data" ]; then ok "audit: writes nothing, in the project or the plugin data"
+else nok "audit: writes nothing, in the project or the plugin data" "$(diff <(printf '%s\n' "$before") <(snapshot "$AD") | head)"; fi
+if [ ! -s "$ALOG" ] && ! ls "$AD"/RAN-* >/dev/null 2>&1; then ok "audit: runs nothing: no swift, xcodebuild, make, git, and no project script (V-09)"
+else nok "audit: runs nothing: no swift, xcodebuild, make, git, and no project script (V-09)" "$(cat "$ALOG"; ls "$AD"/RAN-* 2>/dev/null)"; fi
+expect_result "audit: an executable build script is listed as configured, not run (V-09)" 0 '\| scripts \| configured \| scripts/build\.sh \| executable, not run by the audit \|' "$out"
+expect_result "audit: a platform only a document claims is declared, and nothing ran (V-01)" 0 '\| platforms \| declared \| README\.md \| iOS, macOS mentioned \|' "$out" 'platforms \| (configured|executed) \|[^|]*\| [^|]*iOS'
+expect_result "audit: ... with no record, nothing is said to have run" 0 '\| executed \| unknown \| - \| no end-of-turn record' "$out"
+expect_result "audit: an accessibility helper used by one test: observed, and the screens it reaches unknown (V-07)" 0 '\| accessibility \| observed \| UITests/AuditHelpers\.swift \| an accessibility audit in 1 file\(s\), called from 1 other UI test file\(s\) \|' "$out"
+expect_result "audit: ... never a claim about every screen (V-07)" 0 '\| accessibility \| unknown \| UITests/ \| which screens the UI tests open is not known without running them \|' "$out"
+expect_result "audit: the project's own agent rules and formatter are kept (V-08)" 0 '\| agent rules \| configured \| AGENTS\.md \| [0-9]+ lines; kept as they are \|' "$out"
+expect_result "audit: ... the project's docs check is reused, not duplicated (V-08)" 0 'the project has its own docs check: use --no-docs' "$out"
+expect_result "audit: a workflow that cannot be read as YAML is unknown, with the reason (V-15)" 0 '\| ci \| unknown \| \.github/workflows/broken\.yml \| cannot be read as YAML: brackets that do not close \|' "$out"
+expect_result "audit: ... a well-formed one is configured, checked but not parsed" 0 '\| ci \| configured \| \.github/workflows/ci\.yml \| workflow \(structure checked, not parsed\) \|' "$out"
+expect_result "audit: an Xcode project it cannot read is unknown, not guessed (V-15)" 0 '\| build \| unknown \| App\.xcodeproj/project\.pbxproj \| not a readable Xcode project file' "$out"
+expect_result "audit: a file over the read limit is listed as not read (V-17)" 0 '^- docs/huge\.md: 3000 bytes, over the 2000 read limit$' "$out"
+expect_result "audit: past the file limit the result says incomplete, with the numbers (V-17)" 0 'INCOMPLETE: listed the first 5 of [0-9]+ files' "$(SWIFT_HARNESS_AUDIT_MAX_FILES=5 audit --project "$AD")"
+if ! grep -q 'SECRET' <<<"$out$json" && grep -q '^- \.env: may hold secrets: not opened$' <<<"$out" && grep -q '^- Config/Secrets\.xcconfig: may hold secrets: not opened$' <<<"$out"; then
+  ok "audit: files that may hold secrets are listed by path, never opened or printed (V-18)"
+else nok "audit: files that may hold secrets are listed by path, never opened or printed (V-18)" "$(grep -n 'SECRET\|secrets' <<<"$out$json")"; fi
+expect_result "audit: the test targets are read across lines, the platforms from the manifest" 0 '\| tests \| configured \| Package\.swift \| test targets: AppTests \|' "$out"
+expect_result "audit: the proposal uses the project's own commands, cost not measured" 0 '^- fast: swift build \(the project.s own\)$' "$out"
+if [ "$(jq -c '[.writes, .project_code_run, .proposal.cost, .proposal.full]' <<<"${json#*$'\n'}")" = '[0,0,"not measured","swift test"]' ]; then ok "audit: --json says no writes, no project code run, cost not measured"
+else nok "audit: --json says no writes, no project code run, cost not measured" "${json#*$'\n'}"; fi
+# With the harness's own record for the folder, what ran is executed.
+mkdir -p "$TMP/audit-data/state/$(printf '%s' "$(cd "$AD" && pwd -P)" | shasum | cut -c1-16)"
+printf '%s\n' '{"version":1,"time":"2026-11-08T10:00:00Z","code":"x","outcome":"passed","checks":[{"name":"scripts/verify.sh fast","result":"passed","detail":"checked on macOS, tested on macOS"}]}' >"$TMP/audit-data/state/$(printf '%s' "$(cd "$AD" && pwd -P)" | shasum | cut -c1-16)/evidence.json"
+expect_result "audit: the harness's end-of-turn record makes a check executed" 0 '\| executed \| executed \| end-of-turn record \| scripts/verify\.sh fast: passed at 2026-11-08T10:00:00Z \(checked on macOS, tested on macOS\) \|' "$(audit --project "$AD")"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

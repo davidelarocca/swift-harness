@@ -2,7 +2,7 @@
 name: setup
 description: Bootstrap or retrofit the swift-harness method in a Swift/SwiftUI macOS project - CLAUDE.md, path-scoped rules, design system docs, component registry, ADRs, SwiftLint/formatter config, verify script and quality-gate config. Use when the user asks to set up, initialize or onboard a project to swift-harness.
 disable-model-invocation: true
-argument-hint: "[guest]"
+argument-hint: "[guest | audit]"
 ---
 
 # Set up swift-harness in a project
@@ -10,6 +10,21 @@ argument-hint: "[guest]"
 Goal: leave the project with persistent instructions, a documented design system, a component registry and active quality gates, without overwriting anything the project already has.
 
 Templates live in `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/`. Placeholders look like `{{NAME}}`.
+
+## Audit
+
+Use it when the arguments (`$ARGUMENTS`) say `audit`, or before choosing between guest mode and a full setup on a project that already has its own rules and tools. It writes nothing and runs nothing from the project. Run only:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/audit.sh" --project .
+```
+
+Show the table as printed, then in a few lines:
+- what the project already has, and that it is kept: its agent rules, its commands, its own checks;
+- what is *unknown* and why, such as an unreadable file, or the screens UI tests open, which only running them shows;
+- the proposed guest setup, and that the cost of each command is not measured. Timing them runs the project's code: ask the user before doing it, and only then run the commands, one at a time, with `time`.
+
+Do not run any other command in this step, do not open the files the audit lists as possibly holding secrets, and do not write any file. If the user agrees, continue with guest mode below using the proposed or corrected commands.
 
 ## Guest mode
 
