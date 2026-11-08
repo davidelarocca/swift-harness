@@ -146,6 +146,7 @@ for name in "${names[@]}"; do
     sh_sessions_append "$state" snapshots-approved snapshots-start
   rm -f "$candidates/$name.png" "$candidates/$name.json" "$candidates/$name.diff.png" "$candidates/$name.result.json"
   printf 'Approved: %s/%s.png (%s)\n' "$baselines" "$name" "$status"
+  sh_catch "snapshot baselines" approved "$name ($status)"
 done
 echo "Commit $baselines/ with the change that made these images."
 exit 0

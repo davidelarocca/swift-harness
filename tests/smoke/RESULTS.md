@@ -2,6 +2,19 @@
 
 Newest first. Record the plugin version, the tool versions, the invariants result and anything notable in Claude's behaviour.
 
+## 2026-11-08, catch log (#86, branch `feat/catch-log-86`)
+
+Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. Every hook writes to the catch log. Two targeted runs, all invariants pass, $0.55 and $0.41.
+
+| Scenario | Result | Cost |
+|---|---|---|
+| `stop-fails` (twice) | New invariant: the Stops that blocked on the verify command, the log's `blocked` lines and the count in `report.sh --json` are the same number (1, then left failing when Claude stopped) | $0.11, $0.15 |
+| `guard` | The log has the guard's question, naming the file | $0.09 |
+| `verify-unapproved` | The report lists the verify command as not checked, with why | $0.09 |
+| `lint-missing`, `broken-config` | The first run found that a missing SwiftLint under `lintBlocking`, and a broken SwiftLint config after an edit, blocked without a `blocked` line. Fixed; the second run logs both. | $0.11, $0.14 (first), $0.11, $0.14 (second) |
+
+- n=1 per scenario on one small fixture.
+
 ## 2026-11-08, evidence summary (#81, branch `feat/evidence-81`)
 
 Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The Stop hook changed (`evidence.json`, the "Not checked this turn" sentence): the default run, 21 scenarios, all invariants pass, $3.03.

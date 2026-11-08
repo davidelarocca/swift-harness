@@ -148,5 +148,6 @@ case "$action" in
     fi
     mkdir -p "$state_dir" && current_state >"$approved" && rm -f "$unreviewed"
     printf 'Approved: %s setting(s) recorded as the security baseline.\n' "$(grep -c . "$approved")"
+    sh_catch "security settings" approved "$(grep -c . "$approved") setting(s)"
     ;;
 esac

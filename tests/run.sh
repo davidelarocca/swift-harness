@@ -3099,6 +3099,51 @@ expect_row "evidence: doctor shows the last turn's checks and what was not check
 expect_result "evidence: the checkpoint after a compaction lists them" 0 'Checks at the last turn end, on this code: scripts/verify\.sh fast: not run \(the verify command is not approved: /swift-harness:approve-verify\); architecture contracts: not run \(they run only with the approved verify command\); security settings: passed' "exit=0
 $(compact "$E")"
 
+# ---------- catch log and report (#86) ----------
+
+report() { # report.sh arguments; prints "exit=<code>" then the output
+  local out code
+  out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" "$@" 2>&1)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$out"
+}
+C="$(new_project catches)"
+hook session-start.sh "$C" '{"source":"startup"}' >/dev/null
+CL="$(state_of "$C")/catches.jsonl"
+: >"$CL" # the approval made by new_project
+expect_result "report: an empty log says so" 0 'Nothing in the catch log' "$(report --project "$C")"
+echo 'let app = 2' >"$C/Sources/App.swift"
+FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$C" >/dev/null 2>&1
+echo 'let app = 3' >"$C/Sources/App.swift"
+FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$C" >/dev/null 2>&1
+echo 'let app = 4' >"$C/Sources/App.swift"
+hook stop-verify.sh "$C" >/dev/null 2>&1
+guard_asks "$C" "$C/Sources/Audio/Engine.swift" >/dev/null
+if [ "$(jq -sc 'map([.check, .kind])' "$CL")" = '[["scripts/verify.sh fast","blocked"],["scripts/verify.sh fast","blocked"],["scripts/verify.sh fast","fixed"],["guard","asked"]]' ]; then
+  ok "catch log: two blocks, the pass that fixed them (once), and the guard's question"
+else nok "catch log: two blocks, the pass that fixed them (once), and the guard's question" "$(cat "$CL")"; fi
+if [ "$(jq -sc '.[0] | [.session, (.what | test("^attempt 1 of 3: exit 1$")), (.time | test("^[0-9-]+T[0-9:]+Z$"))]' "$CL")" = '["test",true,true]' ]; then
+  ok "catch log: each line has the time, the session and what was caught"
+else nok "catch log: each line has the time, the session and what was caught" "$(head -1 "$CL")"; fi
+out="$(report --project "$C")"
+expect_result "report: the totals" 0 '2 block\(s\), 0 report\(s\), 1 question\(s\) before an edit; 1 fixed by Claude, 0 left failing, 0 approval\(s\) by you\.' "$out"
+expect_result "report: one line per check, with how it ended" 0 '^- scripts/verify\.sh fast: 2 blocked, 1 fixed by Claude\. Last: attempt 2 of 3: exit 1$' "$out"
+expect_result "report: the guard's question names the file" 0 '^- guard: 1 asked\. Last: Sources/Audio/Engine\.swift: ' "$out"
+echo 'let app = 5' >"$C/Sources/App.swift"
+for i in 1 2 3; do echo "let app = 1$i" >"$C/Sources/App.swift"; FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$C" >/dev/null 2>&1; done
+expect_result "report: max attempts ends the blocks as left failing, once per check" 0 '^- scripts/verify\.sh fast: 5 blocked, 1 fixed by Claude, 1 left failing\.' "$(report --project "$C")"
+printf '#!/bin/bash\necho changed\n' >"$C/scripts/verify.sh"
+echo 'let app = 6' >"$C/Sources/App.swift"
+hook stop-verify.sh "$C" >/dev/null 2>&1
+out="$(report --project "$C" --json)"
+if [ "$(jq -c '.skipped' <<<"${out#*$'\n'}")" = '[{"check":"scripts/verify.sh fast","times":1,"why":["the verify command is not approved: /swift-harness:approve-verify"]}]' ]; then
+  ok "report: a check that did not run is listed with why, once per code"
+else nok "report: a check that did not run is listed with why, once per code" "$out"; fi
+expect_result "report: --since in the future leaves nothing" 0 'Nothing in the catch log' "$(report --project "$C" --since 2999-01-01)"
+expect_result "report: a bad --since is a usage error" 2 'usage' "$(report --project "$C" --since yesterday)"
+approve "$C" >/dev/null
+expect_result "report: the user's approval of the verify command is counted" 0 '^- verify command: 1 approved by you' "$(report --project "$C" --all)"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

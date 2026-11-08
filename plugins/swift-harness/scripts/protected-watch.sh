@@ -60,6 +60,7 @@ if [ "$sum" = "$(cat "$sess/protected-warned" 2>/dev/null)" ]; then
 fi
 printf '%s' "$sum" >"$sess/protected-warned"
 
+sh_catch "protected paths" reported "$(printf '%s\n' "$report" | grep -c .) protected file(s) changed outside Edit and Write"
 msg="swift-harness: protected files changed in this session without going through Edit or Write, so you were not asked first:
 $(printf '%s\n' "$report" | head -20)
 Check them (git diff -- <file>) and restore any change you did not ask for (git checkout -- <file>)."

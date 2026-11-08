@@ -27,7 +27,11 @@ if [ "$code" -ne 1 ]; then
 fi
 
 new="$(printf '%s\n' "$out" | sh_docs_keys | LC_ALL=C comm -23 - "$start")"
-[ -n "$new" ] || exit 0
+if [ -z "$new" ]; then
+  # Catch log (#86): problems that blocked are gone.
+  if [ -s "$sess/docs-blocked" ]; then sh_catch "docs references" fixed "the references broken in this session were fixed"; rm -f "$sess/docs-blocked"; fi
+  exit 0
+fi
 lines="$(printf '%s\n' "$out" | grep '^- ' | while IFS= read -r l; do
   k="$(printf '%s\n' "$l" | sh_docs_keys)"
   printf '%s\n' "$new" | grep -qxF -- "$k" && printf '%s\n' "$l"
@@ -37,12 +41,14 @@ sum="$(printf '%s' "$new" | shasum | cut -d' ' -f1)"
 if [ "$sum" = "$(cat "$sess/docs-blocked" 2>/dev/null)" ]; then
   [ "$sum" = "$(cat "$sess/docs-warned" 2>/dev/null)" ] && exit 0
   printf '%s' "$sum" >"$sess/docs-warned"
+  sh_catch "docs references" left-failing "Claude stopped without fixing them; the user was told"
   jq -n --arg msg "swift-harness: references broken in this session are still in the docs; Claude stopped without fixing them:
 $(printf '%s\n' "$lines" | head -20)" '{systemMessage: $msg}'
   exit 0
 fi
 
 printf '%s' "$sum" >"$sess/docs-blocked"
+sh_catch "docs references" blocked "$(printf '%s\n' "$lines" | grep -c .) reference(s) broken in this session"
 {
   printf 'Docs references broken in this session:\n'
   printf '%s\n' "$lines" | head -40

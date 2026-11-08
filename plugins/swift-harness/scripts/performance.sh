@@ -140,6 +140,7 @@ for name in "${names[@]}"; do
   printf '%s %s\n' "$(sha "$json")" "$baselines/$name.json" | sh_sessions_append "$state" performance-approved performance-start
   rm -f "$candidates/$name.json" "$candidates/$name.result.json"
   printf 'Approved: %s/%s.json (%s)\n' "$baselines" "$name" "$status"
+  sh_catch "performance baselines" approved "$name ($status)"
 done
 echo "Commit $baselines/ with the change that made these numbers."
 exit 0

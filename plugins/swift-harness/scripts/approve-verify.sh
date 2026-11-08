@@ -97,6 +97,7 @@ case "$action" in
       exit 1
     fi
     printf '%s' "$digest" >"$state/verify-approved"
+    sh_catch "verify command" approved "$command_line"
     status
     ;;
 esac

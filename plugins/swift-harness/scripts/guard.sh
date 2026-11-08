@@ -52,6 +52,7 @@ if [ -z "$reason" ] && [ -n "$rel" ]; then
 fi
 
 [ -n "$reason" ] || exit 0
+sh_catch guard asked "${rel:-a file}: ${reason#swift-harness: }"
 
 jq -n --arg reason "$reason" '{
   hookSpecificOutput: {
