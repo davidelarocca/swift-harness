@@ -81,18 +81,6 @@ ev_keep() {
 ev_missing() {
   awk -F'\t' '$2 == "not run" || $2 == "not checked" { printf "%s%s%s", (n++ ? ", " : ""), $1, ($3 != "" ? " (" $3 ")" : "") }' "$ev_lines"
 }
-# Catch log (#86): one "skipped" line per check that did not run, when the user is told.
-ev_log_skipped() {
-  awk -F'\t' '$2 == "not run" || $2 == "not checked" { print $1 "\t" $3 }' "$ev_lines" |
-    while IFS=$'\t' read -r name detail; do sh_catch "$name" skipped "$detail"; done
-}
-# The checks of the last block in this session, for the line saying how it ended.
-ev_log_end() { # $1 kind: fixed or left-failing, $2 what
-  local name
-  [ -s "$sess/blocked-checks" ] || return 0
-  while IFS= read -r name; do [ -n "$name" ] && sh_catch "$name" "$1" "$2"; done <"$sess/blocked-checks"
-  rm -f "$sess/blocked-checks"
-}
 # "name, ..." of the checks that passed this turn.
 ev_passed() { awk -F'\t' '$2 == "passed" || $2 == "partial" { printf "%s%s", (n++ ? ", " : ""), $1 }' "$ev_lines"; }
 
@@ -126,7 +114,6 @@ warn_user() {
   [ -z "$missing" ] || msg="$msg Not checked this turn: $missing."
   told=true
   printf '%s%s' "$fp" "$missing" >"$sess/missing-told"
-  [ -z "$missing" ] || ev_log_skipped
   jq -n --arg msg "$msg" '{systemMessage: $msg}'
 }
 # With no other message: tell the user once per code what was not checked, if anything.
@@ -136,7 +123,6 @@ notify_missing() {
   [ -n "$missing" ] && [ "$told" = false ] || return 0
   [ "$fp$missing" = "$(cat "$sess/missing-told" 2>/dev/null)" ] && return 0
   printf '%s%s' "$fp" "$missing" >"$sess/missing-told"
-  ev_log_skipped
   passed="$(ev_passed)"
   jq -n --arg msg "swift-harness: ${passed:+checked this turn: $passed; }not checked: $missing." '{systemMessage: $msg}'
 }
@@ -193,7 +179,6 @@ if [ "$fp" = "$failed_fp" ]; then
   : >"$ev_lines"; ev_keep; ev_write failed "the code is the one that failed before: nothing ran again"
   if [ "$(sh_in '.stop_hook_active')" = "true" ]; then
     printf '0' > "$sess/failures"
-    ev_log_end left-failing "Claude stopped without fixing it; the user was told"
     warn_user "swift-harness: '$checks' is still failing. Claude stopped without fixing it."
   fi
   exit 0
@@ -306,7 +291,6 @@ if [ "$status" -eq 0 ]; then
   fi
   printf '0' > "$sess/failures"
   rm -f "$state/failed" "$out"
-  ev_log_end fixed "passed at the end of a later turn"
   if [ "$run_verify" = "true" ]; then ev_write passed
   else ev_write checked "the checks that ran passed; the build and tests did not run"; fi
   warn_unapproved
@@ -317,16 +301,10 @@ fi
 failures=$((failures + 1))
 printf '%s' "$fp" > "$state/failed"
 ev_write failed
-# Catch log (#86): each failing check, once per block.
-awk -F'\t' '$2 == "failed" { print $1 "\t" $3 }' "$ev_lines" | while IFS=$'\t' read -r name detail; do
-  sh_catch "$name" blocked "attempt $failures of $max_attempts${detail:+: $detail}"
-  grep -qxF -- "$name" "$sess/blocked-checks" 2>/dev/null || printf '%s\n' "$name" >>"$sess/blocked-checks"
-done
 
 if [ "$failures" -ge "$max_attempts" ]; then
   printf '0' > "$sess/failures"
   rm -f "$out"
-  ev_log_end left-failing "failed $max_attempts times in a row; the user decides"
   warn_user "swift-harness: '$checks' failed $max_attempts times in a row. Stopping so you can decide."
   exit 0
 fi

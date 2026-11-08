@@ -104,20 +104,6 @@ sh_state_dir() {
   mkdir -p "$dir" && printf '%s' "$dir"
 }
 
-# Catch log (#86): one JSON line per thing a hook caught and per way it ended, in the
-# project's state folder; it never leaves the machine. report.sh summarises it.
-#   kind: blocked (the turn or the edit was stopped), asked (the user was asked first),
-#         reported (told, not blocked), skipped (a check did not run), fixed (passed after a
-#         block), approved (the user approved it), left-failing (Claude stopped on a failure)
-# Never fails the hook: a log that cannot be written is skipped.
-sh_catch() { # $1 check, $2 kind, $3 what
-  local dir line
-  dir="$(sh_state_dir 2>/dev/null)" || return 0
-  line="$(jq -nc --arg check "$1" --arg kind "$2" --arg what "${3:-}" --arg session "$(sh_session_id)" \
-    --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{time: $time, session: $session, check: $check, kind: $kind, what: $what}' 2>/dev/null)" || return 0
-  printf '%s\n' "$line" >>"$dir/catches.jsonl" 2>/dev/null || true
-}
-
 # Per-session state (#61): what a session compares with at the end of each turn (the code,
 # protected files, snapshot baselines, contract and approved security settings as they were
 # when it started, and the notices already shown) lives in sessions/<session_id>/ inside the
