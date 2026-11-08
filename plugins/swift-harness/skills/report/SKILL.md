@@ -2,7 +2,7 @@
 name: report
 description: Show what swift-harness caught in this project: blocks at the end of a turn, lint and registry reports, questions before protected edits, approvals, and the checks that did not run. From the local catch log; nothing leaves the machine. Only the user runs this.
 disable-model-invocation: true
-argument-hint: "[days | YYYY-MM-DD | all]"
+argument-hint: "[days | YYYY-MM-DD | all] [html]"
 ---
 
 # Report
@@ -16,6 +16,8 @@ From the project root. With a number in the arguments (`$ARGUMENTS`) use `--days
 ```bash
 CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}/scripts/report.sh" --project . [--days <n> | --since <date> | --all]
 ```
+
+With `html` in the arguments, add `--html`: it writes `.build/swift-harness/report.html` (a static page, no script, no network) and prints its path. Give the user the path to open; do not open it yourself.
 
 ## 2. Report
 

@@ -3144,6 +3144,39 @@ expect_result "report: a bad --since is a usage error" 2 'usage' "$(report --pro
 approve "$C" >/dev/null
 expect_result "report: the user's approval of the verify command is counted" 0 '^- verify command: 1 approved by you' "$(report --project "$C" --all)"
 
+# ---------- static HTML report (#87) ----------
+
+H="$(new_project html-report)"
+hook session-start.sh "$H" '{"source":"startup"}' >/dev/null
+out="$(report --project "$H" --html)"
+expect_result "html: written to .build/swift-harness/report.html, path printed" 0 'html-report/\.build/swift-harness/report\.html$' "$out"
+page="$H/.build/swift-harness/report.html"
+if grep -q 'No end-of-turn check has run in this project yet' "$page"; then ok "html: without a record, it says so"
+else nok "html: without a record, it says so" "$(head -c 600 "$page")"; fi
+# Values from the repository and the log are untrusted: a check name and a catch with HTML.
+HL="$(state_of "$H")/catches.jsonl"
+printf '%s\n' '{"time":"2026-11-08T00:00:00Z","session":"x","check":"<script>alert(1)</script>","kind":"blocked","what":"<img src=x onerror=alert(2)>"}' >>"$HL"
+printf '#!/bin/bash\necho changed\n' >"$H/scripts/verify.sh"
+echo 'let app = 2' >"$H/Sources/App.swift"
+hook stop-verify.sh "$H" >/dev/null 2>&1
+report --project "$H" --all --html >/dev/null
+if ! grep -qiE '<script|<img' "$page" && grep -q '&lt;script&gt;alert(1)&lt;/script&gt;' "$page" && grep -q '&lt;img src=x onerror=alert(2)&gt;' "$page"; then
+  ok "html: names and catches carrying HTML are escaped"
+else nok "html: names and catches carrying HTML are escaped" "$(grep -iE 'script|img' "$page" | head -5)"; fi
+if grep -q '<span class="b none">not run</span>' "$page" && ! grep -q '<span class="b ok">not run' "$page"; then ok "html: a check that did not run is never green"
+else nok "html: a check that did not run is never green" "$(grep -o '<span class="b [a-z]*">[^<]*' "$page")"; fi
+if grep -q 'about the code as it is now' "$page"; then ok "html: the record about the current code says so"
+else nok "html: the record about the current code says so"; fi
+echo 'let app = 3' >"$H/Sources/App.swift"
+report --project "$H" --all --html >/dev/null
+if grep -q 'about an earlier state of the code' "$page" && ! grep -q '<span class="b ok">' "$page"; then ok "html: a record about earlier code is marked so, and shows nothing green"
+else nok "html: a record about earlier code is marked so, and shows nothing green" "$(grep -o '<span class="b [a-z]*">[^<]*' "$page")"; fi
+if ! grep -qiE '<script|<link|src="http|href="http' "$page" && grep -q "Content-Security-Policy\" content=\"default-src 'none'" "$page"; then
+  ok "html: no script, no external resource, and a policy that forbids them"
+else nok "html: no script, no external resource, and a policy that forbids them"; fi
+if grep -q 'Source: <code>' "$page" && [ "$(grep -o 'Source: <code>' "$page" | wc -l | tr -d ' ')" = 2 ]; then ok "html: each section names its source file"
+else nok "html: each section names its source file"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

@@ -3,7 +3,13 @@
 # folder (catches.jsonl, written by sh_catch in lib.sh). The log never leaves the machine.
 # Run by the user through /swift-harness:report, or directly.
 #
-#   report.sh [--project DIR] [--days N | --since YYYY-MM-DD | --all] [--json]
+#   report.sh [--project DIR] [--days N | --since YYYY-MM-DD | --all] [--json | --html]
+#
+# --html (#87) writes .build/swift-harness/report.html in the project and prints its path: a
+# static page from the existing outputs only (the last end-of-turn record and the catch log).
+# No script, no network, nothing in it changes anything. Every status names its source, a
+# check that did not run is never green, the record is marked current only when it is about
+# the code as it is now, and every value from the repository or the log is HTML-escaped.
 #
 # Default: the last 7 days. Per check: how often it blocked, reported or asked, and how it
 # ended (fixed by Claude, left failing, approved by the user); and the checks that did not
@@ -14,7 +20,7 @@ set -uo pipefail
 export LC_ALL=C
 
 usage() {
-  echo "usage: report.sh [--project DIR] [--days N | --since YYYY-MM-DD | --all] [--json]" >&2
+  echo "usage: report.sh [--project DIR] [--days N | --since YYYY-MM-DD | --all] [--json | --html]" >&2
   exit 2
 }
 
@@ -22,6 +28,7 @@ dir="$PWD"
 days=7
 since=""
 json=false
+html=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) [ $# -ge 2 ] || usage; dir="$2"; shift 2 ;;
@@ -35,6 +42,7 @@ while [ $# -gt 0 ]; do
       since="$2"; days=""; shift 2 ;;
     --all) days=""; since="0000-00-00"; shift ;;
     --json) json=true; shift ;;
+    --html) html=true; shift ;;
     *) usage ;;
   esac
 done
@@ -79,6 +87,22 @@ summary="$(
 
 if [ "$json" = true ]; then
   printf '%s\n' "$summary" | jq --arg since "$since" '{since: $since} + .'
+  exit 0
+fi
+
+if [ "$html" = true ]; then
+  evidence="$(sh_state_path)/evidence.json"
+  ev='null'
+  [ -f "$evidence" ] && ev="$(jq -c . "$evidence" 2>/dev/null || echo null)"
+  recent="$({ [ -f "$log" ] && cat "$log"; } | jq -sc --arg since "$since" 'map(select(type == "object" and (.time // "") >= $since)) | .[-50:] | reverse' 2>/dev/null || echo '[]')"
+  out_dir="$SH_ROOT/.build/swift-harness"
+  mkdir -p "$out_dir" || { echo "report: cannot write $out_dir" >&2; exit 1; }
+  jq -nr --argjson summary "$summary" --argjson ev "$ev" --argjson recent "${recent:-[]}" \
+    --arg root "$SH_ROOT" --arg label "$label" --arg now "$(sh_identity)" \
+    --arg head "$(git -C "$SH_ROOT" rev-parse --short HEAD 2>/dev/null || echo none)" \
+    --arg made "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg log "$log" --arg evfile "$evidence" -f "$(dirname "$0")/report-html.jq" \
+    >"$out_dir/report.html" || { echo "report: could not write the page" >&2; exit 1; }
+  printf '%s\n' "$out_dir/report.html"
   exit 0
 fi
 
