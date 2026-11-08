@@ -3666,6 +3666,9 @@ out="$(codex_hook guard.sh "$X" "$PROT")"
 if [ "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$out" 2>/dev/null)" = deny ] && grep -q 'Sources/Audio' <<<"$out" && grep -q 'only after they agree' <<<"$out"; then
   ok "codex: an apply_patch that touches a protected path is denied, with the reason and how to ask the user"
 else nok "codex: an apply_patch that touches a protected path is denied, with the reason and how to ask the user" "$out"; fi
+if tail -1 "$(state_of "$X")/catches.jsonl" 2>/dev/null | jq -e '.agent == "codex" and .kind == "blocked" and (.what | test("refused"))' >/dev/null; then
+  ok "codex: the refusal is logged as a block, not a question"
+else nok "codex: the refusal is logged as a block, not a question" "$(tail -1 "$(state_of "$X")/catches.jsonl" 2>&1)"; fi
 out="$(codex_hook guard.sh "$X" "$(patch_input $'*** Begin Patch\n*** Add File: Sources/New.swift\n+let n = 1\n*** End Patch')")"
 if [ -z "$out" ]; then ok "codex: an apply_patch outside protected paths passes"
 else nok "codex: an apply_patch outside protected paths passes" "$out"; fi
@@ -3698,7 +3701,7 @@ if [ "$(jq -c '.hooks | [keys, .PreToolUse[0].matcher, (.Stop[0].hooks | length)
   ok "guest --codex: writes the Codex hooks and their launcher, kept out of git with --local"
 else nok "guest --codex: writes the Codex hooks and their launcher, kept out of git with --local" "$(git -C "$GC" status --short; cat "$GC/.codex/hooks.json" 2>&1)"; fi
 out="$(cd "$GC" && jq -nc --arg cwd "$GC" '{cwd: $cwd, session_id: "c", hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: {command: "*** Begin Patch\n*** Update File: AGENTS.md\n*** End Patch"}}' |
-  HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA= bash "$GC/.codex/swift-harness-hook.sh" guard.sh)"
+  HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA='' bash "$GC/.codex/swift-harness-hook.sh" guard.sh)"
 if [ "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$out" 2>/dev/null)" = deny ]; then
   ok "guest --codex: the launcher finds the plugin without an installed one, and the guard runs"
 else nok "guest --codex: the launcher finds the plugin without an installed one, and the guard runs" "$out"; fi
@@ -3711,8 +3714,8 @@ if cmp -s "$GC/.codex/hooks.json" "$GCW/.codex/hooks.json" && [ -x "$GCW/.codex/
   ok "guest --from: a new worktree gets the Codex hooks too, still out of git"
 else nok "guest --from: a new worktree gets the Codex hooks too, still out of git" "$(git -C "$GCW" status --short)"; fi
 mkdir -p "$TMP/guest-codex2"
-expect_result "guest --codex: needs the data folder when it cannot tell" 1 'pass --data' "exit=$(HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA= "$SCRIPTS/setup-guest.sh" --project "$TMP/guest-codex2" --fast 'swift build' --codex >/dev/null 2>&1; echo $?)
-$(HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA= "$SCRIPTS/setup-guest.sh" --project "$TMP/guest-codex2" --fast 'swift build' --codex 2>&1)"
+expect_result "guest --codex: needs the data folder when it cannot tell" 1 'pass --data' "exit=$(HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA='' "$SCRIPTS/setup-guest.sh" --project "$TMP/guest-codex2" --fast 'swift build' --codex >/dev/null 2>&1; echo $?)
+$(HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA='' "$SCRIPTS/setup-guest.sh" --project "$TMP/guest-codex2" --fast 'swift build' --codex 2>&1)"
 if [ -z "$(ls -A "$TMP/guest-codex2")" ]; then ok "guest --codex: without a data folder, nothing is written"
 else nok "guest --codex: without a data folder, nothing is written" "$(ls -A "$TMP/guest-codex2")"; fi
 
