@@ -3,14 +3,14 @@
 # checks, adding only two files. Run by /swift-harness:setup guest, after the user confirmed
 # the commands; never by a hook.
 #
-#   setup-guest.sh --fast "<command>" [--full "<command>"] [--project DIR] [--no-docs]
+#   setup-guest.sh --fast "<command>" [--full "<command>"] [--project DIR] [--no-docs | --docs-command "<command>"]
 #
 # Writes .claude/swift-harness.json ("guest": true) and scripts/verify.sh, which runs the
 # project's own commands: the fast one at the end of each turn, the full one (or the fast one)
 # before merging. Nothing else in the project changes: no CLAUDE.md, rules, docs, templates.
 # The formatter and SwiftLint stay off unless the project already has their config, so its
-# code is never rewritten in another style. --no-docs turns off the docs reference check, for a
-# project whose own docs check runs in its commands.
+# code is never rewritten in another style. --docs-command runs the project's own docs check
+# instead of the harness's (docs.command, #105); --no-docs turns the docs check off.
 #
 # Exit 0: written (both paths printed). Exit 1: one of the files exists (nothing written).
 # Exit 2: usage.
@@ -18,7 +18,7 @@
 set -uo pipefail
 
 usage() {
-  echo "usage: setup-guest.sh --fast \"<command>\" [--full \"<command>\"] [--project DIR] [--no-docs]" >&2
+  echo "usage: setup-guest.sh --fast \"<command>\" [--full \"<command>\"] [--project DIR] [--no-docs | --docs-command \"<command>\"]" >&2
   exit 2
 }
 
@@ -26,12 +26,14 @@ dir="."
 fast=""
 full=""
 docs=true
+docs_command=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) [ $# -ge 2 ] && [ -n "$2" ] || usage; fast="$2"; shift 2 ;;
     --full) [ $# -ge 2 ] && [ -n "$2" ] || usage; full="$2"; shift 2 ;;
     --project) [ $# -ge 2 ] || usage; dir="$2"; shift 2 ;;
     --no-docs) docs=false; shift ;;
+    --docs-command) [ $# -ge 2 ] && [ -n "$2" ] || usage; docs_command="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -63,9 +65,9 @@ lint=none
 [ -f "$root/.swiftlint.yml" ] && lint=swiftlint
 
 mkdir -p "$root/.claude" "$root/$sdir" || exit 1
-jq -n --arg format "$format" --arg lint "$lint" --argjson docs "$docs" --arg cmd "$sdir/verify.sh fast" '
+jq -n --arg format "$format" --arg lint "$lint" --argjson docs "$docs" --arg cmd "$sdir/verify.sh fast" --arg dcmd "$docs_command" '
   {guest: true, format: $format, lint: $lint, verify: {command: $cmd, maxAttempts: 3}}
-  + (if $docs then {} else {docs: {enabled: false}} end)' >"$config" || exit 1
+  + (if $docs then (if $dcmd == "" then {} else {docs: {command: $dcmd}} end) else {docs: {enabled: false}} end)' >"$config" || exit 1
 
 # The commands go in as single-quoted shell words, so nothing in them is expanded here.
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }

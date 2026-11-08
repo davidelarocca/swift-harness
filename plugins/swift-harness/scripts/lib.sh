@@ -222,6 +222,26 @@ sh_verify_coverage() {
 # build. sh_docs_keys turns its problem lines into keys without line numbers (and without the
 # sizes of the session budget), so a problem that only moved is not new.
 sh_docs_on() { [ "$(sh_cfg '.docs.enabled' 'true')" = "true" ]; }
+
+# Adapter for the project's own docs check (#105): docs.command runs instead of docs.sh, at the
+# end of a turn when the docs changed, inside stop-verify.sh. It is the project's code, so it is
+# part of the verify approval. docs.blocking false records it without ever blocking.
+sh_docs_command() { sh_docs_on && sh_cfg '.docs.command' ''; }
+sh_docs_blocking() { [ "$(sh_cfg '.docs.blocking' 'true')" != "false" ]; }
+# The docs it reads (docs.paths: CLAUDE.md, AGENTS.md and docs/ by default), as one digest.
+sh_docs_fingerprint() {
+  local p
+  {
+    jq -r '.docs.paths // ["CLAUDE.md", "AGENTS.md", "docs"] | .[] | strings' "$SH_CONFIG" 2>/dev/null | while IFS= read -r p; do
+      p="${p#./}"; p="${p%/}"
+      if [ -f "$SH_ROOT/$p" ]; then printf '%s\n' "$p"
+      elif [ -d "$SH_ROOT/$p" ]; then (cd "$SH_ROOT" && find "$p" -type f -not -path '*/.build/*' | sort); fi
+    done | while IFS= read -r p; do printf '%s %s\n' "$p" "$(shasum <"$SH_ROOT/$p" | cut -d' ' -f1)"; done
+  } | shasum | cut -d' ' -f1
+}
+# The output of a project check as keys: line numbers removed, sorted, so a problem that only
+# moved is not new.
+sh_adapter_keys() { sed -E 's/:[0-9]+(:[0-9]+)?(:|$)/\2/g' | grep -v '^[[:space:]]*$' | sort -u; }
 sh_docs_keys() {
   grep '^- ' | sed -E 's/^- ([^:]+):[0-9]+: /\1: /; s/: the files read into every session are .*/: the files read into every session are over the budget/' | LC_ALL=C sort -u
 }
@@ -363,7 +383,11 @@ sh_verify_manifest() {
   local word path input rel sha
   local -a words
   printf 'root %s\ncommand %s\n' "$SH_ROOT" "$1"
-  read -ra words <<<"$1"
+  # The docs adapter (#105) runs the project's code too: its command and files are covered.
+  local docs_cmd
+  docs_cmd="$(jq -r '.docs.command // empty | strings' "$SH_CONFIG" 2>/dev/null)"
+  [ -z "$docs_cmd" ] || printf 'docs-command %s\n' "$docs_cmd"
+  read -ra words <<<"$1${docs_cmd:+ $docs_cmd}"
   for word in ${words[@]+"${words[@]}"}; do
     word="${word#[\"\']}"
     word="${word%[\"\']}"

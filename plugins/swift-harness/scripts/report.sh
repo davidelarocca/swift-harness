@@ -71,7 +71,7 @@ summary="$(
         checks: (map(select(.kind != "skipped")) | group_by(.check) | map({
           check: .[0].check,
           blocked: map(select(.kind == "blocked")) | length,
-          reported: map(select(.kind == "reported")) | length,
+          reported: map(select(.kind == "reported" or .kind == "observed")) | length,
           asked: map(select(.kind == "asked")) | length,
           fixed: map(select(.kind == "fixed")) | length,
           left_failing: map(select(.kind == "left-failing")) | length,

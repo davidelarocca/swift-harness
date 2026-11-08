@@ -3360,7 +3360,7 @@ expect_result "audit: ... with no record, nothing is said to have run" 0 '\| exe
 expect_result "audit: an accessibility helper used by one test: observed, and the screens it reaches unknown (V-07)" 0 '\| accessibility \| observed \| UITests/AuditHelpers\.swift \| an accessibility audit in 1 file\(s\), called from 1 other UI test file\(s\) \|' "$out"
 expect_result "audit: ... never a claim about every screen (V-07)" 0 '\| accessibility \| unknown \| UITests/ \| which screens the UI tests open is not known without running them \|' "$out"
 expect_result "audit: the project's own agent rules and formatter are kept (V-08)" 0 '\| agent rules \| configured \| AGENTS\.md \| [0-9]+ lines; kept as they are \|' "$out"
-expect_result "audit: ... the project's docs check is reused, not duplicated (V-08)" 0 'the project has its own docs check: use --no-docs' "$out"
+expect_result "audit: ... the project's docs check is reused, not duplicated (V-08)" 0 'the project has its own docs check: run it instead of the harness.s, with --docs-command "scripts/check-docs.sh" \(docs.command\)' "$out"
 expect_result "audit: a workflow that cannot be read as YAML is unknown, with the reason (V-15)" 0 '\| ci \| unknown \| \.github/workflows/broken\.yml \| cannot be read as YAML: brackets that do not close \|' "$out"
 expect_result "audit: ... a well-formed one is configured, checked but not parsed" 0 '\| ci \| configured \| \.github/workflows/ci\.yml \| workflow \(structure checked, not parsed\) \|' "$out"
 expect_result "audit: an Xcode project it cannot read is unknown, not guessed (V-15)" 0 '\| build \| unknown \| App\.xcodeproj/project\.pbxproj \| not a readable Xcode project file' "$out"
@@ -3450,6 +3450,83 @@ approval "$WB" --revoke >/dev/null
 if approval "$WB" --status | grep -q '^Status: not approved' && approval "$WA" --status | grep -q '^Status: approved$'; then
   ok "worktrees: revoking removes what the worktrees share; the main checkout keeps its own approval"
 else nok "worktrees: revoking removes what the worktrees share; the main checkout keeps its own approval" "B: $(approval "$WB" --status | grep Status); A: $(approval "$WA" --status | grep Status)"; fi
+
+# ---------- adapters: the project's own docs check (#105) ----------
+
+DA="$(new_project adapter)"
+mkdir -p "$DA/docs"
+printf '# Old\n\nOLD-PROBLEM\n' >"$DA/docs/old.md"
+cat >"$DA/scripts/check-docs.sh" <<'EOF'
+#!/bin/bash
+echo run >>"${ADAPTER_LOG:-/dev/null}"
+cd "$(dirname "$0")/.." || exit 2
+found=0
+for f in docs/*.md; do grep -n 'PROBLEM' "$f" | sed "s#^#$f:#" && found=1; done
+exit "$found"
+EOF
+chmod +x "$DA/scripts/check-docs.sh"
+set_config "$DA" '{"verify":{"command":"scripts/verify.sh fast"},"docs":{"command":"scripts/check-docs.sh"}}'
+git -C "$DA" add -A && git -C "$DA" commit -qm adapter
+expect_result "adapter: the verify approval covers the docs command and its script" 0 'file scripts/check-docs\.sh [0-9a-f]{64}|scripts/check-docs\.sh' "exit=0
+$(approval "$DA" --status)"
+ALOGA="$TMP/adapter.log"; : >"$ALOGA"
+hook session-start.sh "$DA" '{"source":"startup"}' >/dev/null 2>&1
+printf 'more\n' >>"$DA/docs/old.md"
+out="$(ADAPTER_LOG="$ALOGA" ev_stop "$DA")"
+if [ ! -s "$ALOGA" ] && [ "$(ev_of "$DA" '.checks[] | select(.name == "docs: scripts/check-docs.sh") | .result')" = '"not run"' ]; then
+  ok "adapter: not approved, the project's command does not run, and the record says so"
+else nok "adapter: not approved, the project's command does not run, and the record says so" "$out $(cat "$ALOGA")"; fi
+approve "$DA" >/dev/null
+ADAPTER_LOG="$ALOGA" hook session-start.sh "$DA" '{"source":"startup"}' >/dev/null 2>&1
+: >"$ALOGA"
+printf 'still old\n' >>"$DA/docs/old.md"
+out="$(ADAPTER_LOG="$ALOGA" ev_stop "$DA")"
+if [[ "$out" == exit=0* ]] && [ "$(ev_of "$DA" '.checks[] | select(.name == "docs: scripts/check-docs.sh") | [.result, .detail]')" = '["failed","exit 1, only problems already there at session start"]' ]; then
+  ok "adapter: problems already there at session start are recorded, and do not block"
+else nok "adapter: problems already there at session start are recorded, and do not block" "$out"; fi
+printf '# New\n\nNEW-PROBLEM\n' >"$DA/docs/new.md"
+out="$(ADAPTER_LOG="$ALOGA" ev_stop "$DA")"
+expect_result "adapter: a new problem blocks, with the project's own output" 2 "The project's docs check \(scripts/check-docs\.sh\) found problems.*docs/new\.md" "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/^exit=2 /exit=2\n/')"
+if [ "$(ev_of "$DA" '[.outcome, (.checks[] | select(.name == "docs: scripts/check-docs.sh") | .result)]')" = '["failed","failed"]' ] && tail -n 1 "$(state_of "$DA")/catches.jsonl" | jq -e '.kind == "blocked" and .check == "docs: scripts/check-docs.sh"' >/dev/null; then
+  ok "adapter: the block is in the evidence record and the catch log"
+else nok "adapter: the block is in the evidence record and the catch log" "$(tail -n 1 "$(state_of "$DA")/catches.jsonl")"; fi
+printf 'x\n' >>"$DA/docs/new.md"
+expect_result "adapter: the same new problems do not block twice" 0 '^exit=0' "$(ADAPTER_LOG="$ALOGA" ev_stop "$DA" '{"stop_hook_active":true}')"
+rm "$DA/docs/new.md"
+runs="$(wc -l <"$ALOGA" | tr -d ' ')"
+ADAPTER_LOG="$ALOGA" ev_stop "$DA" >/dev/null
+if tail -n 1 "$(state_of "$DA")/catches.jsonl" | jq -e '.kind == "fixed"' >/dev/null; then ok "adapter: fixing the docs is recorded as fixed"
+else nok "adapter: fixing the docs is recorded as fixed" "$(tail -n 2 "$(state_of "$DA")/catches.jsonl")"; fi
+runs2="$(wc -l <"$ALOGA" | tr -d ' ')"
+ADAPTER_LOG="$ALOGA" ev_stop "$DA" >/dev/null
+if [ "$(wc -l <"$ALOGA" | tr -d ' ')" = "$runs2" ] && [ "$runs2" -gt "$runs" ] && [ "$(ev_of "$DA" '[.checks[] | select(.name == "docs: scripts/check-docs.sh")] | length')" = 1 ]; then
+  ok "adapter: with the docs unchanged it does not run again, and the record keeps its result"
+else nok "adapter: with the docs unchanged it does not run again, and the record keeps its result" "runs $runs $runs2 $(wc -l <"$ALOGA")"; fi
+set_config "$DA" '{"verify":{"command":"scripts/verify.sh fast"},"docs":{"command":"scripts/check-docs.sh","blocking":false}}'
+approve "$DA" >/dev/null
+printf '# New\n\nNEW-PROBLEM-2\n' >"$DA/docs/new2.md"
+out="$(ADAPTER_LOG="$ALOGA" ev_stop "$DA")"
+if [[ "$out" == exit=0* ]] && tail -n 1 "$(state_of "$DA")/catches.jsonl" | jq -e '.kind == "observed"' >/dev/null; then ok "adapter: with docs.blocking false a new problem is recorded as observed, never blocking"
+else nok "adapter: with docs.blocking false a new problem is recorded as observed, never blocking" "$out"; fi
+printf '#!/bin/bash\necho "check-docs: python not found" >&2\nexit 127\n' >"$DA/scripts/check-docs.sh"
+approve "$DA" >/dev/null
+printf 'y\n' >>"$DA/docs/old.md"
+out="$(ev_stop "$DA")"
+if [ "$(ev_of "$DA" '.checks[] | select(.name == "docs: scripts/check-docs.sh") | [.result, .detail]')" = '["not checked","exit 127: check-docs: python not found"]' ] && grep -q 'Not checked this turn\|not checked: docs: scripts/check-docs.sh' <<<"$out"; then
+  ok "adapter: a check that cannot run (exit other than 0 or 1) is not checked, and the user is told"
+else nok "adapter: a check that cannot run (exit other than 0 or 1) is not checked, and the user is told" "$out"; fi
+expect_result "adapter: docs-watch leaves the docs to the project's check" 0 '^exit=0$' "$(ev_stop_hook() { local o c; o="$(hook docs-watch.sh "$DA" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }; printf 'Broken [link](docs/none.md)\n' >>"$DA/CLAUDE.md"; ev_stop_hook)"
+expect_row "adapter: doctor names the project's check as the docs check" "$(doctor "$DA")" PASS "Docs references" "the project's own check 'scripts/check-docs\.sh' runs instead of the harness's; observed"
+# check-sensitivity credits the project's check for the docs operator (H1 case: a script).
+MA="$TMP/mutate-adapter"; cp -R "$HERE/fixtures/mutate" "$MA"
+printf '#!/bin/bash\ncd "$(dirname "$0")" || exit 2\nfor t in $(grep -oE "\\\\]\\\\([^)]+\\\\)" CLAUDE.md | sed "s/^](//; s/)$//"); do [ -e "$t" ] || { echo "CLAUDE.md: missing $t"; exit 1; }; done\n' >"$MA/scripts-check-links.sh"
+chmod +x "$MA/scripts-check-links.sh"
+printf '%s\n' '{"registry":{"sources":["Sources/DesignSystem"]},"docs":{"command":"./scripts-check-links.sh"}}' >"$MA/.claude/swift-harness.json"
+expect_result "adapter: check-sensitivity credits the project's docs check (with --verify)" 0 '^\| docs-stale-link \| [^|]+ \| docs \| killed \| docs \|$' "$(mutate --project "$MA" --verify --only docs-stale-link)"
+G3="$TMP/guest-docs"; mkdir -p "$G3"
+"$SCRIPTS/setup-guest.sh" --project "$G3" --fast 'swift build' --docs-command 'scripts/check-docs.sh' >/dev/null
+if [ "$(jq -c '.docs' "$G3/.claude/swift-harness.json")" = '{"command":"scripts/check-docs.sh"}' ]; then ok "adapter: setup-guest --docs-command sets docs.command"
+else nok "adapter: setup-guest --docs-command sets docs.command" "$(cat "$G3/.claude/swift-harness.json")"; fi
 
 # ---------- summary ----------
 

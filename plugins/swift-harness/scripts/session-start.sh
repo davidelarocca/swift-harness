@@ -51,7 +51,18 @@ if git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     sh_snapshot_list "$(sh_performance)" >"$sess/performance-start"
     # The docs problems already there at session start, for docs-watch.sh (#70).
     rm -f "$sess/docs-start" "$sess/docs-blocked" "$sess/docs-warned"
-    sh_docs_on && "$(dirname "$0")/docs.sh" check "$SH_ROOT" 2>/dev/null | sh_docs_keys >"$sess/docs-start"
+    rm -f "$sess/docs-adapter" "$sess/docs-adapter-blocked"
+    docs_cmd="$(sh_docs_command)"
+    if [ -n "$docs_cmd" ]; then
+      # The project's own docs check (#105): its problems at session start, when approved.
+      if sh_verify_approved "$verify_cmd" "$state"; then
+        (cd "$SH_ROOT" && bash -c "$docs_cmd" 2>&1 </dev/null) | sh_adapter_keys >"$sess/docs-start"
+      else
+        : >"$sess/docs-start"
+      fi
+    else
+      sh_docs_on && "$(dirname "$0")/docs.sh" check "$SH_ROOT" 2>/dev/null | sh_docs_keys >"$sess/docs-start"
+    fi
     # Protected files as they were at session start, for protected-watch.sh (#11).
     rm -f "$sess/protected-warned" "$sess/protected-edited"
     sh_protected_list >"$sess/protected-start"

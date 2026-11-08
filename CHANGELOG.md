@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- New: the project's own docs check as an adapter ([#105](https://github.com/davidelarocca/swift-harness/issues/105), v0). `docs.command` names it, and it runs instead of the harness's docs check.
+  - **Approval:** it is part of the verify approval (the command and the files it names), since it is the project's code. Not approved, it does not run, and the record and the user say so.
+  - **When it runs:** at session start, its problems already there are taken as the start. At the end of a turn when the docs changed (this does not re-run the build), new problems block once with the project's own output; the same problems do not block twice.
+  - **Exit codes:** an exit other than 0 or 1 means it could not run, so it is *not checked*, with the reason, never taken for known problems.
+  - **Records:** its result, with its duration, is in the turn's evidence record. Blocks, fixes and failures left unfixed are in the catch log.
+  - **Observation:** `docs.blocking: false` records it without ever blocking (catch log kind `observed`), the base for measuring the start-in-observation hypothesis.
+  - **Elsewhere:** `check-sensitivity --verify` credits it for the docs operator. The adoption audit proposes it instead of `--no-docs`, and `setup-guest.sh` takes `--docs-command`. `/swift-harness:doctor` names it.
+  - **Smoke:** a real session blocked once on the project's check, and Claude explained why the references were left as asked.
 - New: approval across worktrees ([#107](https://github.com/davidelarocca/swift-harness/issues/107)). With parallel agents in separate worktrees of one repository, the verify command used to need an approval in each. An approval is now also recorded under the repository's git common directory, by a digest of the command and the file contents without the project path. Another worktree whose command and files are identical inherits it.
   - Any difference asks again (the case V-12 of an external review).
   - Another clone, which has its own common directory, never inherits, even with identical files.
