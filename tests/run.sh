@@ -3217,8 +3217,18 @@ git -C "$G" checkout -q -- Sources/App/App.swift
 if [ "$(git -C "$G" status --short | sort | paste -sd' ' -)" = '?? .claude/ ?? Scripts/verify.sh' ]; then ok "guest: after the hooks ran, still nothing else changed"
 else nok "guest: after the hooks ran, still nothing else changed" "$(git -C "$G" status --short)"; fi
 expect_row "guest: doctor shows the mode and the project's own rules" "$(doctor "$G")" INFO Mode 'guest: .*CLAUDE\.md, AGENTS\.md are the source of truth'
+if [ "$(jq -c '.protectedPaths' "$G/.claude/swift-harness.json")" = '["CLAUDE.md","AGENTS.md"]' ] && guard_asks "$G" "$G/AGENTS.md" && ! guard_asks "$G" "$G/Sources/App/App.swift"; then
+  ok "guest: the project's own agent rules are protected: the guard asks before an edit (#109)"
+else nok "guest: the project's own agent rules are protected: the guard asks before an edit (#109)" "$(cat "$G/.claude/swift-harness.json")"; fi
+G4="$TMP/guest-owned"; mkdir -p "$G4/.claude/rules" "$G4/docs"; printf '# r\n' >"$G4/.claude/rules/a.md"; printf '# p\n' >"$G4/docs/ROADMAP.md"
+"$SCRIPTS/setup-guest.sh" --project "$G4" --fast 'swift build' --owned docs/ROADMAP.md --owned docs/NOPE.md >/dev/null 2>"$TMP/guest-owned.err"
+if [ "$(jq -c '.protectedPaths' "$G4/.claude/swift-harness.json")" = '[".claude/rules/","docs/ROADMAP.md"]' ] && grep -q 'docs/NOPE.md does not exist' "$TMP/guest-owned.err"; then
+  ok "guest: --owned adds paths the project owns; one that does not exist is left out, and said (#109)"
+else nok "guest: --owned adds paths the project owns; one that does not exist is left out, and said (#109)" "$(cat "$G4/.claude/swift-harness.json" "$TMP/guest-owned.err")"; fi
 expect_result "guest: --full defaults to the fast command, --no-docs turns the docs check off" 0 'FULL=.Scripts/check\.sh.' "exit=0
 $(G2="$TMP/guest2"; mkdir -p "$G2"; gs --project "$G2" --fast 'Scripts/check.sh' --no-docs >/dev/null; jq -r '.docs.enabled' "$G2/.claude/swift-harness.json"; grep FULL= "$G2/scripts/verify.sh")" 'true'
+if ! jq -e 'has("protectedPaths")' "$TMP/guest2/.claude/swift-harness.json" >/dev/null; then ok "guest: a project without rules files gets no protected paths (#109)"
+else nok "guest: a project without rules files gets no protected paths (#109)" "$(cat "$TMP/guest2/.claude/swift-harness.json")"; fi
 expect_result "guest: without --fast it is a usage error" 2 'usage' "exit=$(gs --project "$G" >/dev/null; echo $?)
 $(gs --project "$G")"
 

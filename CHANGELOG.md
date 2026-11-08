@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New: in guest mode the project's own rules are protected ([#109](https://github.com/davidelarocca/swift-harness/issues/109)). `setup-guest.sh` adds the agent rules that exist (`CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md`, `.claude/rules/`) to `protectedPaths`, so the guard asks before Claude edits them, and an edit through the shell is reported at the end of the turn. `--owned <path>` adds docs the project lets only some people edit. A path that does not exist is left out, with a message. A project without those files gets none. Remove any of them from the config to lift it.
 - New: the project's own docs check as an adapter ([#105](https://github.com/davidelarocca/swift-harness/issues/105), v0). `docs.command` names it, and it runs instead of the harness's docs check.
   - **Approval:** it is part of the verify approval (the command and the files it names), since it is the project's code. Not approved, it does not run, and the record and the user say so.
   - **When it runs:** at session start, its problems already there are taken as the start. At the end of a turn when the docs changed (this does not re-run the build), new problems block once with the project's own output; the same problems do not block twice.
