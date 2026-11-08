@@ -275,6 +275,13 @@ SH="$(jq -r '.plugins["swift-harness@swift-harness"][0].installPath' ~/.claude/p
 
 In CI there is no approval folder: run the project's verify command itself there.
 
+**Codex runs the same hooks.** `setup-guest.sh --codex` (or `/swift-harness:setup guest` when you say Codex works on the project too) writes `.codex/hooks.json` and a small launcher next to it. Codex then runs, at its own events:
+- the guard before an edit. Codex cannot ask you from a hook, so an edit the guard would ask about is refused, and Codex is told to stop and ask you first;
+- the post-edit checks after an edit, read from Codex's patches;
+- the end-of-turn check. A failure keeps Codex working on it, as it does Claude.
+
+The approval, the evidence record and the catch log are the same as Claude Code's, and they name the agent. Codex asks once to trust the project's hooks (`/hooks`). With `--local`, the Codex files stay out of git too.
+
 </details>
 
 <details>

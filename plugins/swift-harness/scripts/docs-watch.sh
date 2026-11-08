@@ -43,8 +43,8 @@ sum="$(printf '%s' "$new" | shasum | cut -d' ' -f1)"
 if [ "$sum" = "$(cat "$sess/docs-blocked" 2>/dev/null)" ]; then
   [ "$sum" = "$(cat "$sess/docs-warned" 2>/dev/null)" ] && exit 0
   printf '%s' "$sum" >"$sess/docs-warned"
-  sh_catch "docs references" left-failing "Claude stopped without fixing them; the user was told"
-  jq -n --arg msg "swift-harness: references broken in this session are still in the docs; Claude stopped without fixing them:
+  sh_catch "docs references" left-failing "$(sh_agent_name) stopped without fixing them; the user was told"
+  jq -n --arg msg "swift-harness: references broken in this session are still in the docs; $(sh_agent_name) stopped without fixing them:
 $(printf '%s\n' "$lines" | head -20)" '{systemMessage: $msg}'
   exit 0
 fi
