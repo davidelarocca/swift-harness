@@ -60,6 +60,7 @@ if [ -z "${CLAUDE_PLUGIN_DATA:-}" ]; then
   }
 fi
 export CLAUDE_PLUGIN_DATA
+export SH_AGENT="$agent"
 state="$CLAUDE_PLUGIN_DATA/state/$key"
 
 input="$(jq -nc --arg cwd "$root" --arg session "$session" '{cwd: $cwd, session_id: $session, hook_event_name: "Stop"}')"

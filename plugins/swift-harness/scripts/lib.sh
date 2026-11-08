@@ -112,12 +112,18 @@ sh_state_dir() {
 # Never fails the hook: a log that cannot be written is skipped.
 # A hook that knows the code identity (the end-of-turn check) sets SH_CATCH_CODE, and a check
 # that ran passes its duration in seconds (#110).
+# The agent the hooks run for, by name, for messages (#122): SH_AGENT is set by codex-hook.sh and
+# check.sh, and is Claude Code otherwise.
+sh_agent_name() {
+  case "${SH_AGENT:-claude}" in claude) printf 'Claude' ;; codex) printf 'Codex' ;; *) printf 'the agent' ;; esac
+}
+
 sh_catch() { # $1 check, $2 kind, $3 what, $4 seconds (optional)
   local dir line
   dir="$(sh_state_dir 2>/dev/null)" || return 0
   line="$(jq -nc --arg check "$1" --arg kind "$2" --arg what "${3:-}" --arg session "$(sh_session_id)" \
-    --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg code "${SH_CATCH_CODE:-}" --arg seconds "${4:-}" '
-    {time: $time, session: $session, check: $check, kind: $kind, what: $what}
+    --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg code "${SH_CATCH_CODE:-}" --arg seconds "${4:-}" --arg agent "${SH_AGENT:-claude}" '
+    {time: $time, session: $session, agent: $agent, check: $check, kind: $kind, what: $what}
     + (if $code == "" then {} else {code: $code} end)
     + (if ($seconds | test("^[0-9]+$")) then {seconds: ($seconds | tonumber)} else {} end)' 2>/dev/null)" || return 0
   printf '%s\n' "$line" >>"$dir/catches.jsonl" 2>/dev/null || true

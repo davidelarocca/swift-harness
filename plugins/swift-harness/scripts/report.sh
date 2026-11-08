@@ -77,8 +77,16 @@ summary="$(
           fixed: map(select(.kind == "fixed")) | length,
           left_failing: map(select(.kind == "left-failing")) | length,
           approved: map(select(.kind == "approved")) | length,
+          observed: map(select(.kind == "observed")) | length,
+          observed_fixed: map(select(.kind == "fixed" and ((.what // "") | startswith("observed")))) | length,
           last: (map(select(.kind == "blocked" or .kind == "reported" or .kind == "asked")) | last | .what // null)
-        }) | sort_by(-(.blocked + .reported + .asked), .check)),
+        }) | sort_by(-(.blocked + .reported + .asked), .check)
+          # A check in observation (H2 of #105): propose that it block only when at least 10 of
+          # its findings were seen and more than 90% of them were fixed in their session.
+          | map(if .observed == 0 then . else . + {promotion: (
+              if .observed < 10 then {proposal: "wait", why: "\(.observed) finding(s) observed, \(.observed_fixed) fixed: too few to decide (10 needed)"}
+              elif .observed_fixed * 10 > .observed * 9 then {proposal: "block", why: "\(.observed_fixed) of \(.observed) observed findings were fixed in their session: set docs.blocking to true"}
+              else {proposal: "observe", why: "only \(.observed_fixed) of \(.observed) observed findings were fixed in their session: look at the others before it blocks"} end)} end)),
         skipped: (map(select(.kind == "skipped")) | group_by(.check) | map({
           check: .[0].check, times: length, why: (map(.what) | unique)
         }))
@@ -128,6 +136,9 @@ printf '%s\n' "$summary" | jq -r --arg label "$label" --arg root "$SH_ROOT" '
      (.checks[] | "- \(.check): " + ((part(.blocked; "blocked") + part(.reported; "reported") + part(.asked; "asked")
         + part(.unstable; "unstable (failed once, passed on a rerun)") + part(.fixed; "fixed by Claude") + part(.left_failing; "left failing") + part(.approved; "approved by you")) | join(", "))
         + (if .last then ". Last: \(.last)" else "" end)),
+     (if any(.checks[]; .promotion) then "In observation (recorded, never blocking):" else empty end),
+     (.checks[] | select(.promotion) | "- \(.check): \(.promotion.why).")
+     ,
      (if (.skipped | length) > 0 then "Not checked:" else empty end),
      (.skipped[] | "- \(.check): \(.times) time(s), \(.why | join("; "))")
    end)'

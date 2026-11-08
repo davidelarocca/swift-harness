@@ -275,13 +275,20 @@ SH="$(jq -r '.plugins["swift-harness@swift-harness"][0].installPath' ~/.claude/p
 
 In CI there is no approval folder: run the project's verify command itself there.
 
+**Codex runs the same hooks.** `setup-guest.sh --codex` (or `/swift-harness:setup guest` when you say Codex works on the project too) writes `.codex/hooks.json` and a small launcher next to it. Codex then runs, at its own events:
+- the guard before an edit. Codex cannot ask you from a hook, so an edit the guard would ask about is refused, and Codex is told to stop and ask you first;
+- the post-edit checks after an edit, read from Codex's patches;
+- the end-of-turn check. A failure keeps Codex working on it, as it does Claude.
+
+The approval, the evidence record and the catch log are the same as Claude Code's, and they name the agent. Codex asks once to trust the project's hooks (`/hooks`). With `--local`, the Codex files stay out of git too.
+
 </details>
 
 <details>
 <summary><b>Measuring the harness: evidence, catch log, drift and check sensitivity</b></summary>
 
 - **Evidence at every turn end.** The end-of-turn check writes what it ran, on which code, with which result, and why anything did not run (verify command not approved, SwiftLint missing). You hear about it only when something was not checked; `/swift-harness:doctor` and the checkpoint after a compaction show it. The `ui-change` skill and the `ui-reviewer` agent mark each claim *measured*, *seen* or *inferred*.
-- **Catch log and `/swift-harness:report`.** Every block, report, question and skipped check, and how it ended (fixed by Claude, left failing, approved by you), in a local log. The report summarises it, as text, JSON or a static HTML page. Nothing leaves your machine.
+- **Catch log and `/swift-harness:report`.** Every block, report, question and skipped check, and how it ended (fixed by Claude, left failing, approved by you), in a local log. The report summarises it, as text, JSON or a static HTML page. For a project check in observation (`docs.blocking` false), it says when the findings were fixed often enough to let it block: at least 10 findings, more than 90% fixed in their session. Nothing leaves your machine.
 - **`/swift-harness:drift`.** Hardcoded design values against tokens, near-duplicate components and check problems, per commit of a git range. On four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
 - **`/swift-harness:check-sensitivity`.** Plants one defect at a time in a copy of your project and reports which check caught it; `--verify` also runs your tests and SwiftLint. On the fixtures every defect is caught by its check; on a real app the one that survived is explained: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md).
 
