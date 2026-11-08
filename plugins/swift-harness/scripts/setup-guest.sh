@@ -10,6 +10,8 @@
 # --local keeps both files out of the repository: they go into .git/info/exclude, which every
 # worktree of the repository shares, so neither git nor other agents see them.
 # --from DIR copies both files from another checkout of the same project (a new worktree).
+# --ui-isolation ARG (repeatable) declares the launch arguments that keep UI tests off the
+# user's real data (uiTests.isolation, #68), so doctor checks every UI test that launches the app.
 # --retry-failed sets verify.retryFailed (#108): a failing verify command runs once more, and a
 # pass on the rerun is recorded as unstable instead of blocking.
 #
@@ -29,7 +31,7 @@
 set -uo pipefail
 
 usage() {
-  echo "usage: setup-guest.sh --fast \"<command>\" [--full \"<command>\"] [--project DIR] [--no-docs | --docs-command \"<command>\" [--docs-observe]] [--owned PATH]... [--retry-failed] [--local]" >&2
+  echo "usage: setup-guest.sh --fast \"<command>\" [--full \"<command>\"] [--project DIR] [--no-docs | --docs-command \"<command>\" [--docs-observe]] [--owned PATH]... [--retry-failed] [--ui-isolation ARG]... [--local]" >&2
   echo "       setup-guest.sh --from DIR [--project DIR] [--local]" >&2
   exit 2
 }
@@ -41,6 +43,7 @@ docs=true
 docs_command=""
 owned=""
 retry=false
+isolation=""
 observe=false
 local_only=false
 from=""
@@ -53,6 +56,7 @@ while [ $# -gt 0 ]; do
     --docs-command) [ $# -ge 2 ] && [ -n "$2" ] || usage; docs_command="$2"; shift 2 ;;
     --owned) [ $# -ge 2 ] && [ -n "$2" ] || usage; owned="$owned$2"$'\n'; shift 2 ;;
     --retry-failed) retry=true; shift ;;
+    --ui-isolation) [ $# -ge 2 ] && [ -n "$2" ] || usage; isolation="$isolation$2"$'\n'; shift 2 ;;
     --docs-observe) observe=true; shift ;;
     --local) local_only=true; shift ;;
     --from) [ $# -ge 2 ] || usage; from="$2"; shift 2 ;;
@@ -121,9 +125,10 @@ protect="$(for p in CLAUDE.md .claude/CLAUDE.md AGENTS.md; do [ -f "$root/$p" ] 
   done)"
 mkdir -p "$root/.claude" "$root/$sdir" || exit 1
 jq -n --arg format "$format" --arg lint "$lint" --argjson docs "$docs" --arg cmd "$sdir/verify.sh fast" --arg dcmd "$docs_command" \
-  --arg protect "$protect" --argjson retry "$retry" --argjson observe "$observe" '
+  --arg protect "$protect" --argjson retry "$retry" --argjson observe "$observe" --arg isolation "$isolation" '
   {guest: true, format: $format, lint: $lint, verify: ({command: $cmd, maxAttempts: 3} + (if $retry then {retryFailed: true} else {} end))}
   + (($protect | split("\n") | map(select(length > 0))) as $p | if ($p | length) > 0 then {protectedPaths: $p} else {} end)
+  + (($isolation | split("\n") | map(select(length > 0))) as $i | if ($i | length) > 0 then {uiTests: {isolation: $i}} else {} end)
   + (if $docs then (if $dcmd == "" then {} else {docs: ({command: $dcmd} + (if $observe then {blocking: false} else {} end))} end) else {docs: {enabled: false}} end)' >"$config" || exit 1
 
 # The commands go in as single-quoted shell words, so nothing in them is expanded here.

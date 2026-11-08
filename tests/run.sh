@@ -3637,6 +3637,10 @@ git -C "$GL" add -A && git -C "$GL" commit -qm init
 if [ -z "$(git -C "$GL" status --short)" ] && [ "$(jq -c '[.docs, .protectedPaths]' "$GL/.claude/swift-harness.json")" = '[{"command":"python3 Scripts/check-docs.py","blocking":false},["AGENTS.md","docs/ROADMAP.md"]]' ]; then
   ok "guest --local: the two files stay out of git; the docs check observes; the owned docs are protected"
 else nok "guest --local: the two files stay out of git; the docs check observes; the owned docs are protected" "$(git -C "$GL" status --short; cat "$GL/.claude/swift-harness.json")"; fi
+G6="$TMP/guest-isolation"; mkdir -p "$G6"
+"$SCRIPTS/setup-guest.sh" --project "$G6" --fast 'swift build' --ui-isolation -UITestingSuite >/dev/null
+if [ "$(jq -c '.uiTests' "$G6/.claude/swift-harness.json")" = '{"isolation":["-UITestingSuite"]}' ]; then ok "guest --ui-isolation: declares the launch argument that keeps UI tests off real data"
+else nok "guest --ui-isolation: declares the launch argument that keeps UI tests off real data" "$(cat "$G6/.claude/swift-harness.json")"; fi
 GW="$TMP/guest-local-wt"
 git -C "$GL" worktree add -q "$GW" -b other 2>/dev/null
 "$SCRIPTS/setup-guest.sh" --project "$GW" --from "$GL" >/dev/null
