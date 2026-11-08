@@ -190,6 +190,34 @@ cfg_row() { # $1 capability, $2 file, $3 ERE of what runs it
   else row "$1" configured "$2" "config present; nothing found that runs it"; fi
 }
 cfg_row lint .swiftlint.yml 'swiftlint'
+# What a declarative config covers, read as text (#105, H1): a check that passes may not
+# look at a class at all. Rules turned off, turned on beyond the defaults, or an only-list.
+yaml_list() { # $1 file, $2 key: the "  - item" lines under "key:" at the top level
+  awk -v k="$2" '$0 ~ "^" k ":" { f = 1; next } f && /^[[:space:]]+- / { sub(/^[[:space:]]+- /, ""); sub(/[[:space:]]+#.*$/, ""); print; next } f && /^[^[:space:]#]/ { exit }' "$1"
+}
+names() { paste -sd, - | sed 's/,/, /g' | cut -c1-160; }
+if [ -f "$root/.swiftlint.yml" ] && readable .swiftlint.yml; then
+  off="$(yaml_list "$root/.swiftlint.yml" disabled_rules)"; on="$(yaml_list "$root/.swiftlint.yml" opt_in_rules)"; only="$(yaml_list "$root/.swiftlint.yml" only_rules)"
+  if [ -n "$only" ]; then row lint observed .swiftlint.yml "only these rules run ($(printf '%s\n' "$only" | grep -c .)): $(printf '%s\n' "$only" | names)"
+  else
+    [ -z "$off" ] || row lint observed .swiftlint.yml "rules turned off ($(printf '%s\n' "$off" | grep -c .)), so a passing lint does not look at them: $(printf '%s\n' "$off" | names)"
+    [ -z "$on" ] || row lint observed .swiftlint.yml "opt-in rules turned on ($(printf '%s\n' "$on" | grep -c .)): $(printf '%s\n' "$on" | names)"
+    [ -n "$off$on" ] || row lint observed .swiftlint.yml "the default rules, none turned off"
+  fi
+fi
+if [ -f "$root/.swiftformat" ] && readable .swiftformat; then
+  off="$(grep -oE -- '--disable[[:space:]]+[^#]*' "$root/.swiftformat" | sed -E 's/--disable[[:space:]]+//' | tr ',' '\n' | sed 's/[[:space:]]//g' | grep -v '^$')"
+  only="$(grep -oE -- '--rules[[:space:]]+[^#]*' "$root/.swiftformat" | sed -E 's/--rules[[:space:]]+//' | tr ',' '\n' | sed 's/[[:space:]]//g' | grep -v '^$')"
+  if [ -n "$only" ]; then row formatter observed .swiftformat "only these rules run: $(printf '%s\n' "$only" | names)"
+  elif [ -n "$off" ]; then row formatter observed .swiftformat "rules turned off ($(printf '%s\n' "$off" | grep -c .)): $(printf '%s\n' "$off" | names)"; fi
+fi
+if [ -f "$root/.swift-format" ] && readable .swift-format; then
+  if off="$(jq -r '.rules // {} | to_entries[] | select(.value == false) | .key' "$root/.swift-format" 2>/dev/null)"; then
+    [ -z "$off" ] || row formatter observed .swift-format "rules turned off ($(printf '%s\n' "$off" | grep -c .)): $(printf '%s\n' "$off" | names)"
+  else
+    row formatter unknown .swift-format "not readable as JSON"
+  fi
+fi
 cfg_row formatter .swiftformat 'swiftformat'
 cfg_row formatter .swift-format 'swift-format'
 

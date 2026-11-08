@@ -3373,6 +3373,17 @@ expect_result "audit: the test targets are read across lines, the platforms from
 expect_result "audit: the proposal uses the project's own commands, cost not measured" 0 '^- fast: swift build \(the project.s own\)$' "$out"
 if [ "$(jq -c '[.writes, .project_code_run, .proposal.cost, .proposal.full]' <<<"${json#*$'\n'}")" = '[0,0,"not measured","swift test"]' ]; then ok "audit: --json says no writes, no project code run, cost not measured"
 else nok "audit: --json says no writes, no project code run, cost not measured" "${json#*$'\n'}"; fi
+# What a passing lint or formatter looks at, read from its config (#105, H1).
+AR="$TMP/adopt-rules"; mkdir -p "$AR"
+printf 'disabled_rules:\n  - force_cast\n  - line_length # long lines are fine here\nopt_in_rules:\n  - empty_count\nexcluded:\n  - Pods\n' >"$AR/.swiftlint.yml"
+printf '{"version": 1, "rules": {"AlwaysUseLowerCamelCase": false, "NoBlockComments": true}}\n' >"$AR/.swift-format"
+out="$(audit --project "$AR")"
+expect_result "audit: the rules a lint config turns off are named: a passing lint does not look at them" 0 '\| lint \| observed \| \.swiftlint\.yml \| rules turned off \(2\), so a passing lint does not look at them: force_cast, line_length \|' "$out"
+expect_result "audit: ... and the opt-in rules it turns on" 0 '\| lint \| observed \| \.swiftlint\.yml \| opt-in rules turned on \(1\): empty_count \|' "$out"
+expect_result "audit: a swift-format rule set to false is named" 0 '\| formatter \| observed \| \.swift-format \| rules turned off \(1\): AlwaysUseLowerCamelCase \|' "$out"
+printf 'only_rules:\n  - trailing_whitespace\n' >"$AR/.swiftlint.yml"
+expect_result "audit: an only-list is said as such" 0 '\| lint \| observed \| \.swiftlint\.yml \| only these rules run \(1\): trailing_whitespace \|' "$(audit --project "$AR")"
+
 # With the harness's own record for the folder, what ran is executed.
 mkdir -p "$TMP/audit-data/state/$(printf '%s' "$(cd "$AD" && pwd -P)" | shasum | cut -c1-16)"
 printf '%s\n' '{"version":1,"time":"2026-11-08T10:00:00Z","code":"x","outcome":"passed","checks":[{"name":"scripts/verify.sh fast","result":"passed","detail":"checked on macOS, tested on macOS"}]}' >"$TMP/audit-data/state/$(printf '%s' "$(cd "$AD" && pwd -P)" | shasum | cut -c1-16)/evidence.json"
