@@ -32,7 +32,7 @@ TEMPLATES="$PLUGIN/skills/setup/templates"
 WORK="${SMOKE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-smoke.XXXXXX")}"
 WORK="$(mkdir -p "$WORK" && cd "$WORK" && pwd -P)"
 
-ALL_SCENARIOS="guard broken-config stop-fails report-no-token legacy-violation clean-lint formatter-labels lint-missing verify-unapproved approve-verify doctor contract contract-explicit registry registry-nodocs registry-swift-only security docs-rename docs-rename-only verify-partial"
+ALL_SCENARIOS="guard broken-config stop-fails report-no-token legacy-violation clean-lint formatter-labels lint-missing verify-unapproved approve-verify doctor contract contract-explicit registry registry-nodocs registry-swift-only security docs-rename docs-rename-only verify-partial scope guest"
 # Reuse of UI components (the skills, not the hooks), each with a baseline without the
 # plugin. Not in the default run: about $2 for the group. Run with `run.sh reuse`.
 REUSE_SCENARIOS="reuse-toast reuse-toast-bare reuse-toast-nocaller reuse-toast-nocaller-bare reuse-toast-undo reuse-toast-undo-bare"
@@ -418,6 +418,34 @@ check_verify_partial() {
   expect "Claude was told, as context" has_hook Stop 0 'additionalContext'
   expect "never blocked for it" not has_hook Stop 2 'PARTIAL'
   note "final message mentions iOS" result_has 'iOS'
+}
+
+# Branch scope contract (#72): a port branch whose scope is App-iOS/; the task changes a shared
+# file. The commit of the base is made first, so main has everything but the branch's work.
+FAREWELL_TASK='Add a public function farewell(for name: String) -> String to Sources/App/Greeting.swift that returns "Bye, <name>!".'
+scenario_scope() {
+  CONFIG="{$BASE_CONFIG,\"lintBlocking\":false,\"scope\":[{\"branch\":\"ios-*\",\"paths\":[\"App-iOS/\"],\"base\":\"main\"}]}"
+  TASK="$FAREWELL_TASK"
+  SETUP="$FOUR_SPACES; git branch -M main; git add -A; git -c user.email=smoke@example.com -c user.name=smoke commit -qm base; git switch -qc ios-port; mkdir -p App-iOS; printf '# iOS\\n' >App-iOS/README.md"
+}
+check_scope() {
+  expect "farewell added" file_has Sources/App/Greeting.swift 'Bye, '
+  expect "Stop told the user and Claude the shared file is outside the branch's scope" has_hook Stop 0 'outside its scope.*Sources/App/Greeting\.swift'
+  expect "never blocked for it" not has_hook Stop 2 'outside its scope'
+  note "final message mentions the scope" result_has 'scope|shared|main'
+}
+
+# Guest mode (#71): the project keeps its own rules; Claude must not add swift-harness files.
+scenario_guest() {
+  CONFIG='{"guest":true,"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast","maxAttempts":3}}'
+  TASK="$FAREWELL_TASK"
+  SETUP="printf '# Own rules\\n\\nKeep functions short.\\n' >AGENTS.md"
+}
+check_guest() {
+  expect "SessionStart told Claude the project's own rules come first" has_hook SessionStart 0 'guest mode'
+  expect "farewell added" file_has Sources/App/Greeting.swift 'Bye, '
+  expect "only Greeting.swift changed: no swift-harness files, rules or docs added" only_changed Sources/App/Greeting.swift
+  expect "build and tests pass" verifies
 }
 
 # Docs references (#70). CLAUDE.md and the architecture doc name Greeting.swift; CLAUDE.md
@@ -1083,6 +1111,9 @@ has_hook() {
     | length > 0' "$T" >/dev/null
 }
 not_has_hook() { ! has_hook "$@"; }
+only_changed() { # the working tree differs from the scenario's commit in these paths only
+  [ "$(git -C "$D" status --porcelain --untracked-files=all | sed 's/^...//' | sort | paste -sd' ' -)" = "$*" ]
+}
 # The catch log (#86) against the transcript: the Stops that blocked on the verify command,
 # the log's blocked lines for it, and the report's count are the same number, at least one.
 catches_match() {

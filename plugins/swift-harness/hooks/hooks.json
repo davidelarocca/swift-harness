@@ -63,6 +63,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/docs-watch.sh\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/scope-watch.sh\"",
+            "timeout": 10
           }
         ]
       }

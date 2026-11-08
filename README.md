@@ -12,8 +12,9 @@
 
 <p align="center">
   <b>A Claude Code plugin for native macOS apps.</b><br>
-  A reuse-first SwiftUI design system workflow and automatic quality gates (format, lint, build, test),<br>
-  so Claude stays consistent as your project grows.
+  A reuse-first SwiftUI design system workflow and checks at the end of every turn<br>
+  (build and tests, lint, layout, accessibility, snapshots, security settings, docs),<br>
+  so Claude stays consistent as your project grows, and you can see what was checked and what it caught.
 </p>
 
 <p align="center">
@@ -45,6 +46,7 @@ swift-harness fixes this on three levels:
 1. **The design system lives in code**, not in docs: tokens and shared components in a local Swift package.
 2. **Claude knows where to look**: a short `CLAUDE.md`, path-scoped rules, a component registry and ADRs, loaded only when relevant.
 3. **Checks are automatic**, not requests: hooks format, lint and verify, so "please don't hardcode values" becomes something Claude cannot skip.
+4. **The harness is measured, not just trusted**: defects planted on purpose show which check catches what, a drift score follows the project's coherence commit by commit, and every turn ends with a record of what was checked and what was not.
 
 ## How it works
 
@@ -256,6 +258,16 @@ final class LibraryBudgetTests: XCTestCase {
 </details>
 
 <details>
+<summary><b>Measuring the harness: evidence, catch log, drift and check sensitivity</b></summary>
+
+- **Evidence at every turn end.** The end-of-turn check writes what it ran, on which code, with which result, and why anything did not run (verify command not approved, SwiftLint missing). You hear about it only when something was not checked; `/swift-harness:doctor` and the checkpoint after a compaction show it. The `ui-change` skill and the `ui-reviewer` agent mark each claim *measured*, *seen* or *inferred*.
+- **Catch log and `/swift-harness:report`.** Every block, report, question and skipped check, and how it ended (fixed by Claude, left failing, approved by you), in a local log. The report summarises it, as text, JSON or a static HTML page. Nothing leaves your machine.
+- **`/swift-harness:drift`.** Hardcoded design values against tokens, near-duplicate components and check problems, per commit of a git range. On four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
+- **`/swift-harness:check-sensitivity`.** Plants one defect at a time in a copy of your project and reports which check caught it; `--verify` also runs your tests and SwiftLint. On the fixtures every defect is caught by its check; on a real app the one that survived is explained: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md).
+
+</details>
+
+<details>
 <summary><b>The SwiftLint design system rules</b></summary>
 
 The generated `.swiftlint.yml` adds six custom rules that flag raw visual values outside the design system and tests, and one for Reduce Motion that applies everywhere:
@@ -278,7 +290,7 @@ They start as warnings, which double as the migration to-do list. Switch a rule 
 
 A quality tool has to be checked itself. Every release goes through:
 
-- **639 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 634 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
+- **653 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 648 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
 - **A smoke test in real Claude Code sessions** (`tests/smoke/`): 23 scenarios for the hooks (snapshots, security settings, docs and performance budgets included), 6 for reusing UI components, 3 for product coherence, 6 for window sizes and 6 for screenshot review (some of them baselines without the plugin), with their invariants checked automatically. Every run is recorded with its cost ([results](tests/smoke/RESULTS.md)).
 
 What Claude did in those sessions:
@@ -371,6 +383,10 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `screenshots.path` | where `Screenshot.capture` saves images and `ui-reviewer` looks for them, relative to the repo root | `.build/swift-harness/screenshots` |
 | `snapshots.path` | the approved snapshot baselines `Snapshot.verify` compares with, inside the repo; only `/swift-harness:approve-snapshots` writes there, and the guard asks before an edit | `snapshots` |
 | `performance.path` | the approved performance baselines `PerformanceBudget.verify` compares with, inside the repo; only `/swift-harness:approve-performance` writes there, and the guard asks before an edit | `performance` |
+| `uiTests.isolation` | the launch arguments or environment keys that give the app its own test store and defaults in UI tests (for example `"-UITestingSuite"`); `/swift-harness:doctor` warns about a UI test file that launches the app without them, directly or through a launch helper | none |
+| `uiTests.launchHelpers` | more launch helpers, when their names do not contain "launch" | none |
+| `guest` | guest mode: the project's own rules and docs are the source of truth, set by `/swift-harness:setup guest` | `false` |
+| `scope` | branch scope contracts: `[{"branch": "ios-port", "paths": ["App-iOS/"], "base": "main"}]` (`branch` may end with `*`). At the end of a turn on that branch, files changed since it left `base` outside `paths` (committed or not), and `base`'s commits not merged yet, are told once to you and Claude; never blocks | none |
 | `security.enabled` | compare the app's security settings with the ones you approved at the end of each turn (`false` turns it off) | `true` |
 
 With `swift-format`, keep a `.swift-format` file in the repository root (setup creates one). Without it, swift-format applies its defaults, including 2-space indentation, to every file Claude edits, and SessionStart warns about it.
@@ -423,6 +439,7 @@ Next up: **v1.7.0, a measured harness**: whether each check catches what it clai
 - With Xcode 26, `swift build` and `swift test` copy a package's asset catalog without compiling it, so design-system colors do not resolve in those test runs. Run color-dependent tests with `xcodebuild test`; Xcode 27 compiles the catalog either way.
 - **"Changed" is a list of file patterns, not the build graph.** In an Xcode project with synchronized folders, a resource of an unlisted type outside `Resources/` (say `App/data.json`) does not count as a change. A new SwiftLint or Xcode version does not invalidate a pass either: only the code and the plugin version do.
 - **Performance budgets hold on real Macs only.** CI runners are virtual machines with no instruction counter, so budgets are not compared there. A budget counts the work the CPU does, not time spent waiting (I/O, locks, a busy main thread), and it does not see hangs or memory growth.
+- **The measurements count what the hooks saw.** The catch log counts a block fixed in the same turn as a block; it does not know what would have happened without it. Check sensitivity plants one defect per operator, so a kill shows that a check can see that kind of defect, not that it covers every screen. Near-duplicate components are matched by name.
 - The Stop check runs on your machine and takes as long as your fast verification. Keep `fast` under about two minutes.
 
 ## Contributing

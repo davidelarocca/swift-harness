@@ -64,7 +64,7 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["guest", "format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
+  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
   (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
@@ -83,6 +83,9 @@ fi
 problems="$(jq -r '
   def check(path; ok; msg): if (getpath(path) != null) and (getpath(path) | ok | not) then msg else empty end;
   check(["guest"]; type == "boolean"; "guest must be true or false"),
+  check(["scope"]; type == "array" and all(.[]; type == "object" and (.branch | type) == "string" and (.paths | type) == "array"); "scope must be a list of {branch, paths, base}"),
+  check(["uiTests", "isolation"]; type == "array" and all(.[]; type == "string"); "uiTests.isolation must be a list of launch arguments or environment keys"),
+  check(["uiTests", "launchHelpers"]; type == "array" and all(.[]; type == "string"); "uiTests.launchHelpers must be a list of function names"),
   check(["format"]; . == "swiftformat" or . == "swift-format" or . == "none"; "format must be swiftformat, swift-format or none"),
   check(["lint"]; . == "swiftlint" or . == "none"; "lint must be swiftlint or none"),
   check(["lintBlocking"]; type == "boolean"; "lintBlocking must be true or false"),
@@ -342,6 +345,15 @@ elif [ -z "$security_changes" ]; then
 else
   row FAIL "Security settings" "changed since your approval, so the end-of-turn check fails: $(printf '%s\n' "$security_changes" | grep -E '^[+-] ' | head -5 | paste -sd';' - | sed 's/;/; /g'). Fix: revert what you did not intend, then type /swift-harness:approve-security"
 fi
+
+# ---------- test isolation (#68) ----------
+
+iso_out="$("$here/isolation.sh" check "$SH_ROOT" 2>&1)"
+case $? in
+  0) [ -z "$(sh_cfg '.uiTests.isolation[0]' '')" ] || row PASS "Test isolation" "every UI test that launches the app names an isolation argument ($(jq -r '.uiTests.isolation | join(", ")' "$SH_CONFIG" 2>/dev/null)) or a launch helper that does" ;;
+  1) row WARN "Test isolation" "$(printf '%s\n' "$iso_out" | grep '^- ' | head -3 | sed 's/^- //' | paste -sd ';' - | sed 's/;/; /g'). Fix: launch with the argument, or through a helper that sets it" ;;
+  3) row WARN "Test isolation" "${iso_out#Test isolation: } Fix: list in uiTests.isolation the launch argument or environment key that gives the app its own test store and defaults" ;;
+esac
 
 # ---------- project structure ----------
 

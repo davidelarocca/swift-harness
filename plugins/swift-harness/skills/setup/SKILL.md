@@ -66,10 +66,12 @@ For each template, if the target file does not exist, create it with placeholder
 | `rules/ui-features.md` | `.claude/rules/ui-features.md` |
 | `rules/design-system.md` | `.claude/rules/design-system.md` |
 | `rules/architecture.md` | `.claude/rules/architecture.md` |
+| `rules/tests.md` | `.claude/rules/tests.md` |
 | `docs/ARCHITECTURE.md` | `docs/ARCHITECTURE.md` |
 | `docs/DESIGN_SYSTEM.md` | `docs/DESIGN_SYSTEM.md` |
 | `docs/COMPONENT_REGISTRY.md` | `docs/COMPONENT_REGISTRY.md` |
 | `docs/PRODUCT_MAP.md` | `docs/PRODUCT_MAP.md` |
+| `docs/PITFALLS.md` | `docs/PITFALLS.md` (offer it; with an existing pitfalls or gotchas doc, link that one instead) |
 | `docs/LAYOUT_CONTRACT.md` | `docs/LAYOUT_CONTRACT.md` (see step 7) |
 | `tests/LayoutContract.swift` | a test target that can import SwiftUI and the screens, without a sandboxed host app (see step 7) |
 | `tests/Screenshot.swift` | the same test target as `LayoutContract.swift` (see step 7) |
@@ -97,6 +99,8 @@ Rules for filling templates:
 - In `swift-harness.json`, `registry.sources` lists the design system folders (`{{DESIGN_SYSTEM_PATH}}`). Views, modifiers and styles declared there and missing from the registry are pointed out to Claude after each edit and to the user by `/swift-harness:doctor`. After populating the registry, list what it still misses with `"${CLAUDE_PLUGIN_ROOT}/scripts/registry.sh" missing .` and add those entries or list them under Internal.
 - Leave the `PRODUCT_MAP.md` tables empty: filling them needs `/swift-harness:product-map`, which reads the whole app.
 - Run `"${CLAUDE_PLUGIN_ROOT}/scripts/docs.sh" check .` and fix what it reports in the docs you wrote: a link, path or section that does not exist, an import of a missing file, or `CLAUDE.md` and its imports over `docs.budget` bytes (20000 by default). Problems in the project's existing docs are follow-ups for the summary, not edits in this step: the end-of-turn check blocks only on problems new in a session. With existing records of the past outside `docs/adr`, `docs/audit` and `docs/archive` (a history or decisions log full of old paths), add them to `docs.history` in `swift-harness.json`.
+
+- UI tests (#68): if the project has a UI test target, find how its tests launch the app on test data (launch arguments or environment keys such as `-UITestingSuite`, a test store path) and put them in `uiTests.isolation` in `swift-harness.json`. If the tests launch through a helper whose name does not contain "launch", list it in `uiTests.launchHelpers`. If the tests launch the app on its real data, say so in the summary as a risk to fix first, and do not add the setting.
 
 ## 5. Tooling check
 

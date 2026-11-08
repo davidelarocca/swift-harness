@@ -56,7 +56,7 @@ fi
 [ -s "$sess/protected-warned" ] && add "protected files were changed outside Edit and Write this session: the user was told"
 
 docs=""
-for d in CLAUDE.md docs/ARCHITECTURE.md docs/COMPONENT_REGISTRY.md docs/PRODUCT_MAP.md docs/LAYOUT_CONTRACT.md docs/PORTING_PLAN.md; do
+for d in CLAUDE.md docs/PITFALLS.md docs/ARCHITECTURE.md docs/COMPONENT_REGISTRY.md docs/PRODUCT_MAP.md docs/LAYOUT_CONTRACT.md docs/PORTING_PLAN.md; do
   [ -f "$SH_ROOT/$d" ] && docs="$docs${docs:+, }$d"
 done
 
