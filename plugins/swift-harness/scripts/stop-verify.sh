@@ -166,6 +166,7 @@ if [ -n "$docs_cmd" ]; then
       elif [ "$a_code" -eq 0 ]; then
         adapter_line="$adapter_name	passed	exit 0	$a_secs"
         if [ -s "$sess/docs-adapter-blocked" ]; then sh_catch "$adapter_name" fixed "passes again" "$a_secs"; rm -f "$sess/docs-adapter-blocked"; fi
+        if [ -s "$sess/docs-adapter-observed" ]; then sh_catch "$adapter_name" fixed "observed problems gone: passes again" "$a_secs"; rm -f "$sess/docs-adapter-observed"; fi
       else
         a_new="$(printf '%s\n' "$a_out" | sh_adapter_keys | LC_ALL=C comm -23 - "$sess/docs-start")"
         a_n="$(printf '%s\n' "$a_new" | grep -c .)"
@@ -173,13 +174,20 @@ if [ -n "$docs_cmd" ]; then
           adapter_line="$adapter_name	failed	exit $a_code, only problems already there at session start	$a_secs"
           # The new problems that blocked are gone: fixed, even though old ones remain.
           if [ -s "$sess/docs-adapter-blocked" ]; then sh_catch "$adapter_name" fixed "no new problem left" "$a_secs"; rm -f "$sess/docs-adapter-blocked"; fi
+          if [ -s "$sess/docs-adapter-observed" ]; then sh_catch "$adapter_name" fixed "observed problems gone: no new problem left" "$a_secs"; rm -f "$sess/docs-adapter-observed"; fi
         else adapter_line="$adapter_name	failed	exit $a_code, $a_n new problem line(s)	$a_secs"; fi
       fi
       printf '%s\n%s\n' "$dfp" "$adapter_line" >"$sess/docs-adapter"
       if [ -n "$a_new" ]; then
         a_key="$(printf '%s' "$a_new" | shasum | cut -d' ' -f1)"
         if ! sh_docs_blocking; then
-          sh_catch "$adapter_name" observed "$a_n new problem line(s); not blocking (docs.blocking is false)" "$a_secs"
+          # In observation (H2 of #105), each set of new problems is logged once, and its end
+          # ("fixed", when the new problems are gone) too, so the report can tell whether the
+          # check's findings get fixed and propose that it block.
+          if [ "$a_key" != "$(cat "$sess/docs-adapter-observed" 2>/dev/null)" ]; then
+            printf '%s' "$a_key" >"$sess/docs-adapter-observed"
+            sh_catch "$adapter_name" observed "$a_n new problem line(s); not blocking (docs.blocking is false)" "$a_secs"
+          fi
         elif [ "$a_key" = "$(cat "$sess/docs-adapter-blocked" 2>/dev/null)" ]; then
           sh_catch "$adapter_name" left-failing "the same new problems; $(sh_agent_name) stopped without fixing them" "$a_secs"
         else
