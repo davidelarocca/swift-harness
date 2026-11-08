@@ -54,6 +54,11 @@
 
   `--from` copies the Codex files to a new worktree, and `--local` keeps them out of git.
 
+- New: a project check in observation can earn its block ([#105](https://github.com/davidelarocca/swift-harness/issues/105), H2). With `docs.blocking` false, each set of new problems the project's docs check finds is logged once as observed, and as fixed when it goes away. `/swift-harness:report` then proposes, per check:
+  - **wait** below 10 observed findings;
+  - **block** (set `docs.blocking` to true) when more than 90% were fixed in their session;
+  - otherwise, **observe** and look at the findings left first.
+
 ## swift-harness 1.7.0 (2026-11-08)
 
 A measured harness. Whether each check catches what it claims, how a project drifts over its history, what every turn actually checked, and what the checks caught, all from facts the hooks hold and kept on your machine. Plus a guest mode for projects with their own rules, a test isolation check, and a branch scope contract. Measuring the checks found real bugs in the plugin itself, fixed here. Checked with 653 hook tests, a check-sensitivity run with real builds in CI, and the full smoke run in real Claude Code sessions (22 scenarios, all invariants pass).

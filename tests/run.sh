@@ -3518,6 +3518,28 @@ printf '# New\n\nNEW-PROBLEM-2\n' >"$DA/docs/new2.md"
 out="$(ADAPTER_LOG="$ALOGA" ev_stop "$DA")"
 if [[ "$out" == exit=0* ]] && tail -n 1 "$(state_of "$DA")/catches.jsonl" | jq -e '.kind == "observed"' >/dev/null; then ok "adapter: with docs.blocking false a new problem is recorded as observed, never blocking"
 else nok "adapter: with docs.blocking false a new problem is recorded as observed, never blocking" "$out"; fi
+CLA="$(state_of "$DA")/catches.jsonl"
+printf 'z\n' >>"$DA/docs/new2.md"
+ADAPTER_LOG="$ALOGA" ev_stop "$DA" >/dev/null
+if [ "$(grep -c '"kind":"observed"' "$CLA")" = 1 ]; then ok "adapter H2: the same observed problems are logged once"
+else nok "adapter H2: the same observed problems are logged once" "$(tail -n 3 "$CLA")"; fi
+rm "$DA/docs/new2.md"
+ADAPTER_LOG="$ALOGA" ev_stop "$DA" >/dev/null
+if tail -n 1 "$CLA" | jq -e '.kind == "fixed" and (.what | startswith("observed problems gone"))' >/dev/null; then ok "adapter H2: observed problems that go away are logged as fixed"
+else nok "adapter H2: observed problems that go away are logged as fixed" "$(tail -n 2 "$CLA")"; fi
+expect_result "adapter H2: the report waits for 10 observed findings before it proposes anything" 0 'docs: scripts/check-docs\.sh: 1 finding\(s\) observed, 1 fixed: too few to decide' "exit=0
+$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$DA" 2>&1)"
+HR="$(new_project h2-report)"; HRL="$(state_of "$HR")/catches.jsonl"; mkdir -p "$(dirname "$HRL")"
+for i in 1 2 3 4 5 6 7 8 9 10 11; do
+  printf '{"time":"2099-01-01T00:00:0%sZ","session":"s%s","check":"docs: d","kind":"observed","what":"1 new"}\n' "$((i % 10))" "$i" >>"$HRL"
+  [ "$i" -gt 10 ] || printf '{"time":"2099-01-01T00:00:0%sZ","session":"s%s","check":"docs: d","kind":"fixed","what":"observed problems gone: passes again"}\n' "$((i % 10))" "$i" >>"$HRL"
+done
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$HR" --json 2>&1)"
+if [ "$(jq -c '.checks[] | select(.check == "docs: d") | [.observed, .observed_fixed, .promotion.proposal]' <<<"$out")" = '[11,10,"block"]' ]; then ok "adapter H2: more than 90% of 10 or more observed findings fixed: the report proposes blocking"
+else nok "adapter H2: more than 90% of 10 or more observed findings fixed: the report proposes blocking" "$out"; fi
+printf '{"time":"2099-01-01T00:00:09Z","session":"s12","check":"docs: d","kind":"observed","what":"1 new"}\n' >>"$HRL"
+expect_result "adapter H2: with fewer fixed, the report says to look at the others first" 0 'only 10 of 12 observed findings were fixed in their session' "exit=0
+$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$HR" 2>&1)"
 printf '#!/bin/bash\necho "check-docs: python not found" >&2\nexit 127\n' >"$DA/scripts/check-docs.sh"
 approve "$DA" >/dev/null
 printf 'y\n' >>"$DA/docs/old.md"
