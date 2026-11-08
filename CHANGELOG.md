@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## swift-harness 1.8.1 (2026-11-09)
+
+Fixes from using 1.8.0 on a real project and from an external review, each reproduced first. What the harness says is now more exact: a partial or unstable result is named as such, an observed check is counted by episode, and an approval says which scripts it does not cover. Codex can edit a protected file once the user allows it. Checked with 778 hook tests, real Codex sessions on a fixture, and three real Claude Code sessions (0 failed invariants).
+
+**Upgrading:** nothing to do. Approvals stay valid, and a git hook using `check.sh` keeps working (add `--strict` to stop on partial or unstable results). `/swift-harness:doctor` may show a new warning, `Verify coverage`: add to `verify.inputs` the scripts it names that really run, then approve again. It reads the files as text, so a name in a comment shows there too, and a name that does not run can be ignored.
 
 - Fix: the proposal to let an observed check block counted wrongly ([#105](https://github.com/davidelarocca/swift-harness/issues/105), SH180-R07 of an external review). A set of problems that grew turn by turn counted each time, and only the last as fixed: 12 lines from one root cause, all fixed, read "1 of 12 fixed". `/swift-harness:report` now counts episodes (the findings in a row in a session, until they are gone), and proposes blocking only with at least 10 episodes over at least 3 sessions, more than 90% fixed in their session. The log is unchanged, so what was recorded before is read correctly. A fix does not prove a finding was right, and the proposal says so.
 - Fix: `check.sh` said `Result: passed` for a partial result (SH180-R01), and for a pass on a rerun (SH180-R02). It now says `PARTIAL` or `UNSTABLE`, `--json` has `result`, and the evidence record has `stability: "unstable"`. New `--strict` exits 4 for both; without it they still exit 0, so existing git hooks keep working.
