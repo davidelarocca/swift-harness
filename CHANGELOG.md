@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- New: guest mode kept local, and new worktrees ([#71](https://github.com/davidelarocca/swift-harness/issues/71), [#105](https://github.com/davidelarocca/swift-harness/issues/105)). `setup-guest.sh` gains three options:
+  - `--local` keeps the two files out of the repository, through `.git/info/exclude`, which every worktree shares. Neither git nor other agents see them.
+  - `--from <checkout>` gives a new worktree the same two files.
+  - `--docs-observe` runs the project's docs check without ever blocking (`docs.blocking: false`).
+  - `--ui-isolation <argument>` declares the launch arguments that keep UI tests off the user's real data (`uiTests.isolation`).
+
+  A dry run on a clone of a real app went through every step: audit, timing, guest setup with `--local`, approval, and a real Claude session. The build took 38 s cold and 1 s warm, the tests about 4 minutes, so the build became the fast command. The end-of-turn check passed, the project's own docs check ran in observation, and `git status` showed only Claude's edit. `doctor` named what is left to the user: reviewing the security baseline.
 - New: timed commands, opt-in tests left out, unstable tests named ([#104](https://github.com/davidelarocca/swift-harness/issues/104) timing step, [#108](https://github.com/davidelarocca/swift-harness/issues/108)).
   - **Timing:** `scripts/time-commands.sh` times the candidate verify commands. It runs the project's code, so the setup skill asks the user first. Each command runs twice by default (cold, then warm), with its runs, median, worst time and exit codes. The script proposes the fast/full split under the end-of-turn budget (120 s): fast takes the commands in order while their worst times fit. A failing command is left out and named. The script writes nothing itself.
   - **Opt-in tests:** the adoption audit lists the test files that read environment variables, tests that run only when one is set (hardware, live services), to keep them out of the fast command. On a real app it found 33 such files.

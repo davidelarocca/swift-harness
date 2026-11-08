@@ -3627,6 +3627,29 @@ G5="$TMP/guest-retry"; mkdir -p "$G5"
 if [ "$(jq -c '.verify.retryFailed' "$G5/.claude/swift-harness.json")" = true ]; then ok "retry: setup-guest --retry-failed sets verify.retryFailed"
 else nok "retry: setup-guest --retry-failed sets verify.retryFailed" "$(cat "$G5/.claude/swift-harness.json")"; fi
 
+# ---------- guest mode kept local, and new worktrees (#71, #105) ----------
+
+GL="$TMP/guest-local"; mkdir -p "$GL/Scripts" "$GL/docs"; git -C "$GL" init -q
+git -C "$GL" config user.email t@example.com; git -C "$GL" config user.name t
+printf '# Agents\n' >"$GL/AGENTS.md"; printf '# Roadmap\n' >"$GL/docs/ROADMAP.md"; echo x >"$GL/Scripts/check-docs.sh"
+git -C "$GL" add -A && git -C "$GL" commit -qm init
+"$SCRIPTS/setup-guest.sh" --project "$GL" --fast 'swift build' --full 'swift test' --docs-command 'python3 Scripts/check-docs.py' --docs-observe --owned docs/ROADMAP.md --local >/dev/null
+if [ -z "$(git -C "$GL" status --short)" ] && [ "$(jq -c '[.docs, .protectedPaths]' "$GL/.claude/swift-harness.json")" = '[{"command":"python3 Scripts/check-docs.py","blocking":false},["AGENTS.md","docs/ROADMAP.md"]]' ]; then
+  ok "guest --local: the two files stay out of git; the docs check observes; the owned docs are protected"
+else nok "guest --local: the two files stay out of git; the docs check observes; the owned docs are protected" "$(git -C "$GL" status --short; cat "$GL/.claude/swift-harness.json")"; fi
+G6="$TMP/guest-isolation"; mkdir -p "$G6"
+"$SCRIPTS/setup-guest.sh" --project "$G6" --fast 'swift build' --ui-isolation -UITestingSuite >/dev/null
+if [ "$(jq -c '.uiTests' "$G6/.claude/swift-harness.json")" = '{"isolation":["-UITestingSuite"]}' ]; then ok "guest --ui-isolation: declares the launch argument that keeps UI tests off real data"
+else nok "guest --ui-isolation: declares the launch argument that keeps UI tests off real data" "$(cat "$G6/.claude/swift-harness.json")"; fi
+GW="$TMP/guest-local-wt"
+git -C "$GL" worktree add -q "$GW" -b other 2>/dev/null
+"$SCRIPTS/setup-guest.sh" --project "$GW" --from "$GL" >/dev/null
+if cmp -s "$GL/.claude/swift-harness.json" "$GW/.claude/swift-harness.json" && [ -x "$GW/Scripts/verify.sh" ] && [ -z "$(git -C "$GW" status --short)" ]; then
+  ok "guest --from: a new worktree gets the same two files, still out of git"
+else nok "guest --from: a new worktree gets the same two files, still out of git" "$(git -C "$GW" status --short)"; fi
+expect_result "guest --from: refuses when the worktree already has them" 1 'already there' "exit=$("$SCRIPTS/setup-guest.sh" --project "$GW" --from "$GL" >/dev/null 2>&1; echo $?)
+$("$SCRIPTS/setup-guest.sh" --project "$GW" --from "$GL" 2>&1)"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

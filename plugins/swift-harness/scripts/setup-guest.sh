@@ -4,7 +4,14 @@
 # the commands; never by a hook.
 #
 #   setup-guest.sh --fast "<command>" [--full "<command>"] [--project DIR] [--no-docs | --docs-command "<command>"]
-#                  [--owned PATH]... [--retry-failed]
+#                  [--owned PATH]... [--retry-failed] [--docs-observe] [--local]
+#   setup-guest.sh --from DIR [--project DIR] [--local]
+# --docs-observe runs the project's docs check without ever blocking (docs.blocking false).
+# --local keeps both files out of the repository: they go into .git/info/exclude, which every
+# worktree of the repository shares, so neither git nor other agents see them.
+# --from DIR copies both files from another checkout of the same project (a new worktree).
+# --ui-isolation ARG (repeatable) declares the launch arguments that keep UI tests off the
+# user's real data (uiTests.isolation, #68), so doctor checks every UI test that launches the app.
 # --retry-failed sets verify.retryFailed (#108): a failing verify command runs once more, and a
 # pass on the rerun is recorded as unstable instead of blocking.
 #
@@ -24,7 +31,8 @@
 set -uo pipefail
 
 usage() {
-  echo "usage: setup-guest.sh --fast \"<command>\" [--full \"<command>\"] [--project DIR] [--no-docs | --docs-command \"<command>\"] [--owned PATH]..." >&2
+  echo "usage: setup-guest.sh --fast \"<command>\" [--full \"<command>\"] [--project DIR] [--no-docs | --docs-command \"<command>\" [--docs-observe]] [--owned PATH]... [--retry-failed] [--ui-isolation ARG]... [--local]" >&2
+  echo "       setup-guest.sh --from DIR [--project DIR] [--local]" >&2
   exit 2
 }
 
@@ -35,6 +43,10 @@ docs=true
 docs_command=""
 owned=""
 retry=false
+isolation=""
+observe=false
+local_only=false
+from=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) [ $# -ge 2 ] && [ -n "$2" ] || usage; fast="$2"; shift 2 ;;
@@ -44,10 +56,14 @@ while [ $# -gt 0 ]; do
     --docs-command) [ $# -ge 2 ] && [ -n "$2" ] || usage; docs_command="$2"; shift 2 ;;
     --owned) [ $# -ge 2 ] && [ -n "$2" ] || usage; owned="$owned$2"$'\n'; shift 2 ;;
     --retry-failed) retry=true; shift ;;
+    --ui-isolation) [ $# -ge 2 ] && [ -n "$2" ] || usage; isolation="$isolation$2"$'\n'; shift 2 ;;
+    --docs-observe) observe=true; shift ;;
+    --local) local_only=true; shift ;;
+    --from) [ $# -ge 2 ] || usage; from="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
-[ -n "$fast" ] || usage
+[ -n "$fast" ] || [ -n "$from" ] || usage
 command -v jq >/dev/null 2>&1 || { echo "setup-guest: jq is required (brew install jq)." >&2; exit 2; }
 root="$(cd "$dir" 2>/dev/null && pwd -P)" || { echo "setup-guest: no such folder: $dir" >&2; exit 2; }
 config="$root/.claude/swift-harness.json"
@@ -65,6 +81,30 @@ exists=""
 if [ -n "$exists" ]; then
   echo "setup-guest: already there:$exists. Nothing written: merge by hand, or remove them first." >&2
   exit 1
+fi
+
+# Keep the two files out of the repository (all its worktrees share .git/info/exclude).
+exclude_locally() {
+  local common file
+  common="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)" || { echo "setup-guest: --local needs a git repository" >&2; return 1; }
+  common="$(cd "$root" && cd "$common" && pwd -P)" || return 1
+  mkdir -p "$common/info" && touch "$common/info/exclude"
+  for file in .claude/swift-harness.json "$sdir/verify.sh"; do
+    grep -qxF "/$file" "$common/info/exclude" || printf '/%s\n' "$file" >>"$common/info/exclude"
+  done
+}
+
+# A new worktree: the same two files as another checkout of the project.
+if [ -n "$from" ]; then
+  src="$(cd "$from" 2>/dev/null && pwd -P)" || { echo "setup-guest: no such folder: $from" >&2; exit 2; }
+  ssdir=scripts
+  for d in "$src"/[sS][cC][rR][iI][pP][tT][sS]; do [ -d "$d" ] && { ssdir="${d##*/}"; break; }; done
+  [ -f "$src/.claude/swift-harness.json" ] && [ -f "$src/$ssdir/verify.sh" ] || { echo "setup-guest: $src has no guest setup to copy" >&2; exit 2; }
+  mkdir -p "$root/.claude" "$root/$sdir" || exit 1
+  cp "$src/.claude/swift-harness.json" "$config" && cp -p "$src/$ssdir/verify.sh" "$verify" || exit 1
+  [ "$local_only" = false ] || exclude_locally || exit 1
+  printf '%s\n%s\n' "$config" "$verify"
+  exit 0
 fi
 
 # The project's own formatter and SwiftLint, if it has their config; off otherwise.
@@ -85,10 +125,11 @@ protect="$(for p in CLAUDE.md .claude/CLAUDE.md AGENTS.md; do [ -f "$root/$p" ] 
   done)"
 mkdir -p "$root/.claude" "$root/$sdir" || exit 1
 jq -n --arg format "$format" --arg lint "$lint" --argjson docs "$docs" --arg cmd "$sdir/verify.sh fast" --arg dcmd "$docs_command" \
-  --arg protect "$protect" --argjson retry "$retry" '
+  --arg protect "$protect" --argjson retry "$retry" --argjson observe "$observe" --arg isolation "$isolation" '
   {guest: true, format: $format, lint: $lint, verify: ({command: $cmd, maxAttempts: 3} + (if $retry then {retryFailed: true} else {} end))}
   + (($protect | split("\n") | map(select(length > 0))) as $p | if ($p | length) > 0 then {protectedPaths: $p} else {} end)
-  + (if $docs then (if $dcmd == "" then {} else {docs: {command: $dcmd}} end) else {docs: {enabled: false}} end)' >"$config" || exit 1
+  + (($isolation | split("\n") | map(select(length > 0))) as $i | if ($i | length) > 0 then {uiTests: {isolation: $i}} else {} end)
+  + (if $docs then (if $dcmd == "" then {} else {docs: ({command: $dcmd} + (if $observe then {blocking: false} else {} end))} end) else {docs: {enabled: false}} end)' >"$config" || exit 1
 
 # The commands go in as single-quoted shell words, so nothing in them is expanded here.
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -109,5 +150,6 @@ quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
   printf 'esac\n'
 } >"$verify" || exit 1
 chmod +x "$verify"
+[ "$local_only" = false ] || exclude_locally || exit 1
 
 printf '%s\n%s\n' "$config" "$verify"
