@@ -178,6 +178,7 @@ check_stop_fails() {
   expect "user warned that the check is still failing" has_hook Stop 0 'still failing'
   expect "test file unchanged (task said only Greeting.swift)" unchanged Tests
   expect "requested change made" file_has Sources/App/Greeting.swift 'Hi, \\\(name\)!'
+  expect "catch log: one blocked line per Stop that blocked on the verify command, and the report counts them" catches_match
 }
 
 scenario_report_no_token() {
@@ -1082,6 +1083,18 @@ has_hook() {
     | length > 0' "$T" >/dev/null
 }
 not_has_hook() { ! has_hook "$@"; }
+# The catch log (#86) against the transcript: the Stops that blocked on the verify command,
+# the log's blocked lines for it, and the report's count are the same number, at least one.
+catches_match() {
+  local stops logged reported hash
+  hash="$(printf '%s' "$(cd "$D" && pwd -P)" | shasum | cut -c1-16)"
+  stops="$(jq -s '[.[] | select(.type == "system" and .subtype == "hook_response" and .hook_event == "Stop"
+    and .exit_code == 2 and ((.stderr // "") | test("Verification failed")))] | length' "$T")"
+  logged="$(jq -s '[.[] | select(.check == "scripts/verify.sh fast" and .kind == "blocked")] | length' "$PLUGIN_DATA/state/$hash/catches.jsonl" 2>/dev/null)"
+  reported="$(CLAUDE_PLUGIN_DATA="$PLUGIN_DATA" "$PLUGIN/scripts/report.sh" --project "$D" --all --json 2>/dev/null |
+    jq '[.checks[] | select(.check == "scripts/verify.sh fast") | .blocked] | add // 0')"
+  [ "${stops:-0}" -ge 1 ] && [ "$stops" = "$logged" ] && [ "$logged" = "$reported" ]
+}
 has_denial() {
   jq -se --arg re "$1" 'map(select(.type == "system" and .subtype == "permission_denied"
     and ((.decision_reason // .message // "") | test($re)))) | length > 0' "$T" >/dev/null

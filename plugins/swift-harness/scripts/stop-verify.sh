@@ -103,7 +103,8 @@ elif [ "$run_verify" != "true" ]; then
   ev "$command_line" "not run" "the verify command is not approved: /swift-harness:approve-verify"
 fi
 [ -f "$SH_ROOT/$SH_CONTRACT" ] && [ "$run_contracts" != "true" ] && ev "architecture contracts" "not run" "they run only with the approved verify command"
-[ "$lint_missing" = "true" ] && ev "SwiftLint (lintBlocking)" "not run" "swiftlint is not installed"
+# Under lintBlocking a missing SwiftLint fails the check: the edits could not be linted (#17).
+[ "$lint_missing" = "true" ] && ev "SwiftLint (lintBlocking)" failed "swiftlint is not installed, so the edited files were not linted"
 
 if [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ]; then
   : >"$ev_lines"; ev_keep; ev_write unchanged "the code is the one that passed before: nothing ran again"

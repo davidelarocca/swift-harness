@@ -111,6 +111,7 @@ $SH_LINT_OUTPUT}"
         ;;
       broken)
         [ -z "$state" ] || sh_lint_pending_add "$state" "$rel"
+        sh_catch SwiftLint blocked "SwiftLint did not run correctly on $rel (configuration)"
         printf '%s\n\nThe edit is applied, but SwiftLint is not working correctly and lintBlocking is on. This usually comes from .swiftlint.yml, not from your edit: do not change .swiftlint.yml unless the task covers it, and tell the user what SwiftLint reported. The turn will end as failed until it is fixed.\n' "$notes" >&2
         exit 2
         ;;

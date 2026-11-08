@@ -38,10 +38,12 @@ watch() {
 }
 
 msg="$(watch snapshots "$(sh_snapshots)" "snapshot baselines" /swift-harness:approve-snapshots "The snapshot tests")"
+[ -z "$msg" ] || sh_catch "snapshot baselines" reported "baselines changed without /swift-harness:approve-snapshots"
 perf="$(watch performance "$(sh_performance)" "performance baselines" /swift-harness:approve-performance "The performance budget tests")"
 [ -n "$perf" ] && msg="${msg:+$msg
 
 }$perf"
 [ -n "$msg" ] || exit 0
+[ -z "$perf" ] || sh_catch "performance baselines" reported "baselines changed without /swift-harness:approve-performance"
 jq -n --arg msg "$msg" '{systemMessage: $msg}'
 exit 0
