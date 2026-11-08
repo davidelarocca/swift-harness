@@ -417,9 +417,38 @@ sh_verify_partial() {
 
 sh_verify_digest() { sh_verify_manifest "$1" | shasum -a 256 | cut -d' ' -f1; }
 
-# $1 command, $2 state folder. Succeeds when the user approved exactly this command.
+# Approval across worktrees (#107). Worktrees of one repository share its git common
+# directory. An approval given in one is also recorded under that repository, by a digest of
+# the command and file contents without the project path, so another worktree with the same
+# command and identical files inherits it. Any difference asks again; another repository
+# (another common directory, even a clone with the same files) never inherits.
+sh_repo_key() {
+  local common
+  common="$(git -C "$SH_ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  common="$(cd "$SH_ROOT" && cd "$common" 2>/dev/null && pwd -P)" || return 1
+  printf '%s' "$common" | shasum | cut -c1-16
+}
+sh_verify_content_digest() { sh_verify_manifest "$1" | sed 1d | shasum -a 256 | cut -d' ' -f1; }
+sh_repo_approvals() { local key; key="$(sh_repo_key)" || return 1; printf '%s/approvals/%s' "${CLAUDE_PLUGIN_DATA:-$HOME/.cache/swift-harness}" "$key"; }
+# Records the approval of this worktree for the others. $1 command.
+sh_verify_share_approval() {
+  local dir
+  dir="$(sh_repo_approvals)" || return 0
+  mkdir -p "$dir" && printf '%s\n%s\n' "$SH_ROOT" "$(date -u +%Y-%m-%d)" >"$dir/$(sh_verify_content_digest "$1")"
+}
+# Where the approval of $1 comes from: "this path", "worktree <path>", or nothing. $2 state folder.
+sh_verify_approval_source() {
+  local dir file
+  if [ -n "$2" ] && [ "$(sh_verify_digest "$1")" = "$(cat "$2/verify-approved" 2>/dev/null)" ]; then printf 'this path'; return 0; fi
+  dir="$(sh_repo_approvals)" || return 1
+  file="$dir/$(sh_verify_content_digest "$1")"
+  [ -f "$file" ] || return 1
+  printf 'worktree %s' "$(head -n 1 "$file")"
+}
+# $1 command, $2 state folder. Succeeds when the user approved exactly this command, here or in
+# another worktree of the same repository with identical files.
 sh_verify_approved() {
-  [ -n "$2" ] && [ "$(sh_verify_digest "$1")" = "$(cat "$2/verify-approved" 2>/dev/null)" ]
+  [ -n "$2" ] && sh_verify_approval_source "$1" "$2" >/dev/null
 }
 
 # Platforms the project declares, read as text, never by running anything (#40): one

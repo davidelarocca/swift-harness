@@ -3424,6 +3424,33 @@ if [ "$(jq -c '[.kind, .code, (.seconds | type)]' "$CLH")" = "[\"blocked\",\"$(j
 else nok "history: a block in the catch log carries the code identity and the check's duration" "$(cat "$CLH")"; fi
 expect_result "history: the report counts the end-of-turn records of the period" 0 '^End of turn: [0-9]+ record\(s\) \([0-9]+ failed, [0-9]+ passed[^)]*\); the checks that ran took [0-9]+ s\.$' "$(report --project "$HI" --all)"
 
+# ---------- approval across worktrees (#107) ----------
+
+WA="$(new_project worktree-main)"
+WB="$TMP/worktree-b"
+git -C "$WA" worktree add -q "$WB" -b feature 2>/dev/null
+WLOG="$TMP/worktree.log"; : >"$WLOG"
+echo 'let app = 2' >"$WB/Sources/App.swift"
+FAKE_VERIFY_LOG="$WLOG" hook stop-verify.sh "$WB" >/dev/null 2>&1
+if [ "$(wc -l <"$WLOG" | tr -d ' ')" = 1 ]; then ok "worktrees: a worktree of the same repository with identical files inherits the approval"
+else nok "worktrees: a worktree of the same repository with identical files inherits the approval" "runs: $(wc -l <"$WLOG")"; fi
+expect_result "worktrees: status says where the approval comes from" 0 "Status: approved, inherited from the $(cd "$WA" && pwd -P) worktree of this repository" "exit=0
+$(approval "$WB" --status)"
+expect_row "worktrees: doctor says the approval was given in another worktree" "$(doctor "$WB")" PASS "Verify approval" 'approved in another worktree of this repository'
+printf '#!/bin/bash\necho changed\n' >"$WB/scripts/verify.sh"
+: >"$WLOG"; echo 'let app = 3' >"$WB/Sources/App.swift"
+FAKE_VERIFY_LOG="$WLOG" hook stop-verify.sh "$WB" >/dev/null 2>&1
+if [ ! -s "$WLOG" ] && approval "$WB" --status | grep -q '^Status: not approved'; then ok "worktrees: a changed file in the worktree asks again (V-12)"
+else nok "worktrees: a changed file in the worktree asks again (V-12)" "$(approval "$WB" --status | grep Status)"; fi
+git -C "$WB" checkout -q -- scripts/verify.sh
+WC="$TMP/worktree-clone"; cp -R "$WA" "$WC"
+if approval "$WC" --status | grep -q '^Status: not approved'; then ok "worktrees: another repository with the same files never inherits"
+else nok "worktrees: another repository with the same files never inherits" "$(approval "$WC" --status | grep Status)"; fi
+approval "$WB" --revoke >/dev/null
+if approval "$WB" --status | grep -q '^Status: not approved' && approval "$WA" --status | grep -q '^Status: approved$'; then
+  ok "worktrees: revoking removes what the worktrees share; the main checkout keeps its own approval"
+else nok "worktrees: revoking removes what the worktrees share; the main checkout keeps its own approval" "B: $(approval "$WB" --status | grep Status); A: $(approval "$WA" --status | grep Status)"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

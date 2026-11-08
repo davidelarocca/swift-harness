@@ -7,7 +7,7 @@ argument-hint: "[revoke]"
 
 # Approve the verify command
 
-The Stop hook runs `verify.command` from `.claude/swift-harness.json`, a file the repository controls. It runs only after the user approves the exact command and the files it names. The approval is stored outside the repository, in the plugin data folder, for this project path only.
+The Stop hook runs `verify.command` from `.claude/swift-harness.json`, a file the repository controls. It runs only after the user approves the exact command and the files it names. The approval is stored outside the repository, in the plugin data folder, for this project path. Another git worktree of the same repository with the identical command and files inherits it; the status says so ("inherited from the … worktree"). Revoking removes it for the other worktrees too.
 
 The user asked for this by typing the command. Do not run these scripts at any other time, and never on your own initiative.
 

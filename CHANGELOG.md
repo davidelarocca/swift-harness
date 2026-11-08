@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- New: approval across worktrees ([#107](https://github.com/davidelarocca/swift-harness/issues/107)). With parallel agents in separate worktrees of one repository, the verify command used to need an approval in each. An approval is now also recorded under the repository's git common directory, by a digest of the command and the file contents without the project path. Another worktree whose command and files are identical inherits it.
+  - Any difference asks again (the case V-12 of an external review).
+  - Another clone, which has its own common directory, never inherits, even with identical files.
+  - Revoking in any worktree removes what the worktrees share; each checkout keeps its own local approval.
+  - `/swift-harness:approve-verify` and `/swift-harness:doctor` say where the approval comes from.
 - New: evidence over time ([#110](https://github.com/davidelarocca/swift-harness/issues/110)). The end-of-turn records are kept as a history, `evidence-history.jsonl` in the project's state folder, one line per record:
   - **Bounds:** at most 2000 lines (`SWIFT_HARNESS_HISTORY_MAX`), and no older than the retention of session folders. A record that only says nothing ran again on the code of the previous one is not repeated.
   - **Concurrency:** trimming takes a lock, so two sessions appending at once lose nothing.

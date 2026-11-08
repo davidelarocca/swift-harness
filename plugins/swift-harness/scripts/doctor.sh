@@ -323,7 +323,9 @@ if [ "$verify_enabled" = true ]; then
   elif sh_verify_approved "$command_line" "$state" && sh_verify_partial "$command_line"; then
     row WARN "Verify approval" "'$command_line' approved, partial coverage: it has quotes or shell syntax, so the files it runs may change without a new approval. Fix: list them in verify.inputs, then type /swift-harness:approve-verify"
   elif sh_verify_approved "$command_line" "$state"; then
-    row PASS "Verify approval" "'$command_line' approved for this path"
+    src="$(sh_verify_approval_source "$command_line" "$state")"
+    if [ "$src" = "this path" ]; then row PASS "Verify approval" "'$command_line' approved for this path"
+    else row PASS "Verify approval" "'$command_line' approved in another worktree of this repository (${src#worktree }), with the same command and files"; fi
   else
     row FAIL "Verify approval" "'$command_line' is not approved (new, or it or a file it runs changed): the end-of-turn check does not run it. Fix: review it, then type /swift-harness:approve-verify"
   fi

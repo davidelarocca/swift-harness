@@ -2,6 +2,10 @@
 
 Newest first. Record the plugin version, the tool versions, the invariants result and anything notable in Claude's behaviour.
 
+## 2026-11-08, approval across worktrees (#107, branch `feat/worktree-approval-107`)
+
+Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The approval check used by the hooks now also looks under the repository. Targeted run: `approve-verify`, `verify-unapproved`, `stop-fails`, `doctor`. All invariants pass, $0.49. The worktree inheritance itself is covered by `tests/run.sh`, with a real `git worktree`. n=1 per scenario.
+
 ## 2026-11-08, evidence over time (#110, branch `feat/evidence-history-110`)
 
 Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The Stop hook writes the history and the durations. Targeted run: `stop-fails`, `verify-unapproved`, `verify-partial`, `broken-config`, `lint-missing`. All invariants pass, $0.86. The history after the sessions is as expected: `stop-fails` has two failed records, `verify-partial` a partial one and then one unchanged. n=1 per scenario.
