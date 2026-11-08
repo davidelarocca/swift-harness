@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- New: static HTML report ([#87](https://github.com/davidelarocca/swift-harness/issues/87)), first section. `report.sh --html` (`/swift-harness:report html`) writes `.build/swift-harness/report.html` from the existing outputs only: the last end-of-turn record (each check, its result and detail) and the catch log (per check, the checks not run, the latest entries). It follows the rules of discussion [#50](https://github.com/davidelarocca/swift-harness/discussions/50):
+  - read-only, with no script and no network; a Content-Security-Policy forbids both;
+  - every section names its source file;
+  - only a check that ran and passed on the current code is green, a check not run is grey, and a record about an earlier state of the code says so and shows nothing green;
+  - every value from the repository or the log is HTML-escaped. A test feeds a check name `<script>…</script>` and a catch `<img onerror=…>`.
+
+  Light and dark follow the system. The drift curve and the sensitivity matrix come next, in the sections the issue lists.
 - New: catch log and `/swift-harness:report` ([#86](https://github.com/davidelarocca/swift-harness/issues/86)). A defect prevented leaves no trace, so the hooks now keep one: every block, report, question and skipped check, and how it ended, is a JSON line in `catches.jsonl` in the project's state folder (time, session, check, kind, what). The log never leaves the machine. Kinds:
   - `blocked`: the end-of-turn check, per failing check, with the attempt; the post-edit lint and contract blocks; docs references broken in the session.
   - `reported`: SwiftLint issues after an edit, with the rules; components the registry does not list; baselines or protected files changed without approval.
