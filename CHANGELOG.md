@@ -7,6 +7,7 @@
   - `--from <checkout>` gives a new worktree the same two files.
   - `--docs-observe` runs the project's docs check without ever blocking (`docs.blocking: false`).
   - `--ui-isolation <argument>` declares the launch arguments that keep UI tests off the user's real data (`uiTests.isolation`).
+  - **A new worktree that lacks the two files is no longer silent.** With the files kept local, a new worktree starts without them, and every hook would do nothing. At session start, a worktree with no config, in a repository whose `.git/info/exclude` lists it, tells the user and Claude that no check runs there. It gives the `setup-guest.sh --from <checkout that has them> --local` command to prepare it, and writes nothing. (Pointed out in review.)
 
   A dry run on a clone of a real app went through every step: audit, timing, guest setup with `--local`, approval, and a real Claude session. The build took 38 s cold and 1 s warm, the tests about 4 minutes, so the build became the fast command. The end-of-turn check passed, the project's own docs check ran in observation, and `git status` showed only Claude's edit. `doctor` named what is left to the user: reviewing the security baseline.
 - New: timed commands, opt-in tests left out, unstable tests named ([#104](https://github.com/davidelarocca/swift-harness/issues/104) timing step, [#108](https://github.com/davidelarocca/swift-harness/issues/108)).

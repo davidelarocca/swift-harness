@@ -3647,6 +3647,14 @@ git -C "$GL" worktree add -q "$GW" -b other 2>/dev/null
 if cmp -s "$GL/.claude/swift-harness.json" "$GW/.claude/swift-harness.json" && [ -x "$GW/Scripts/verify.sh" ] && [ -z "$(git -C "$GW" status --short)" ]; then
   ok "guest --from: a new worktree gets the same two files, still out of git"
 else nok "guest --from: a new worktree gets the same two files, still out of git" "$(git -C "$GW" status --short)"; fi
+GW2="$TMP/guest-local-wt2"
+git -C "$GL" worktree add -q "$GW2" -b third 2>/dev/null
+out="$(hook session-start.sh "$GW2" '{"source":"startup"}' 2>&1)"
+if grep -q 'this worktree does not have them, so no check runs here' <<<"$out" && grep -qF 'guest-local\" --local' <<<"$out" && [ -z "$(git -C "$GW2" status --short)" ]; then
+  ok "guest --local: a new worktree without the files says no check runs there, with the command to prepare it"
+else nok "guest --local: a new worktree without the files says no check runs there, with the command to prepare it" "$out"; fi
+expect_result "guest --local: a repository that does not keep the files local says nothing" 0 '^exit=0$' "exit=0
+$(hook session-start.sh "$TMP/guest-owned" '{"source":"startup"}' 2>&1 | grep -c 'no check runs here' | sed 's/^0$//')"
 expect_result "guest --from: refuses when the worktree already has them" 1 'already there' "exit=$("$SCRIPTS/setup-guest.sh" --project "$GW" --from "$GL" >/dev/null 2>&1; echo $?)
 $("$SCRIPTS/setup-guest.sh" --project "$GW" --from "$GL" 2>&1)"
 
