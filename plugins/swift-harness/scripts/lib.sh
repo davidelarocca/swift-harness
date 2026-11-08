@@ -110,11 +110,16 @@ sh_state_dir() {
 #         reported (told, not blocked), skipped (a check did not run), fixed (passed after a
 #         block), approved (the user approved it), left-failing (Claude stopped on a failure)
 # Never fails the hook: a log that cannot be written is skipped.
-sh_catch() { # $1 check, $2 kind, $3 what
+# A hook that knows the code identity (the end-of-turn check) sets SH_CATCH_CODE, and a check
+# that ran passes its duration in seconds (#110).
+sh_catch() { # $1 check, $2 kind, $3 what, $4 seconds (optional)
   local dir line
   dir="$(sh_state_dir 2>/dev/null)" || return 0
   line="$(jq -nc --arg check "$1" --arg kind "$2" --arg what "${3:-}" --arg session "$(sh_session_id)" \
-    --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{time: $time, session: $session, check: $check, kind: $kind, what: $what}' 2>/dev/null)" || return 0
+    --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg code "${SH_CATCH_CODE:-}" --arg seconds "${4:-}" '
+    {time: $time, session: $session, check: $check, kind: $kind, what: $what}
+    + (if $code == "" then {} else {code: $code} end)
+    + (if ($seconds | test("^[0-9]+$")) then {seconds: ($seconds | tonumber)} else {} end)' 2>/dev/null)" || return 0
   printf '%s\n' "$line" >>"$dir/catches.jsonl" 2>/dev/null || true
 }
 

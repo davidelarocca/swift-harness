@@ -2,6 +2,10 @@
 
 Newest first. Record the plugin version, the tool versions, the invariants result and anything notable in Claude's behaviour.
 
+## 2026-11-08, evidence over time (#110, branch `feat/evidence-history-110`)
+
+Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The Stop hook writes the history and the durations. Targeted run: `stop-fails`, `verify-unapproved`, `verify-partial`, `broken-config`, `lint-missing`. All invariants pass, $0.86. The history after the sessions is as expected: `stop-fails` has two failed records, `verify-partial` a partial one and then one unchanged. n=1 per scenario.
+
 ## 2026-11-08, release 1.7.0 (the merged code, branch `feat/branch-scope-72`)
 
 Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The full default run on the code that became 1.7.0: 22 scenarios, all invariants pass, $3.20. n=1 per scenario.

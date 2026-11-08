@@ -3063,7 +3063,7 @@ if [ "$(ev_of "$E" '[.outcome, .note]')" = '["unchanged","no build input changed
 else nok "evidence: no change in the session is recorded as such, with the starting code not verified" "$(cat "$(state_of "$E")/evidence.json" 2>&1)"; fi
 echo 'let app = 2' >"$E/Sources/App.swift"
 out="$(ev_stop "$E")"
-if [ "$(ev_of "$E" '[.outcome, (.checks | map(select(.name == "scripts/verify.sh fast")))]')" = '["passed",[{"name":"scripts/verify.sh fast","result":"passed","detail":"exit 0; the command does not say which platforms it checked"}]]' ]; then
+if [ "$(ev_of "$E" '[.outcome, (.checks | map(select(.name == "scripts/verify.sh fast") | del(.seconds)))]')" = '["passed",[{"name":"scripts/verify.sh fast","result":"passed","detail":"exit 0; the command does not say which platforms it checked"}]]' ]; then
   ok "evidence: a pass records the command, its result and what it says it covered"
 else nok "evidence: a pass records the command, its result and what it says it covered" "$(cat "$(state_of "$E")/evidence.json")"; fi
 expect_result "evidence: a clean pass sends the user nothing" 0 '^exit=0$' "$out"
@@ -3388,6 +3388,41 @@ expect_result "audit: an only-list is said as such" 0 '\| lint \| observed \| \.
 mkdir -p "$TMP/audit-data/state/$(printf '%s' "$(cd "$AD" && pwd -P)" | shasum | cut -c1-16)"
 printf '%s\n' '{"version":1,"time":"2026-11-08T10:00:00Z","code":"x","outcome":"passed","checks":[{"name":"scripts/verify.sh fast","result":"passed","detail":"checked on macOS, tested on macOS"}]}' >"$TMP/audit-data/state/$(printf '%s' "$(cd "$AD" && pwd -P)" | shasum | cut -c1-16)/evidence.json"
 expect_result "audit: the harness's end-of-turn record makes a check executed" 0 '\| executed \| executed \| end-of-turn record \| scripts/verify\.sh fast: passed at 2026-11-08T10:00:00Z \(checked on macOS, tested on macOS\) \|' "$(audit --project "$AD")"
+
+# ---------- evidence over time (#110) ----------
+
+HI="$(new_project history)"
+hook session-start.sh "$HI" '{"source":"startup"}' >/dev/null
+HF="$(state_of "$HI")/evidence-history.jsonl"
+for i in 1 2 3; do echo "let app = 1$i" >"$HI/Sources/App.swift"; hook stop-verify.sh "$HI" >/dev/null 2>&1; done
+if [ "$(jq -sc 'map([.outcome, (.code | length), .session])' "$HF")" = '[["passed",40,"test"],["passed",40,"test"],["passed",40,"test"]]' ] && [ "$(jq -s 'map(.code) | unique | length' "$HF")" = 3 ]; then
+  ok "history: one record per end of turn, each with its own code identity and session"
+else nok "history: one record per end of turn, each with its own code identity and session" "$(cat "$HF")"; fi
+if [ "$(jq -c '[.checks[] | select(.name == "scripts/verify.sh fast") | (.seconds | type)]' "$(state_of "$HI")/evidence.json")" = '["number"]' ]; then ok "history: a check that ran has its duration in seconds"
+else nok "history: a check that ran has its duration in seconds" "$(cat "$(state_of "$HI")/evidence.json")"; fi
+hook stop-verify.sh "$HI" >/dev/null 2>&1; hook stop-verify.sh "$HI" >/dev/null 2>&1
+if [ "$(jq -sc 'map(.outcome)' "$HF")" = '["passed","passed","passed","unchanged"]' ]; then ok "history: nothing running again on the same code is recorded once, not every turn"
+else nok "history: nothing running again on the same code is recorded once, not every turn" "$(jq -sc 'map(.outcome)' "$HF")"; fi
+for i in 4 5 6; do echo "let app = 2$i" >"$HI/Sources/App.swift"; SWIFT_HARNESS_HISTORY_MAX=3 hook stop-verify.sh "$HI" >/dev/null 2>&1; done
+if [ "$(wc -l <"$HF" | tr -d ' ')" = 3 ] && [ "$(tail -n 1 "$HF" | jq -r .code)" = "$(jq -r .code "$(state_of "$HI")/evidence.json")" ]; then ok "history: trimmed to the limit, keeping the newest"
+else nok "history: trimmed to the limit, keeping the newest" "$(wc -l <"$HF")"; fi
+{ printf '%s\n' '{"version":1,"time":"2000-01-01T00:00:00Z","code":"old","outcome":"passed","checks":[]}'; cat "$HF"; } >"$HF.new" && mv "$HF.new" "$HF"
+echo 'let app = 30' >"$HI/Sources/App.swift"; hook stop-verify.sh "$HI" >/dev/null 2>&1
+if ! grep -q '"code":"old"' "$HF"; then ok "history: records older than the session retention are dropped"
+else nok "history: records older than the session retention are dropped"; fi
+mkdir "$(state_of "$HI")/evidence-history.lock"
+for i in 7 8; do echo "let app = 4$i" >"$HI/Sources/App.swift"; SWIFT_HARNESS_HISTORY_MAX=2 hook stop-verify.sh "$HI" >/dev/null 2>&1; done
+n="$(wc -l <"$HF" | tr -d ' ')"
+rmdir "$(state_of "$HI")/evidence-history.lock"
+if [ "$n" -gt 2 ]; then ok "history: while another session holds the lock, nothing is trimmed (and nothing lost)"
+else nok "history: while another session holds the lock, nothing is trimmed (and nothing lost)" "$n lines"; fi
+CLH="$(state_of "$HI")/catches.jsonl"; : >"$CLH"
+echo 'let app = 50' >"$HI/Sources/App.swift"
+FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$HI" >/dev/null 2>&1
+if [ "$(jq -c '[.kind, .code, (.seconds | type)]' "$CLH")" = "[\"blocked\",\"$(jq -r .code "$(state_of "$HI")/evidence.json")\",\"number\"]" ]; then
+  ok "history: a block in the catch log carries the code identity and the check's duration"
+else nok "history: a block in the catch log carries the code identity and the check's duration" "$(cat "$CLH")"; fi
+expect_result "history: the report counts the end-of-turn records of the period" 0 '^End of turn: [0-9]+ record\(s\) \([0-9]+ failed, [0-9]+ passed[^)]*\); the checks that ran took [0-9]+ s\.$' "$(report --project "$HI" --all)"
 
 # ---------- summary ----------
 

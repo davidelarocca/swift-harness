@@ -85,6 +85,15 @@ summary="$(
 )" || summary='{"events":0,"checks":[],"skipped":[]}'
 [ -n "$summary" ] || summary='{"events":0,"checks":[],"skipped":[]}'
 
+# The end-of-turn records of the period (#110): how many, by outcome, and the time checks took.
+hist="$(sh_state_path)/evidence-history.jsonl"
+turns="$({ [ -f "$hist" ] && cat "$hist"; } | jq -sc --arg since "$since" '
+  map(select(type == "object" and (.time // "") >= $since))
+  | {records: length, outcomes: (group_by(.outcome) | map({(.[0].outcome): length}) | add // {}),
+     seconds: ([.[].checks[]?.seconds // 0] | add // 0)}' 2>/dev/null)"
+[ -n "$turns" ] || turns='{"records":0,"outcomes":{},"seconds":0}'
+summary="$(printf '%s' "$summary" | jq -c --argjson turns "$turns" '. + {turns: $turns}')"
+
 if [ "$json" = true ]; then
   printf '%s\n' "$summary" | jq --arg since "$since" '{since: $since} + .'
   exit 0
@@ -110,6 +119,7 @@ printf '%s\n' "$summary" | jq -r --arg label "$label" --arg root "$SH_ROOT" '
   def n($k): [.checks[] | .[$k]] | add // 0;
   def part($v; $word): if $v > 0 then ["\($v) \($word)"] else [] end;
   "swift-harness report for \($root), \($label):",
+  (if .turns.records > 0 then "End of turn: \(.turns.records) record(s) (\(.turns.outcomes | to_entries | map("\(.value) \(.key)") | join(", "))); the checks that ran took \(.turns.seconds) s." else empty end),
   (if .events == 0 then "Nothing in the catch log: no check blocked, reported, asked or was skipped."
    else
      "\(n("blocked")) block(s), \(n("reported")) report(s), \(n("asked")) question(s) before an edit; \(n("fixed")) fixed by Claude, \(n("left_failing")) left failing, \(n("approved")) approval(s) by you.",
