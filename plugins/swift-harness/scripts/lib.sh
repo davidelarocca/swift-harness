@@ -427,24 +427,24 @@ sh_verify_manifest() {
 # nothing runs, a name in a comment counts, and a path built at run time is not seen, so this is
 # a hint, never a proof of coverage. Prints "<script>\t<named in>", one per line.
 sh_verify_uncovered() { # $1 command
-  local line word path sha kind token cand rel covered=() files=() f c hit
+  local line word path sha kind token cand rel covered=() named_from=() f c hit
   while IFS= read -r line; do
     case "$line" in
       "file "*)
         read -r _ word sha <<<"$line"
         case "$word" in "$SH_ROOT"/*) path="$word" ;; *) path="$SH_ROOT/$word" ;; esac
-        covered+=("$path"); files+=("$path")
+        covered+=("$path"); named_from+=("$path")
         ;;
       input$'\t'*)
         IFS=$'\t' read -r kind word sha <<<"$line"
         rel="$(sh_relpath "$word")"
         [ -n "$rel" ] || continue
         covered+=("$SH_ROOT/$rel")
-        [ ! -f "$SH_ROOT/$rel" ] || files+=("$SH_ROOT/$rel")
+        [ ! -f "$SH_ROOT/$rel" ] || named_from+=("$SH_ROOT/$rel")
         ;;
     esac
   done < <(sh_verify_manifest "$1")
-  for f in ${files[@]+"${files[@]}"}; do
+  for f in ${named_from[@]+"${named_from[@]}"}; do
     [ "$(wc -c <"$f" 2>/dev/null || echo 0)" -le 1048576 ] || continue
     while IFS= read -r token; do
       token="${token#./}"
