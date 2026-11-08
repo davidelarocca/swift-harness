@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## swift-harness 1.7.0 (2026-11-08)
+
+A measured harness. Whether each check catches what it claims, how a project drifts over its history, what every turn actually checked, and what the checks caught, all from facts the hooks hold and kept on your machine. Plus a guest mode for projects with their own rules, a test isolation check, and a branch scope contract. Measuring the checks found real bugs in the plugin itself, fixed here. Checked with 653 hook tests, a check-sensitivity run with real builds in CI, and the full smoke run in real Claude Code sessions (22 scenarios, all invariants pass).
+
+**Upgrading:** nothing to do. Everything new is on by default where it only reports (the evidence summary, the catch log, the scope and isolation checks when configured), or is a command you run. Two things are worth a copy of the new templates: `verify.sh`, so that with Xcode 27 and no xcbeautify the names of failed tests reach Claude; and the test templates (`LayoutContract.swift`, `Snapshot.swift`, `Screenshot.swift` and the others), which now pass the template SwiftLint config in strict mode. A result recorded by 1.6 no longer counts after the update, so the first turn that changes code verifies again.
 
 - New: branch scope contract ([#72](https://github.com/davidelarocca/swift-harness/issues/72)), brought forward from v1.9.0. A long-running branch, such as a port, must change only its own files and take the base branch's work, never push shared files the other way. `scope` in `.claude/swift-harness.json` gives a branch (or a prefix with `*`) its paths and its base (default `main`). A new Stop hook, `scope-watch.sh`, never blocks. At the end of a turn on that branch it tells the user and Claude, once until it changes: the files changed since the branch left the base that are outside the paths, committed or not (shell edits included), and the base's commits not merged into the branch yet. Out-of-scope files go to the catch log.
 - New: test isolation and a pitfalls template ([#68](https://github.com/davidelarocca/swift-harness/issues/68)), brought forward from v1.8.0.

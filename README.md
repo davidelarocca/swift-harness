@@ -424,7 +424,7 @@ scripts/verify.sh
 
 ## Roadmap
 
-Next up: **v1.7.0, a measured harness**: whether each check catches what it claims (planted defects), drift over the history, an evidence summary per turn, a local catch log and report, and evals with and without the plugin. Then v1.8.0 checks the running app over time, and v1.9.0 is assisted macOS to iOS porting, which waits for a real port. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
+Next up: **v1.8.0, perception in motion**: the running app over time (real against declared navigation, interaction conventions, injected faults, an accessibility task done through the accessibility tree), and evals with and without the plugin over a series of sessions. Then v1.9.0 is assisted macOS to iOS porting, which waits for a real port. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
 
 ## Limitations
 
