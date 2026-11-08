@@ -290,7 +290,7 @@ They start as warnings, which double as the migration to-do list. Switch a rule 
 
 A quality tool has to be checked itself. Every release goes through:
 
-- **639 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 634 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
+- **646 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 641 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
 - **A smoke test in real Claude Code sessions** (`tests/smoke/`): 23 scenarios for the hooks (snapshots, security settings, docs and performance budgets included), 6 for reusing UI components, 3 for product coherence, 6 for window sizes and 6 for screenshot review (some of them baselines without the plugin), with their invariants checked automatically. Every run is recorded with its cost ([results](tests/smoke/RESULTS.md)).
 
 What Claude did in those sessions:
@@ -383,6 +383,9 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `screenshots.path` | where `Screenshot.capture` saves images and `ui-reviewer` looks for them, relative to the repo root | `.build/swift-harness/screenshots` |
 | `snapshots.path` | the approved snapshot baselines `Snapshot.verify` compares with, inside the repo; only `/swift-harness:approve-snapshots` writes there, and the guard asks before an edit | `snapshots` |
 | `performance.path` | the approved performance baselines `PerformanceBudget.verify` compares with, inside the repo; only `/swift-harness:approve-performance` writes there, and the guard asks before an edit | `performance` |
+| `uiTests.isolation` | the launch arguments or environment keys that give the app its own test store and defaults in UI tests (for example `"-UITestingSuite"`); `/swift-harness:doctor` warns about a UI test file that launches the app without them, directly or through a launch helper | none |
+| `uiTests.launchHelpers` | more launch helpers, when their names do not contain "launch" | none |
+| `guest` | guest mode: the project's own rules and docs are the source of truth, set by `/swift-harness:setup guest` | `false` |
 | `security.enabled` | compare the app's security settings with the ones you approved at the end of each turn (`false` turns it off) | `true` |
 
 With `swift-format`, keep a `.swift-format` file in the repository root (setup creates one). Without it, swift-format applies its defaults, including 2-space indentation, to every file Claude edits, and SessionStart warns about it.

@@ -3222,6 +3222,57 @@ $(G2="$TMP/guest2"; mkdir -p "$G2"; gs --project "$G2" --fast 'Scripts/check.sh'
 expect_result "guest: without --fast it is a usage error" 2 'usage' "exit=$(gs --project "$G" >/dev/null; echo $?)
 $(gs --project "$G")"
 
+# ---------- test isolation (#68) ----------
+
+I="$(new_project isolation)"
+mkdir -p "$I/AppUITests"
+cat >"$I/AppUITests/XCUIApplication+App.swift" <<'EOF'
+import XCTest
+
+extension XCUIApplication {
+    func launchWithSongs() { launchArguments = ["-UITestingSuite", "Songs"]; launch() }
+    func close() {}
+}
+EOF
+cat >"$I/AppUITests/LibraryUITests.swift" <<'EOF'
+import XCTest
+
+final class LibraryUITests: XCTestCase {
+    func testList() { let app = XCUIApplication(); app.launchWithSongs(); app.close() }
+}
+EOF
+cat >"$I/AppUITests/DirectUITests.swift" <<'EOF'
+import XCTest
+
+final class DirectUITests: XCTestCase {
+    func testOwn() { let app = XCUIApplication(); app.launchArguments = ["-UITestingSuite", "X"]; app.launch() }
+}
+EOF
+iso() { local o c; o="$("$SCRIPTS/isolation.sh" check "$1" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+expect_result "isolation: no declared argument while UI tests launch the app is said, never blocks" 3 'declares no uiTests\.isolation arguments' "$(iso "$I")"
+set_config "$I" '{"verify":{"command":"scripts/verify.sh fast"},"uiTests":{"isolation":["-UITestingSuite"]}}'
+expect_result "isolation: a direct argument and a launch helper that sets it both count" 0 '^exit=0$' "$(iso "$I")"
+cat >"$I/AppUITests/LeakUITests.swift" <<'EOF'
+import XCTest
+
+final class LeakUITests: XCTestCase {
+    func testReal() {
+        let app = XCUIApplication()
+        app.launch()
+        app.close()
+    }
+}
+EOF
+expect_result "isolation: a launch without it is reported with file and line, a generic helper (close) does not count" 1 '^- AppUITests/LeakUITests\.swift:6: launches the app without an isolation argument \(-UITestingSuite\)' "$(iso "$I")"
+expect_row "isolation: doctor warns with the file" "$(doctor "$I")" WARN "Test isolation" 'LeakUITests\.swift:6'
+set_config "$I" '{"verify":{"command":"scripts/verify.sh fast"},"uiTests":{"isolation":["-UITestingSuite"],"launchHelpers":["close"]}}'
+expect_result "isolation: a helper listed in uiTests.launchHelpers counts" 0 '^exit=0$' "$(iso "$I")"
+rm -rf "$I/AppUITests"
+expect_result "isolation: no UI tests, nothing to check" 0 '^exit=0$' "$(iso "$I")"
+if grep -q 'uiTests.isolation' "$TEMPLATES/rules/tests.md" && grep -q 'rules/tests.md' "$SKILLS/setup/SKILL.md" && grep -q 'docs/PITFALLS.md' "$SKILLS/setup/SKILL.md" && grep -q 'docs/PITFALLS.md' "$SCRIPTS/checkpoint.sh"; then
+  ok "isolation: setup offers the tests rule and the pitfalls template; the checkpoint names the pitfalls"
+else nok "isolation: setup offers the tests rule and the pitfalls template; the checkpoint names the pitfalls"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
