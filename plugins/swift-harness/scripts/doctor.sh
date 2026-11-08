@@ -332,6 +332,8 @@ if [ "$verify_enabled" = true ]; then
   else
     row FAIL "Verify approval" "'$command_line' is not approved (new, or it or a file it runs changed): the end-of-turn check does not run it. Fix: review it, then type /swift-harness:approve-verify"
   fi
+  uncovered="$(sh_verify_uncovered "$command_line" | cut -f1 | sort -u | paste -sd' ' -)"
+  [ -z "$uncovered" ] || row WARN "Verify coverage" "the approved files name scripts the approval does not cover: $uncovered. If they run, a change to them asks nothing. Read as text, so a path built at run time is not seen. Fix: add them to verify.inputs in .claude/swift-harness.json, then /swift-harness:approve-verify"
 fi
 
 # ---------- security settings (#32) ----------

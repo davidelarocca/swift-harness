@@ -96,7 +96,7 @@ The always-on context cost is about 770 tokens per session. Skills load their fu
 <details>
 <summary><b>How the end-of-turn check behaves</b></summary>
 
-- The verify command runs only after you approve it with `/swift-harness:approve-verify`. The approval covers the project path, the command and the content of each file the command names, and is stored outside the repository. Another git worktree of the same repository inherits it when the command and those files are identical (any difference asks again; another clone never inherits). Until then, or after any of those change, the check does not run it and tells you once per code state; `lintBlocking` still applies.
+- The verify command runs only after you approve it with `/swift-harness:approve-verify`. The approval covers the project path, the command and the content of each file the command names, and is stored outside the repository. Another git worktree of the same repository inherits it when the command and those files are identical (any difference asks again; another clone never inherits). A script that those files call is covered only if it is in `verify.inputs`: the status and `/swift-harness:doctor` name the scripts they find mentioned and not covered, reading the files as text. Until then, or after any of those change, the check does not run it and tells you once per code state; `lintBlocking` still applies.
 - Code unchanged since the session started or since the last successful check: nothing runs. The starting state is a baseline, not a pass: if it was already broken, the first change in the session runs the check and shows it.
 - Code changed and the check fails: Claude is blocked and receives the last 60 lines of output.
 - Claude tries to stop again without changing anything: it may stop, and you get a warning.
@@ -260,7 +260,7 @@ final class LibraryBudgetTests: XCTestCase {
 <details>
 <summary><b>The same checks for other agents, git hooks and CI</b></summary>
 
-`scripts/check.sh` runs the end-of-turn check outside Claude Code, with the same approval, the same evidence record and the same catch log, as a session named after the agent (`--agent codex`). It exits 0 when the verify command passed on this code, 1 when a check failed, and 3 when the verify command did not run (not approved, or turned off). It finds the plugin's data folder by itself, or takes `CLAUDE_PLUGIN_DATA`. Recipes, with the plugin installed from the marketplace:
+`scripts/check.sh` runs the end-of-turn check outside Claude Code, with the same approval, the same evidence record and the same catch log, as a session named after the agent (`--agent codex`). It exits 0 when the verify command passed on this code, 1 when a check failed, and 3 when the verify command did not run (not approved, or turned off). A partial result (a platform not checked) and an unstable one (failed once, passed on a rerun) exit 0 and are named in the output and in `--json`; with `--strict` they exit 4. It finds the plugin's data folder by itself, or takes `CLAUDE_PLUGIN_DATA`. Recipes, with the plugin installed from the marketplace:
 
 ```bash
 # where the plugin is installed (it changes with each version)
@@ -276,11 +276,13 @@ SH="$(jq -r '.plugins["swift-harness@swift-harness"][0].installPath' ~/.claude/p
 In CI there is no approval folder: run the project's verify command itself there.
 
 **Codex runs the same hooks.** `setup-guest.sh --codex` (or `/swift-harness:setup guest` when you say Codex works on the project too) writes `.codex/hooks.json` and a small launcher next to it. Codex then runs, at its own events:
-- the guard before an edit. Codex cannot ask you from a hook, so an edit the guard would ask about is refused, and Codex is told to stop and ask you first;
+- the guard before an edit. Codex cannot ask you from a hook, so an edit the guard would ask about is refused, and Codex is told to stop and ask you first. If you agree, run `bash .codex/swift-harness-hook.sh --allow <file>` in your own terminal: one permit, for that file, for one patch within an hour;
 - the post-edit checks after an edit, read from Codex's patches;
 - the end-of-turn check. A failure keeps Codex working on it, as it does Claude.
 
-The approval, the evidence record and the catch log are the same as Claude Code's, and they name the agent. Codex asks once to trust the project's hooks (`/hooks`). With `--local`, the Codex files stay out of git too.
+The approval, the evidence record and the catch log are the same as Claude Code's, and they name the agent. Codex asks to trust the project's hooks (`/hooks`), per checkout. With `--local`, the Codex files stay out of git too.
+
+Limits: a shell command Codex runs is not guarded, only reported at the end of the turn. A new worktree without these files runs no check, and Codex gets no notice of it, because nothing of swift-harness loads there: run `setup-guest.sh --project <worktree> --from <checkout> --local` when you create one.
 
 </details>
 
@@ -288,7 +290,7 @@ The approval, the evidence record and the catch log are the same as Claude Code'
 <summary><b>Measuring the harness: evidence, catch log, drift and check sensitivity</b></summary>
 
 - **Evidence at every turn end.** The end-of-turn check writes what it ran, on which code, with which result, and why anything did not run (verify command not approved, SwiftLint missing). You hear about it only when something was not checked; `/swift-harness:doctor` and the checkpoint after a compaction show it. The `ui-change` skill and the `ui-reviewer` agent mark each claim *measured*, *seen* or *inferred*.
-- **Catch log and `/swift-harness:report`.** Every block, report, question and skipped check, and how it ended (fixed by Claude, left failing, approved by you), in a local log. The report summarises it, as text, JSON or a static HTML page. For a project check in observation (`docs.blocking` false), it says when the findings were fixed often enough to let it block: at least 10 findings, more than 90% fixed in their session. Nothing leaves your machine.
+- **Catch log and `/swift-harness:report`.** Every block, report, question and skipped check, and how it ended (fixed by Claude, left failing, approved by you), in a local log. The report summarises it, as text, JSON or a static HTML page. For a project check in observation (`docs.blocking` false), it proposes when it could block: at least 10 episodes over 3 sessions, more than 90% fixed in their session. A fix does not prove the finding was right, so look first: you decide. Nothing leaves your machine.
 - **`/swift-harness:drift`.** Hardcoded design values against tokens, near-duplicate components and check problems, per commit of a git range. On four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
 - **`/swift-harness:check-sensitivity`.** Plants one defect at a time in a copy of your project and reports which check caught it; `--verify` also runs your tests and SwiftLint. On the fixtures every defect is caught by its check; on a real app the one that survived is explained: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md).
 

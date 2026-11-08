@@ -68,6 +68,10 @@ status() {
   if sh_verify_unparsed "$command_line"; then
     echo "Warning: the command uses quotes or shell syntax, which swift-harness does not parse, so the files it runs may be missing from the list above. Add them to verify.inputs in .claude/swift-harness.json to cover them."
   fi
+  while IFS=$'\t' read -r script named; do
+    [ -n "$script" ] || continue
+    printf 'Not covered: %s, named in %s. If it runs, a change to it asks nothing: add it to verify.inputs in .claude/swift-harness.json.\n' "$script" "$named"
+  done < <(sh_verify_uncovered "$command_line")
   [ "$(sh_cfg '.verify.enabled' 'true')" = "true" ] ||
     echo "Note: verify.enabled is false, so the Stop hook does not run this command."
   if sh_verify_approved "$command_line" "$state" && sh_verify_partial "$command_line"; then

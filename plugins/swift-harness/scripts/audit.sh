@@ -262,15 +262,15 @@ done <<<"$schemes"
 
 # CI files: present, and a structural check (V-15). No YAML parser is run: brackets and quotes
 # that do not close, and tabs in the indentation, make a file unreadable as YAML.
-yaml_problem() { # $1 file: prints the problem, or nothing
+yaml_problem() { # $1 file: prints the first problem, or nothing. END runs after exit too.
   awk '
-    /^[ ]*\t/ { print "a tab in the indentation (line " NR ")"; exit }
+    /^[ ]*\t/ { print "a tab in the indentation (line " NR ")"; told = 1; exit }
     { line = $0; sub(/[ \t]#.*$/, "", line)
-      q = gsub(/"/, "\"", line); if (q % 2) { print "a quote that does not close (line " NR ")"; exit }
+      q = gsub(/"/, "\"", line); if (q % 2) { print "a quote that does not close (line " NR ")"; told = 1; exit }
       o = gsub(/\[/, "[", line); c = gsub(/\]/, "]", line); b += o - c
       o = gsub(/\{/, "{", line); c = gsub(/\}/, "}", line); b += o - c
-      if (b < 0) { print "a bracket closed before it opens (line " NR ")"; exit } }
-    END { if (b > 0 && NR) print "brackets that do not close" }' "$1"
+      if (b < 0) { print "a bracket closed before it opens (line " NR ")"; told = 1; exit } }
+    END { if (!told && b > 0 && NR) print "brackets that do not close" }' "$1"
 }
 while IFS= read -r f; do
   [ -n "$f" ] || continue
