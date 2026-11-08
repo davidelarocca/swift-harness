@@ -64,7 +64,7 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["guest", "uiTests", "format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
+  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
   (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
@@ -83,6 +83,7 @@ fi
 problems="$(jq -r '
   def check(path; ok; msg): if (getpath(path) != null) and (getpath(path) | ok | not) then msg else empty end;
   check(["guest"]; type == "boolean"; "guest must be true or false"),
+  check(["scope"]; type == "array" and all(.[]; type == "object" and (.branch | type) == "string" and (.paths | type) == "array"); "scope must be a list of {branch, paths, base}"),
   check(["uiTests", "isolation"]; type == "array" and all(.[]; type == "string"); "uiTests.isolation must be a list of launch arguments or environment keys"),
   check(["uiTests", "launchHelpers"]; type == "array" and all(.[]; type == "string"); "uiTests.launchHelpers must be a list of function names"),
   check(["format"]; . == "swiftformat" or . == "swift-format" or . == "none"; "format must be swiftformat, swift-format or none"),

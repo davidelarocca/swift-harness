@@ -3273,6 +3273,36 @@ if grep -q 'uiTests.isolation' "$TEMPLATES/rules/tests.md" && grep -q 'rules/tes
   ok "isolation: setup offers the tests rule and the pitfalls template; the checkpoint names the pitfalls"
 else nok "isolation: setup offers the tests rule and the pitfalls template; the checkpoint names the pitfalls"; fi
 
+# ---------- branch scope contract (#72) ----------
+
+B="$(new_project scope)"
+git -C "$B" branch -M main
+set_config "$B" '{"verify":{"command":"scripts/verify.sh fast"},"scope":[{"branch":"ios-*","paths":["App-iOS/","Sources/AudioTools/"],"base":"main"}]}'
+git -C "$B" add -A && git -C "$B" commit -qm scope
+git -C "$B" switch -qc ios-port
+hook session-start.sh "$B" '{"source":"startup"}' >/dev/null
+scope() { local o c; o="$(hook scope-watch.sh "$B" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+mkdir -p "$B/App-iOS"
+echo 'let ios = 1' >"$B/App-iOS/App.swift"
+echo 'let tool = 2' >"$B/Sources/AudioTools/Tool.swift"
+expect_result "scope: edits inside the branch's paths say nothing" 0 '^exit=0$' "$(scope)"
+echo 'let app = 9' >"$B/Sources/App.swift"
+git -C "$B" add -A && git -C "$B" commit -qm "a shared file changed on the branch"
+out="$(scope)"
+expect_result "scope: a file outside the scope is reported, committed or not, and never blocks" 0 'branch ios-port changed 1 file\(s\) outside its scope \(App-iOS/, Sources/AudioTools/\) since it left main:' "$out" 'App-iOS/App\.swift'
+expect_result "scope: ... naming the file, to the user and to Claude" 0 '- Sources/App\.swift.*additionalContext' "exit=0
+$(printf '%s' "${out#*$'\n'}" | tr '\n' ' ')"
+expect_result "scope: the same files are not reported twice" 0 '^exit=0$' "$(scope)"
+printf 'A = 2\n' >"$B/Config.xcconfig"
+expect_result "scope: a new file outside (a shell edit, not committed) is reported again" 0 'changed 2 file\(s\) outside its scope' "$(scope)"
+git -C "$B" switch -q main
+echo '# main moves on' >>"$B/README.md"
+git -C "$B" commit -qam "work on main"
+git -C "$B" switch -q ios-port
+expect_result "scope: commits of the base not merged into the branch are counted" 0 'main has 1 commit\(s\) not merged into ios-port yet' "$(scope)"
+git -C "$B" switch -q main
+expect_result "scope: on a branch without a scope entry, nothing" 0 '^exit=0$' "$(scope)"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
