@@ -72,6 +72,7 @@ summary="$(
           check: .[0].check,
           blocked: map(select(.kind == "blocked")) | length,
           reported: map(select(.kind == "reported" or .kind == "observed")) | length,
+          unstable: map(select(.kind == "unstable")) | length,
           asked: map(select(.kind == "asked")) | length,
           fixed: map(select(.kind == "fixed")) | length,
           left_failing: map(select(.kind == "left-failing")) | length,
@@ -125,7 +126,7 @@ printf '%s\n' "$summary" | jq -r --arg label "$label" --arg root "$SH_ROOT" '
      "\(n("blocked")) block(s), \(n("reported")) report(s), \(n("asked")) question(s) before an edit; \(n("fixed")) fixed by Claude, \(n("left_failing")) left failing, \(n("approved")) approval(s) by you.",
      (if (.checks | length) > 0 then "Caught:" else empty end),
      (.checks[] | "- \(.check): " + ((part(.blocked; "blocked") + part(.reported; "reported") + part(.asked; "asked")
-        + part(.fixed; "fixed by Claude") + part(.left_failing; "left failing") + part(.approved; "approved by you")) | join(", "))
+        + part(.unstable; "unstable (failed once, passed on a rerun)") + part(.fixed; "fixed by Claude") + part(.left_failing; "left failing") + part(.approved; "approved by you")) | join(", "))
         + (if .last then ". Last: \(.last)" else "" end)),
      (if (.skipped | length) > 0 then "Not checked:" else empty end),
      (.skipped[] | "- \(.check): \(.times) time(s), \(.why | join("; "))")

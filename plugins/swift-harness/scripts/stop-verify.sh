@@ -296,6 +296,7 @@ fi
 
 out="$(mktemp -t swift-harness-verify.XXXXXX)"
 status=0
+unstable=""
 result=""
 if [ "$run_verify" = "true" ]; then
   ev_t0=$SECONDS
@@ -307,13 +308,30 @@ if [ "$run_verify" = "true" ]; then
     printf '\n(The verify command exited 0, but its result line says failed.)\n' >>"$out"
     status=1
   fi
+  # verify.retryFailed (#108): a failure is run once more; if that passes, the failure was
+  # unstable (a flaky test): recorded with the tests that failed, not blocking the turn.
+  if [ "$status" -ne 0 ] && [ "$(sh_cfg '.verify.retryFailed' 'false')" = "true" ]; then
+    flaky="$(grep -E '^Failing tests:|^[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*\(\)$|✘ Test |Test Case .* failed' "$out" | grep -v '^Failing tests:' |
+      sed -E 's/^[[:space:]]+//; s/^✘ Test ([^ ]+).*/\1/; s/^Test Case .-\[([^]]+)\]. failed.*/\1/' | head -5 | paste -sd, - | sed 's/,/, /g')"
+    out2="$(mktemp -t swift-harness-verify.XXXXXX)"
+    (cd "$SH_ROOT" && bash -c "$command_line") >"$out2" 2>&1
+    status2=$?
+    result2="$(sh_verify_result "$out2")"
+    if [ "$status2" -eq 0 ] && [ "${result2%%$'\t'*}" != failed ]; then
+      mv "$out2" "$out"; status=0; result="$result2"
+      unstable="failed once, passed on a rerun: unstable${flaky:+ ($flaky)}"
+      sh_catch "$command_line" unstable "${flaky:-the tests that failed are not named in the output}" "$((SECONDS - ev_t0))"
+    else
+      rm -f "$out2"
+    fi
+  fi
   if [ "$status" -ne 0 ]; then ev_ran "$command_line" failed "exit $status"
   elif [ -n "$result" ]; then
     IFS=$'\t' read -r e_outcome e_checked e_tested e_unchecked <<<"$result"
-    if [ "$e_outcome" = partial ]; then ev_ran "$command_line" partial "checked on $e_checked, tested on $e_tested; not checked on $e_unchecked"
-    else ev_ran "$command_line" passed "checked on $e_checked, tested on $e_tested"; fi
+    if [ "$e_outcome" = partial ]; then ev_ran "$command_line" partial "checked on $e_checked, tested on $e_tested; not checked on $e_unchecked${unstable:+; $unstable}"
+    else ev_ran "$command_line" passed "checked on $e_checked, tested on $e_tested${unstable:+; $unstable}"; fi
   else
-    ev_ran "$command_line" passed "exit 0; the command does not say which platforms it checked"
+    ev_ran "$command_line" passed "exit 0; the command does not say which platforms it checked${unstable:+; $unstable}"
   fi
 elif [ "$verify_enabled" = "true" ]; then
   not_checked="the build and tests were not checked"

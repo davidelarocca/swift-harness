@@ -65,7 +65,7 @@ fi
 
 unknown="$(jq -r '
   (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
-  (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs"])[] | "verify." + . else empty end),
+  (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
@@ -96,6 +96,7 @@ problems="$(jq -r '
     check(["verify", "enabled"]; type == "boolean"; "verify.enabled must be true or false"),
     check(["verify", "command"]; type == "string" and length > 0; "verify.command must be a non-empty string"),
     check(["verify", "maxAttempts"]; type == "number" and . >= 1 and floor == .; "verify.maxAttempts must be a whole number, 1 or more"),
+    check(["verify", "retryFailed"]; type == "boolean"; "verify.retryFailed must be true or false"),
     check(["verify", "inputs"]; type == "array" and all(.[]; type == "string"); "verify.inputs must be a list of paths")
   else empty end),
   check(["registry"]; type == "object"; "registry must be an object"),

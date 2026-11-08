@@ -3579,6 +3579,54 @@ git -C "$CK" add -A
 if ! FAKE_VERIFY_EXIT=1 git -C "$CK" commit -qm "breaks" 2>/dev/null && echo 'let app = 8' >"$CK/Sources/App.swift" && git -C "$CK" add -A && git -C "$CK" commit -qm "fixed" 2>/dev/null; then ok "check: as a git pre-commit hook, a failing check stops the commit and a passing one lets it through"
 else nok "check: as a git pre-commit hook, a failing check stops the commit and a passing one lets it through" "$(git -C "$CK" log --oneline -2)"; fi
 
+# ---------- timed commands and unstable tests (#104, #108) ----------
+
+TC="$TMP/timing"; mkdir -p "$TC"
+tc() { local o c; o="$("$SCRIPTS/time-commands.sh" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+before="$(snapshot "$TC")"
+out="$(tc --project "$TC" --budget 1 -- "sleep 0.3" "false" "sleep 0.4" "sleep 0.5")"
+expect_result "timing: each command runs twice, with median, worst time and exits" 0 '\| `sleep 0\.3` \| 0\.[0-9]+, 0\.[0-9]+ \| 0\.[0-9]+ \| 0\.[0-9]+ \| 0, 0 \|' "$out"
+expect_result "timing: fast takes the commands in order while their worst times fit the budget" 0 '^- fast: sleep 0\.3 && sleep 0\.4 \(worst 0\.[0-9]+ s\)$' "$out"
+expect_result "timing: a failing command is left out, and said" 0 '^- failed, left out: false' "$out"
+if [ "$(snapshot "$TC")" = "$before" ]; then ok "timing: the script itself writes nothing"
+else nok "timing: the script itself writes nothing"; fi
+if [ "$(tc --project "$TC" --runs 3 --json -- "true" | sed 1d | jq -c '[.runs, (.commands[0].times | length), .proposal.fast, .proposal.full]')" = '[3,3,["true"],["true"]]' ]; then ok "timing: --runs and --json"
+else nok "timing: --runs and --json" "$(tc --project "$TC" --runs 3 --json -- "true")"; fi
+expect_result "timing: no command is a usage error" 2 'usage' "$(tc --project "$TC")"
+printf 'import XCTest\nfinal class HardwareTests: XCTestCase {\n    func testDevice() throws { try XCTSkipUnless(ProcessInfo.processInfo.environment["DEMO_HARDWARE"] == "1") }\n}\n' >"$AD/Tests/AppTests/HardwareTests.swift"
+expect_result "timing: the audit lists tests gated by environment variables, to keep out of fast" 0 '\| tests \| observed \| Tests/AppTests/HardwareTests\.swift \| 1 test file\(s\) read environment variables \(DEMO_HARDWARE\): tests gated by them run only when set; keep them out of the fast command \|' "$(audit --project "$AD")"
+rm "$AD/Tests/AppTests/HardwareTests.swift"
+# verify.retryFailed: a failure that passes on a rerun is unstable, not a block.
+RF="$(new_project retry)"
+cat >"$RF/scripts/verify.sh" <<'EOF'
+#!/bin/bash
+n="$(cat "${RETRY_COUNT:?}" 2>/dev/null || echo 0)"; echo $((n + 1)) >"$RETRY_COUNT"
+if [ "$n" -lt "${RETRY_FAILS:-1}" ]; then printf 'Failing tests:\n\tAppTests.testFlaky()\n'; exit 1; fi
+echo ok
+EOF
+set_config "$RF" '{"verify":{"command":"scripts/verify.sh fast","retryFailed":true}}'
+git -C "$RF" add -A && git -C "$RF" commit -qm retry && approve "$RF" >/dev/null
+hook session-start.sh "$RF" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$RF/Sources/App.swift"
+out="$(RETRY_COUNT="$TMP/retry1" ev_stop "$RF")"
+if [[ "$out" == exit=0* ]] && [ "$(ev_of "$RF" '.checks[] | select(.name == "scripts/verify.sh fast") | .result')" = '"passed"' ] &&
+  ev_of "$RF" '.checks[] | select(.name == "scripts/verify.sh fast") | .detail' | grep -q 'failed once, passed on a rerun: unstable (AppTests.testFlaky())'; then
+  ok "retry: a failure that passes on the rerun is recorded as unstable, with the test, and does not block"
+else nok "retry: a failure that passes on the rerun is recorded as unstable, with the test, and does not block" "$out $(cat "$(state_of "$RF")/evidence.json")"; fi
+if tail -n 1 "$(state_of "$RF")/catches.jsonl" | jq -e '.kind == "unstable" and .what == "AppTests.testFlaky()"' >/dev/null; then ok "retry: the catch log has it as unstable"
+else nok "retry: the catch log has it as unstable" "$(tail -n 1 "$(state_of "$RF")/catches.jsonl")"; fi
+expect_result "retry: the report counts unstable failures" 0 'unstable \(failed once, passed on a rerun\)' "$(report --project "$RF" --all)"
+echo 'let app = 3' >"$RF/Sources/App.swift"
+expect_result "retry: a failure on both runs still blocks" 2 'Verification failed' "$(RETRY_COUNT="$TMP/retry2" RETRY_FAILS=2 ev_stop "$RF")"
+set_config "$RF" '{"verify":{"command":"scripts/verify.sh fast"}}'
+approve "$RF" >/dev/null
+echo 'let app = 4' >"$RF/Sources/App.swift"
+expect_result "retry: without retryFailed a failure blocks at once" 2 'Verification failed' "$(RETRY_COUNT="$TMP/retry3" ev_stop "$RF")"
+G5="$TMP/guest-retry"; mkdir -p "$G5"
+"$SCRIPTS/setup-guest.sh" --project "$G5" --fast 'swift build' --retry-failed >/dev/null
+if [ "$(jq -c '.verify.retryFailed' "$G5/.claude/swift-harness.json")" = true ]; then ok "retry: setup-guest --retry-failed sets verify.retryFailed"
+else nok "retry: setup-guest --retry-failed sets verify.retryFailed" "$(cat "$G5/.claude/swift-harness.json")"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

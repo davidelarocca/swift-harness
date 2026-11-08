@@ -321,6 +321,13 @@ if [ "$nui" -gt 0 ]; then
   fi
   row accessibility unknown "$(printf '%s\n' "$ui" | head -1 | sed 's#/[^/]*$#/#')" "which screens the UI tests open is not known without running them"
 fi
+# Tests gated by environment variables (#108): they run only when the variable is set, such
+# as hardware or network tests. The fast command should not set them.
+gated="$(while IFS= read -r f; do [ -n "$f" ] && grep -lE 'environment\[\"[A-Z][A-Z0-9_]+\"\]' "$root/$f" 2>/dev/null; done <<<"$swift_tests")"
+if [ -n "$gated" ]; then
+  vars="$(printf '%s\n' "$gated" | while IFS= read -r f; do grep -oE 'environment\[\"[A-Z][A-Z0-9_]+\"\]' "$f"; done | sed -E 's/.*\["([A-Z0-9_]+)"\]/\1/' | sort -u | head -8 | paste -sd, - | sed 's/,/, /g')"
+  row tests observed "$(printf '%s\n' "$gated" | head -1 | sed "s#^$root/##")" "$(printf '%s\n' "$gated" | grep -c .) test file(s) read environment variables ($vars): tests gated by them run only when set; keep them out of the fast command"
+fi
 nunit="$(printf '%s\n' "$swift_tests" | grep -c .)"
 [ "$nunit" -le "$nui" ] || row tests configured "test files" "$((nunit - nui)) Swift test file(s) besides the UI tests"
 
@@ -429,5 +436,5 @@ if $own_docs; then
   case "$dcmd" in *.py) dcmd="python3 $dcmd" ;; *.rb) dcmd="ruby $dcmd" ;; esac
   printf -- '- the project has its own docs check: run it instead of the harness'"'"'s, with --docs-command "%s" (docs.command)\n' "$dcmd"
 fi
-printf -- '- cost of each command: not measured. Timing runs them, which needs your approval.\n'
+printf -- '- cost of each command: not measured. Timing runs them, which needs your approval: time-commands.sh --project . -- "<fast>" "<full>"\n'
 printf '\nNext safe action: decide whether to time the commands above, then run setup guest with them.\n'

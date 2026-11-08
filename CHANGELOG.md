@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New: timed commands, opt-in tests left out, unstable tests named ([#104](https://github.com/davidelarocca/swift-harness/issues/104) timing step, [#108](https://github.com/davidelarocca/swift-harness/issues/108)).
+  - **Timing:** `scripts/time-commands.sh` times the candidate verify commands. It runs the project's code, so the setup skill asks the user first. Each command runs twice by default (cold, then warm), with its runs, median, worst time and exit codes. The script proposes the fast/full split under the end-of-turn budget (120 s): fast takes the commands in order while their worst times fit. A failing command is left out and named. The script writes nothing itself.
+  - **Opt-in tests:** the adoption audit lists the test files that read environment variables, tests that run only when one is set (hardware, live services), to keep them out of the fast command. On a real app it found 33 such files.
+  - **Unstable tests:** with `verify.retryFailed`, a failing verify command runs once more. A pass on the rerun is recorded as unstable, in the evidence (with the tests that failed the first time) and in the catch log (kind `unstable`, counted by the report). It does not block. A failure on both runs blocks as before. `setup-guest.sh --retry-failed` sets it.
 - New: one engine for every agent ([#106](https://github.com/davidelarocca/swift-harness/issues/106)). `scripts/check.sh` runs the end-of-turn check from a shell, a git hook or another agent such as Codex. It uses the same approval, the same evidence record and catch log, and the same rule of not re-running code that passed or failed before. Its session is named after the agent (`--agent`). `--json` gives the record and the exit code:
   - 0: the verify command passed on this code;
   - 1: a check failed, with the failure output;
