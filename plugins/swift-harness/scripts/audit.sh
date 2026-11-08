@@ -424,6 +424,10 @@ fi
 printf '\nProposed guest setup (not applied):\n'
 printf -- '- fast: %s%s\n- full: %s%s\n' "${fast:-not found: choose one}" "${fast_src:+ ($fast_src)}" "${full:-not found: choose one}" "${full_src:+ ($full_src)}"
 $mcp && printf -- '- the project builds or tests through an agent tool (XcodeBuildMCP): verify.sh needs a shell command, so check the one above\n'
-$own_docs && printf -- '- the project has its own docs check: use --no-docs\n'
+if $own_docs; then
+  dcmd="$(printf '%s' "$rows" | awk -F'\t' '$1 == "docs check" && $2 == "configured" { print $3; exit }')"
+  case "$dcmd" in *.py) dcmd="python3 $dcmd" ;; *.rb) dcmd="ruby $dcmd" ;; esac
+  printf -- '- the project has its own docs check: run it instead of the harness'"'"'s, with --docs-command "%s" (docs.command)\n' "$dcmd"
+fi
 printf -- '- cost of each command: not measured. Timing runs them, which needs your approval.\n'
 printf '\nNext safe action: decide whether to time the commands above, then run setup guest with them.\n'

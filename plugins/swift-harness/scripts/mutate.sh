@@ -113,7 +113,16 @@ copy_real="$(cd "$copy" && pwd -P)"
 run_check() {
   local c="$1" dir="$2" out code
   case "$c" in
-    registry | layout | docs) out="$("$here/$c.sh" check "$copy" 2>&1 </dev/null)" ;;
+    docs)
+      # The project's own docs check (#105) instead of docs.sh: its code, so with --verify only.
+      a_cmd="$(jq -r '.docs.command // empty | strings' "$copy/.claude/swift-harness.json" 2>/dev/null)"
+      if [ -z "$a_cmd" ]; then out="$("$here/docs.sh" check "$copy" 2>&1 </dev/null)"
+      elif [ "$verify" = true ]; then
+        out="$(cd "$copy" && bash -c "$a_cmd" 2>&1 </dev/null)"
+        [ $? -eq 0 ] || { printf '%s' 1 >"$dir/$c.exit"; printf '%s\n' "$out" | sed -E 's/:[0-9]+(:|$)/\1/g' | grep -v '^$' | sort -u >"$dir/$c.out"; return; }
+      else out="the project's docs check (docs.command) runs the project's code: needs --verify"; printf '%s' 2 >"$dir/$c.exit"; printf '%s\n' "$out" >"$dir/$c.out"; return
+      fi ;;
+    registry | layout) out="$("$here/$c.sh" check "$copy" 2>&1 </dev/null)" ;;
     security) out="$(CLAUDE_PLUGIN_DATA="$work/data" "$here/security.sh" check --project "$copy" 2>&1 </dev/null)" ;;
     contracts) out="$("$here/contracts.sh" "$copy" 2>&1 </dev/null)" ;;
   esac

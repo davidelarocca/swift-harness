@@ -32,7 +32,8 @@ sh_layout_on && run_layout=true
 run_security=false
 # Whenever a baseline exists: turning security.enabled off is itself a change to approve.
 [ -f "$state/security-approved" ] && run_security=true
-[ "$verify_enabled" = "true" ] || [ "$lint_gate" = "true" ] || [ "$lint_missing" = "true" ] || [ "$run_registry" = "true" ] || [ "$run_layout" = "true" ] || [ "$run_security" = "true" ] || exit 0
+docs_cmd="$(sh_docs_command)"
+[ -n "$docs_cmd" ] || [ "$verify_enabled" = "true" ] || [ "$lint_gate" = "true" ] || [ "$lint_missing" = "true" ] || [ "$run_registry" = "true" ] || [ "$run_layout" = "true" ] || [ "$run_security" = "true" ] || exit 0
 
 command_line="$(sh_cfg '.verify.command' 'scripts/verify.sh fast')"
 max_attempts="$(sh_cfg '.verify.maxAttempts' '3')"
@@ -103,8 +104,11 @@ ev_history() { # $1 the record as JSON
 }
 # The checks of the last record on this same code, when this turn ran nothing new.
 ev_keep() {
-  [ "$(jq -r '.code // empty' "$state/evidence.json" 2>/dev/null)" = "$fp" ] || return 0
-  jq -r '.checks[] | [.name, .result, (.detail // ""), (.seconds // "" | tostring)] | @tsv' "$state/evidence.json" 2>/dev/null >>"$ev_lines"
+  if [ "$(jq -r '.code // empty' "$state/evidence.json" 2>/dev/null)" = "$fp" ]; then
+    jq -r '.checks[] | select(.name | startswith("docs: ") | not) | [.name, .result, (.detail // ""), (.seconds // "" | tostring)] | @tsv' "$state/evidence.json" 2>/dev/null >>"$ev_lines"
+  fi
+  # The docs adapter's result of this turn, whatever the code (#105).
+  [ -z "${adapter_line:-}" ] || printf '%s\n' "$adapter_line" >>"$ev_lines"
 }
 # "name (detail), ..." of the checks that did not run this turn, or nothing.
 ev_missing() {
@@ -134,6 +138,67 @@ fi
 [ -f "$SH_ROOT/$SH_CONTRACT" ] && [ "$run_contracts" != "true" ] && ev "architecture contracts" "not run" "they run only with the approved verify command"
 # Under lintBlocking a missing SwiftLint fails the check: the edits could not be linted (#17).
 [ "$lint_missing" = "true" ] && ev "SwiftLint (lintBlocking)" failed "swiftlint is not installed, so the edited files were not linted"
+
+# The project's own docs check, as an adapter (#105). It runs when the docs changed since its
+# last run, before the early exits below: editing docs does not change the build fingerprint.
+# Its problems already there at session start do not block; new ones block once per set,
+# unless docs.blocking is false, then they are recorded only.
+adapter_line=""
+if [ -n "$docs_cmd" ]; then
+  adapter_name="docs: $docs_cmd"
+  if ! sh_verify_approved "$command_line" "$state"; then
+    adapter_line="$adapter_name	not run	the command is not approved: /swift-harness:approve-verify"
+  else
+    dfp="$(sh_docs_fingerprint)"
+    if [ "$dfp" = "$(sed -n 1p "$sess/docs-adapter" 2>/dev/null)" ]; then
+      adapter_line="$(sed -n 2p "$sess/docs-adapter")"
+    else
+      a_t0=$SECONDS
+      a_out="$(cd "$SH_ROOT" && bash -c "$docs_cmd" 2>&1 </dev/null)"
+      a_code=$?
+      a_secs=$((SECONDS - a_t0))
+      a_new=""
+      [ -f "$sess/docs-start" ] || : >"$sess/docs-start"
+      if [ "$a_code" -gt 1 ]; then
+        # Exit 1 means problems; another code means the check could not run (a crash, a missing
+        # tool): not checked, and the user is told, never taken for problems already there.
+        adapter_line="$adapter_name	not checked	exit $a_code: $(printf '%s\n' "$a_out" | grep -m1 . | cut -c1-120)	$a_secs"
+      elif [ "$a_code" -eq 0 ]; then
+        adapter_line="$adapter_name	passed	exit 0	$a_secs"
+        if [ -s "$sess/docs-adapter-blocked" ]; then sh_catch "$adapter_name" fixed "passes again" "$a_secs"; rm -f "$sess/docs-adapter-blocked"; fi
+      else
+        a_new="$(printf '%s\n' "$a_out" | sh_adapter_keys | LC_ALL=C comm -23 - "$sess/docs-start")"
+        a_n="$(printf '%s\n' "$a_new" | grep -c .)"
+        if [ -z "$a_new" ]; then
+          adapter_line="$adapter_name	failed	exit $a_code, only problems already there at session start	$a_secs"
+          # The new problems that blocked are gone: fixed, even though old ones remain.
+          if [ -s "$sess/docs-adapter-blocked" ]; then sh_catch "$adapter_name" fixed "no new problem left" "$a_secs"; rm -f "$sess/docs-adapter-blocked"; fi
+        else adapter_line="$adapter_name	failed	exit $a_code, $a_n new problem line(s)	$a_secs"; fi
+      fi
+      printf '%s\n%s\n' "$dfp" "$adapter_line" >"$sess/docs-adapter"
+      if [ -n "$a_new" ]; then
+        a_key="$(printf '%s' "$a_new" | shasum | cut -d' ' -f1)"
+        if ! sh_docs_blocking; then
+          sh_catch "$adapter_name" observed "$a_n new problem line(s); not blocking (docs.blocking is false)" "$a_secs"
+        elif [ "$a_key" = "$(cat "$sess/docs-adapter-blocked" 2>/dev/null)" ]; then
+          sh_catch "$adapter_name" left-failing "the same new problems; Claude stopped without fixing them" "$a_secs"
+        else
+          printf '%s' "$a_key" >"$sess/docs-adapter-blocked"
+          sh_catch "$adapter_name" blocked "$a_n new problem line(s)" "$a_secs"
+          printf '%s\n' "$adapter_line" >>"$ev_lines"
+          ev_write failed "the project's docs check found new problems"
+          {
+            printf "The project's docs check (%s) found problems that were not there when the session started:\n\n" "$docs_cmd"
+            printf '%s\n' "$a_out" | tail -n 40
+            printf '\nFix the docs, or the reference, then finish. If it is intended, say so in one line and stop again without editing: the check does not block twice on the same problems.\n'
+          } >&2
+          exit 2
+        fi
+      fi
+    fi
+  fi
+  printf '%s\n' "$adapter_line" >>"$ev_lines"
+fi
 
 if [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ]; then
   : >"$ev_lines"; ev_keep; ev_write unchanged "the code is the one that passed before: nothing ran again"

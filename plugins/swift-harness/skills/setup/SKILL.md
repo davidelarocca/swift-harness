@@ -34,10 +34,10 @@ Use it when the arguments (`$ARGUMENTS`) say `guest`, or when the project alread
 2. Run:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/scripts/setup-guest.sh" --project . --fast "<fast command>" --full "<full command>" [--no-docs]
+   "${CLAUDE_PLUGIN_ROOT}/scripts/setup-guest.sh" --project . --fast "<fast command>" --full "<full command>" [--docs-command "<its docs check>" | --no-docs]
    ```
 
-   Add `--no-docs` when the project's own commands already check its docs. The script writes `.claude/swift-harness.json` (`"guest": true`) and `scripts/verify.sh`, and nothing else. It leaves the formatter and SwiftLint off unless the project has their config. It refuses if either file exists: then show the user the existing file and stop.
+   When the project has its own docs check, pass it with `--docs-command` (the audit proposes it): the harness runs it instead of its own, records it, and blocks only on problems new in a session. Use `--no-docs` only to turn docs checking off. The script writes `.claude/swift-harness.json` (`"guest": true`) and `scripts/verify.sh`, and nothing else. It leaves the formatter and SwiftLint off unless the project has their config. It refuses if either file exists: then show the user the existing file and stop.
 3. Do not create or edit `CLAUDE.md`, `AGENTS.md`, `.claude/rules/`, `docs/` or any template. Do not commit.
 4. Finish: show `git status --short` (only the two new files), say that the user approves the verify command with `/swift-harness:approve-verify` before it runs, and that the plugin can be loaded with `--plugin-dir` in one worktree only.
 

@@ -32,7 +32,7 @@ TEMPLATES="$PLUGIN/skills/setup/templates"
 WORK="${SMOKE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-smoke.XXXXXX")}"
 WORK="$(mkdir -p "$WORK" && cd "$WORK" && pwd -P)"
 
-ALL_SCENARIOS="guard broken-config stop-fails report-no-token legacy-violation clean-lint formatter-labels lint-missing verify-unapproved approve-verify doctor contract contract-explicit registry registry-nodocs registry-swift-only security docs-rename docs-rename-only verify-partial scope guest"
+ALL_SCENARIOS="guard broken-config stop-fails report-no-token legacy-violation clean-lint formatter-labels lint-missing verify-unapproved approve-verify doctor contract contract-explicit registry registry-nodocs registry-swift-only security docs-rename docs-rename-only verify-partial scope guest docs-adapter docs-adapter-only"
 # Reuse of UI components (the skills, not the hooks), each with a baseline without the
 # plugin. Not in the default run: about $2 for the group. Run with `run.sh reuse`.
 REUSE_SCENARIOS="reuse-toast reuse-toast-bare reuse-toast-nocaller reuse-toast-nocaller-bare reuse-toast-undo reuse-toast-undo-bare"
@@ -479,6 +479,37 @@ check_docs_rename_only() {
   else
     expect "docs left stale: the user was told at the end" has_hook Stop 0 'still in the docs'
   fi
+}
+# Adapter (#105): the project's own docs check replaces the harness's. It reports a path in
+# backticks that does not exist; the rename leaves two of them stale.
+ADAPTER_SCRIPT="cp \"$HERE/check-docs-fixture.sh\" scripts/check-docs.sh"
+scenario_docs_adapter() {
+  CONFIG="{$BASE_CONFIG,\"lintBlocking\":false,\"docs\":{\"command\":\"scripts/check-docs.sh\"}}"
+  TASK='Rename Sources/App/Greeting.swift to Sources/App/Greetings.swift with git mv. Keep its content.'
+  SETUP="$FOUR_SPACES; $DOCS_SETUP; $ADAPTER_SCRIPT"
+  EXTRA_TOOLS="Bash(git mv:*)"
+}
+check_docs_adapter() {
+  expect "file renamed" file_has Sources/App/Greetings.swift 'func greeting'
+  expect "the project's docs check ran, not the harness's" not has_hook Stop 2 'Docs references broken in this session'
+  expect "the docs name the new file" docs_name_new_file
+  expect "last Stop passes" last_stop_passes
+  note "Stop blocked with the project's docs check" has_hook Stop 2 "The project's docs check"
+}
+scenario_docs_adapter_only() {
+  scenario_docs_adapter
+  TASK='Rename Sources/App/Greeting.swift to Sources/App/Greetings.swift with git mv. Keep its content. Only rename that file: do not edit any other file.'
+}
+check_docs_adapter_only() {
+  expect "file renamed" file_has Sources/App/Greetings.swift 'func greeting'
+  expect "Stop blocked with the project's own docs check and its output" has_hook Stop 2 "project.s docs check .scripts/check-docs.sh. found problems(.|\n)*missing Sources/App/Greeting.swift"
+  expect "the harness's own docs check did not run" not has_hook Stop 2 'Docs references broken in this session'
+  expect "the block is in the catch log" catch_blocked_adapter
+}
+catch_blocked_adapter() {
+  local hash
+  hash="$(printf '%s' "$(cd "$D" && pwd -P)" | shasum | cut -c1-16)"
+  jq -se 'any(.[]; .kind == "blocked" and (.check | startswith("docs: ")))' "$PLUGIN_DATA/state/$hash/catches.jsonl" >/dev/null 2>&1
 }
 docs_name_new_file() { file_has CLAUDE.md 'Sources/App/Greetings\.swift' && file_has docs/ARCHITECTURE.md 'Sources/App/Greetings\.swift' && not file_has CLAUDE.md 'Greeting\.swift`'; }
 

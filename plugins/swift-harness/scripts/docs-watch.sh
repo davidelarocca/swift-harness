@@ -10,6 +10,8 @@
 . "$(dirname "$0")/lib.sh"
 sh_init || exit 0
 sh_docs_on || exit 0
+# The project's own docs check runs instead, from stop-verify.sh (#105).
+[ -z "$(sh_docs_command)" ] || exit 0
 state="$(sh_state_dir)" || exit 0
 sess="$(sh_session_dir "$state")" || exit 0
 

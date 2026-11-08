@@ -71,7 +71,7 @@ unknown="$(jq -r '
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
   (if (.snapshots | type) == "object" then (.snapshots | keys - ["path"])[] | "snapshots." + . else empty end),
   (if (.security | type) == "object" then (.security | keys - ["enabled"])[] | "security." + . else empty end),
-  (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget"])[] | "docs." + . else empty end),
+  (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget", "command", "blocking"])[] | "docs." + . else empty end),
   (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end)
 ' "$SH_CONFIG" | paste -sd, - | sed 's/,/, /g')"
 if [ -n "$unknown" ]; then
@@ -128,7 +128,9 @@ problems="$(jq -r '
     check(["docs", "paths"]; type == "array" and all(.[]; type == "string"); "docs.paths must be a list of paths"),
     check(["docs", "history"]; type == "array" and all(.[]; type == "string"); "docs.history must be a list of paths"),
     check(["docs", "ignore"]; type == "array" and all(.[]; type == "string"); "docs.ignore must be a list of paths"),
-    check(["docs", "budget"]; type == "number" and . > 0; "docs.budget must be a number of bytes")
+    check(["docs", "budget"]; type == "number" and . > 0; "docs.budget must be a number of bytes"),
+    check(["docs", "command"]; type == "string" and length > 0; "docs.command must be a command line"),
+    check(["docs", "blocking"]; type == "boolean"; "docs.blocking must be true or false")
   else empty end),
   check(["performance"]; type == "object"; "performance must be an object"),
   (if (.performance | type) == "object" then
@@ -433,9 +435,13 @@ else
   esac
 fi
 
-# Docs references (#70). Reads Markdown only.
+# Docs references (#70). Reads Markdown only. With docs.command, the project's own check (#105).
 if ! sh_docs_on; then
   row INFO "Docs references" "off (docs.enabled is false)"
+elif [ -n "$(sh_docs_command)" ]; then
+  mode="new problems block the end of a turn"; sh_docs_blocking || mode="observed: recorded, never blocking (docs.blocking is false)"
+  if sh_verify_approved "$command_line" "$state" 2>/dev/null; then row PASS "Docs references" "the project's own check '$(sh_docs_command)' runs instead of the harness's; $mode"
+  else row WARN "Docs references" "the project's own check '$(sh_docs_command)' is set, but not approved: it does not run. Fix: /swift-harness:approve-verify"; fi
 else
   docs_out="$("$here/docs.sh" check "$SH_ROOT" 2>&1)"
   if [ $? -eq 0 ]; then
