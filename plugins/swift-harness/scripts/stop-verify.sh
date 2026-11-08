@@ -54,15 +54,77 @@ checks=""
 { [ "$lint_gate" = "true" ] || [ "$lint_missing" = "true" ]; } && checks="${checks:+$checks + }SwiftLint (lintBlocking)"
 
 fp="$(sh_identity)"
-[ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ] && exit 0
-[ "$fp" = "$(cat "$sess/baseline" 2>/dev/null)" ] && exit 0
+
+# Evidence summary (#81): what this turn checked, from facts this hook holds, not from Claude's
+# wording. One "name<TAB>result<TAB>detail" line per check; written as JSON at every exit to
+# the session folder (the checkpoint reads it) and to the project folder (doctor, the evals).
+ev_lines="$sess/evidence.lines"
+: >"$ev_lines"
+ev() { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >>"$ev_lines"; }
+ev_write() { # $1 outcome, $2 note
+  local json
+  json="$(jq -n --arg outcome "$1" --arg note "${2:-}" --arg code "$fp" --arg session "$(sh_session_id)" \
+    --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile lines "$ev_lines" '
+    {version: 1, time: $time, session: $session, code: $code, outcome: $outcome}
+    + (if $note == "" then {} else {note: $note} end)
+    + {checks: ($lines | split("\n") | map(select(length > 0) | split("\t")
+        | {name: .[0], result: .[1]} + (if (.[2] // "") == "" then {} else {detail: .[2]} end)))}')" || return 0
+  printf '%s\n' "$json" >"$sess/evidence.json.tmp" && mv "$sess/evidence.json.tmp" "$sess/evidence.json"
+  printf '%s\n' "$json" >"$state/evidence.json.tmp" && mv "$state/evidence.json.tmp" "$state/evidence.json"
+}
+# The checks of the last record on this same code, when this turn ran nothing new.
+ev_keep() {
+  [ "$(jq -r '.code // empty' "$state/evidence.json" 2>/dev/null)" = "$fp" ] || return 0
+  jq -r '.checks[] | [.name, .result, (.detail // "")] | @tsv' "$state/evidence.json" 2>/dev/null >>"$ev_lines"
+}
+# "name (detail), ..." of the checks that did not run this turn, or nothing.
+ev_missing() {
+  awk -F'\t' '$2 == "not run" || $2 == "not checked" { printf "%s%s%s", (n++ ? ", " : ""), $1, ($3 != "" ? " (" $3 ")" : "") }' "$ev_lines"
+}
+# "name, ..." of the checks that passed this turn.
+ev_passed() { awk -F'\t' '$2 == "passed" || $2 == "partial" { printf "%s%s", (n++ ? ", " : ""), $1 }' "$ev_lines"; }
+
+# Checks that cannot run this turn, from the settings and approvals alone.
+if [ "$verify_enabled" != "true" ]; then
+  ev "$command_line" "not run" "verify.enabled is false in .claude/swift-harness.json"
+elif [ "$run_verify" != "true" ]; then
+  ev "$command_line" "not run" "the verify command is not approved: /swift-harness:approve-verify"
+fi
+[ -f "$SH_ROOT/$SH_CONTRACT" ] && [ "$run_contracts" != "true" ] && ev "architecture contracts" "not run" "they run only with the approved verify command"
+[ "$lint_missing" = "true" ] && ev "SwiftLint (lintBlocking)" "not run" "swiftlint is not installed"
+
+if [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ]; then
+  : >"$ev_lines"; ev_keep; ev_write unchanged "the code is the one that passed before: nothing ran again"
+  exit 0
+fi
+if [ "$fp" = "$(cat "$sess/baseline" 2>/dev/null)" ]; then
+  ev_write unchanged "no build input changed in this session: nothing ran, and the starting code is not verified"
+  exit 0
+fi
 
 failed_fp="$(cat "$state/failed" 2>/dev/null)"
 failures="$(cat "$sess/failures" 2>/dev/null)"
 failures="${failures:-0}"
 
+# The user is told what was not checked (#81) with any message they get; told is set once said.
+told=false
 warn_user() {
-  jq -n --arg msg "$1" '{systemMessage: $msg}'
+  local msg="$1" missing
+  missing="$(ev_missing)"
+  [ -z "$missing" ] || msg="$msg Not checked this turn: $missing."
+  told=true
+  printf '%s%s' "$fp" "$missing" >"$sess/missing-told"
+  jq -n --arg msg "$msg" '{systemMessage: $msg}'
+}
+# With no other message: tell the user once per code what was not checked, if anything.
+notify_missing() {
+  local missing passed
+  missing="$(ev_missing)"
+  [ -n "$missing" ] && [ "$told" = false ] || return 0
+  [ "$fp$missing" = "$(cat "$sess/missing-told" 2>/dev/null)" ] && return 0
+  printf '%s%s' "$fp" "$missing" >"$sess/missing-told"
+  passed="$(ev_passed)"
+  jq -n --arg msg "swift-harness: ${passed:+checked this turn: $passed; }not checked: $missing." '{systemMessage: $msg}'
 }
 
 # Tell the user once per code state that the verify command did not run.
@@ -74,12 +136,16 @@ warn_unapproved() {
 }
 
 if [ -z "$checks" ]; then
+  ev_write not-verified "no check could run"
   warn_unapproved
   exit 0
 fi
 
 # The same checks already passed on this code without the verify command (SH130-01).
-[ "$(printf '%s\n%s' "$fp" "$checks")" = "$(cat "$state/checked" 2>/dev/null)" ] && exit 0
+if [ "$(printf '%s\n%s' "$fp" "$checks")" = "$(cat "$state/checked" 2>/dev/null)" ]; then
+  : >"$ev_lines"; ev_keep; ev_write unchanged "the same checks passed on this code before: nothing ran again"
+  exit 0
+fi
 
 # Re-lint the files that failed SwiftLint under lintBlocking. Prints the problems, keeps
 # only the files that still fail in the pending list, and returns 1 if any does.
@@ -110,6 +176,7 @@ recheck_lint() {
 # Nothing changed since the last failed run: never re-run on the same code.
 # If this stop follows a block, Claude chose to stop: tell the user.
 if [ "$fp" = "$failed_fp" ]; then
+  : >"$ev_lines"; ev_keep; ev_write failed "the code is the one that failed before: nothing ran again"
   if [ "$(sh_in '.stop_hook_active')" = "true" ]; then
     printf '0' > "$sess/failures"
     warn_user "swift-harness: '$checks' is still failing. Claude stopped without fixing it."
@@ -129,6 +196,14 @@ if [ "$run_verify" = "true" ]; then
     printf '\n(The verify command exited 0, but its result line says failed.)\n' >>"$out"
     status=1
   fi
+  if [ "$status" -ne 0 ]; then ev "$command_line" failed "exit $status"
+  elif [ -n "$result" ]; then
+    IFS=$'\t' read -r e_outcome e_checked e_tested e_unchecked <<<"$result"
+    if [ "$e_outcome" = partial ]; then ev "$command_line" partial "checked on $e_checked, tested on $e_tested; not checked on $e_unchecked"
+    else ev "$command_line" passed "checked on $e_checked, tested on $e_tested"; fi
+  else
+    ev "$command_line" passed "exit 0; the command does not say which platforms it checked"
+  fi
 elif [ "$verify_enabled" = "true" ]; then
   not_checked="the build and tests were not checked"
   [ -f "$SH_ROOT/$SH_CONTRACT" ] && not_checked="the build, tests and architecture contracts were not checked"
@@ -139,33 +214,48 @@ if [ "$lint_missing" = "true" ]; then
   [ "$status" -ne 0 ] || status=1
 elif [ "$lint_gate" = "true" ]; then
   printf '\n== SwiftLint (lintBlocking) ==\n' >>"$out"
-  recheck_lint >>"$out" || { [ "$status" -ne 0 ] || status=1; }
+  if recheck_lint >>"$out"; then ev "SwiftLint (lintBlocking)" passed "the files that failed after an edit"
+  else ev "SwiftLint (lintBlocking)" failed "files still failing: $(grep -c . "$state/lint-pending")"; [ "$status" -ne 0 ] || status=1; fi
 fi
 if [ "$run_contracts" = "true" ]; then
   printf '\n== Architecture contracts ==\n' >>"$out"
-  "$(dirname "$0")/contracts.sh" "$SH_ROOT" >>"$out" 2>&1 || { [ "$status" -ne 0 ] || status=1; }
+  if "$(dirname "$0")/contracts.sh" "$SH_ROOT" >>"$out" 2>&1; then ev "architecture contracts" passed "$SH_CONTRACT"
+  else ev "architecture contracts" failed "$SH_CONTRACT"; [ "$status" -ne 0 ] || status=1; fi
 fi
 
 if [ "$run_registry" = "true" ]; then
   registry_out="$("$(dirname "$0")/registry.sh" check "$SH_ROOT" 2>&1)"
   # Exit 3: a registry in another format is reported by doctor, never blocks.
-  if [ $? -eq 1 ]; then
-    printf '\n== Component registry ==\n%s\n' "$registry_out" >>"$out"
-    [ "$status" -ne 0 ] || status=1
-  fi
+  case $? in
+    0) ev "component registry" passed ;;
+    1)
+      ev "component registry" failed "$(grep -c '^- ' <<<"$registry_out") problem(s)"
+      printf '\n== Component registry ==\n%s\n' "$registry_out" >>"$out"
+      [ "$status" -ne 0 ] || status=1
+      ;;
+    *) ev "component registry" "not checked" "the registry has no Components table with Name and File columns" ;;
+  esac
 fi
 
 if [ "$run_layout" = "true" ]; then
   layout_out="$("$(dirname "$0")/layout.sh" check "$SH_ROOT" 2>&1)"
   # Exit 3: a contract in another format is reported by doctor, never blocks.
-  if [ $? -eq 1 ]; then
-    printf '\n== Layout contract ==\n%s\n' "$layout_out" >>"$out"
-    [ "$status" -ne 0 ] || status=1
-  fi
+  case $? in
+    0) ev "layout contract" passed "the contract's rows; the sizes are measured by the tests" ;;
+    1)
+      ev "layout contract" failed "$(grep -c '^- ' <<<"$layout_out") problem(s)"
+      printf '\n== Layout contract ==\n%s\n' "$layout_out" >>"$out"
+      [ "$status" -ne 0 ] || status=1
+      ;;
+    *) ev "layout contract" "not checked" "the contract has no Screens table with View, File and Min columns" ;;
+  esac
 fi
 
 if [ "$run_security" = "true" ]; then
-  if ! security_out="$("$(dirname "$0")/security.sh" check --project "$SH_ROOT" 2>&1)"; then
+  if security_out="$("$(dirname "$0")/security.sh" check --project "$SH_ROOT" 2>&1)"; then
+    ev "security settings" passed "unchanged since the approved state"
+  else
+    ev "security settings" failed "changed since the approved state"
     printf '\n== Security settings ==\n%s\n' "$security_out" >>"$out"
     [ "$status" -ne 0 ] || status=1
   fi
@@ -188,6 +278,9 @@ if [ "$status" -eq 0 ]; then
         printf '0' > "$sess/failures"
         rm -f "$state/failed" "$out"
         msg="'$command_line' passed on this code, but $r_unchecked was not checked (PARTIAL): only $r_checked is verified. Do not report $r_unchecked as verified."
+        ev_write partial
+        missing="$(ev_missing)"
+        [ -z "$missing" ] || msg="$msg Not checked this turn either: $missing."
         jq -n --arg user "swift-harness: $msg" --arg claude "swift-harness: $msg Nothing to fix for this; say so in your answer if it matters." \
           '{systemMessage: $user, hookSpecificOutput: {hookEventName: "Stop", additionalContext: $claude}}'
         exit 0
@@ -198,12 +291,16 @@ if [ "$status" -eq 0 ]; then
   fi
   printf '0' > "$sess/failures"
   rm -f "$state/failed" "$out"
+  if [ "$run_verify" = "true" ]; then ev_write passed
+  else ev_write checked "the checks that ran passed; the build and tests did not run"; fi
   warn_unapproved
+  notify_missing
   exit 0
 fi
 
 failures=$((failures + 1))
 printf '%s' "$fp" > "$state/failed"
+ev_write failed
 
 if [ "$failures" -ge "$max_attempts" ]; then
   printf '0' > "$sess/failures"
@@ -216,6 +313,8 @@ printf '%s' "$failures" > "$sess/failures"
 {
   printf 'Verification failed (attempt %s of %s): %s\n\n' "$failures" "$max_attempts" "$checks"
   tail -n 60 "$out"
+  missing="$(ev_missing)"
+  [ -z "$missing" ] || printf '\nNot checked this turn: %s. Do not report these as verified.\n' "$missing"
   printf '\nFix the failures caused by your changes, then finish. If a failure is unrelated to your work, or you stopped on purpose to ask the user something, say so in one line and stop again without editing: the check will not block twice on the same code.\n'
 } >&2
 rm -f "$out"

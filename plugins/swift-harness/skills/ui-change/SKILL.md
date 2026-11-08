@@ -51,6 +51,8 @@ For an entity shown in a new place, the default is the whole: it opens its desti
 - Build. For non-trivial changes, delegate a review to the `ui-reviewer` agent with the list of changed files. When the project has `Screenshot.capture` tests, run them first so the images show the change (`scripts/verify.sh fast` covers a package test target, `full` an Xcode one); for a new main screen, add its capture next to its layout test.
 - If the component is used in several places, check each caller listed in the registry.
 
+- In the summary to the user, mark each claim about the result with its evidence: *measured* (a check or test that ran on this code: name it), *seen* (a screenshot or the accessibility tree you looked at: name the image or the element), or *inferred* (from reading the code). "The pill fits at 320 pt" is measured only if a layout test at 320 pt passed. Anything the end-of-turn check did not run (it tells the user what) is not measured. Without evidence, say inferred, or that it was not checked.
+
 ## 5. Record
 
 - Update `docs/COMPONENT_REGISTRY.md` in the same change: new entry, new variant, new callers, or a move to "Retired".
