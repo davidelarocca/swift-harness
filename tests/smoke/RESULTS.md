@@ -2,6 +2,10 @@
 
 Newest first. Record the plugin version, the tool versions, the invariants result and anything notable in Claude's behaviour.
 
+## 2026-11-08, unstable tests (#108, branch `feat/timing-104-108`)
+
+Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The Stop hook can rerun a failing verify command (`verify.retryFailed`, off by default). Targeted run with it off: `stop-fails`, `verify-partial`, `verify-unapproved`. All invariants pass, $0.38. The rerun itself is covered by `tests/run.sh`, with a verify command that fails once. n=1 per scenario.
+
 ## 2026-11-08, the project's own docs check as an adapter (#105, branch `feat/adapters-105`)
 
 Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The Stop hook runs `docs.command`; `docs-watch` and session start change. Two new scenarios in the default run, `docs-adapter` and `docs-adapter-only`.

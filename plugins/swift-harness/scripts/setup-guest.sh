@@ -4,7 +4,9 @@
 # the commands; never by a hook.
 #
 #   setup-guest.sh --fast "<command>" [--full "<command>"] [--project DIR] [--no-docs | --docs-command "<command>"]
-#                  [--owned PATH]...
+#                  [--owned PATH]... [--retry-failed]
+# --retry-failed sets verify.retryFailed (#108): a failing verify command runs once more, and a
+# pass on the rerun is recorded as unstable instead of blocking.
 #
 # Writes .claude/swift-harness.json ("guest": true) and scripts/verify.sh, which runs the
 # project's own commands: the fast one at the end of each turn, the full one (or the fast one)
@@ -32,6 +34,7 @@ full=""
 docs=true
 docs_command=""
 owned=""
+retry=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) [ $# -ge 2 ] && [ -n "$2" ] || usage; fast="$2"; shift 2 ;;
@@ -40,6 +43,7 @@ while [ $# -gt 0 ]; do
     --no-docs) docs=false; shift ;;
     --docs-command) [ $# -ge 2 ] && [ -n "$2" ] || usage; docs_command="$2"; shift 2 ;;
     --owned) [ $# -ge 2 ] && [ -n "$2" ] || usage; owned="$owned$2"$'\n'; shift 2 ;;
+    --retry-failed) retry=true; shift ;;
     *) usage ;;
   esac
 done
@@ -81,8 +85,8 @@ protect="$(for p in CLAUDE.md .claude/CLAUDE.md AGENTS.md; do [ -f "$root/$p" ] 
   done)"
 mkdir -p "$root/.claude" "$root/$sdir" || exit 1
 jq -n --arg format "$format" --arg lint "$lint" --argjson docs "$docs" --arg cmd "$sdir/verify.sh fast" --arg dcmd "$docs_command" \
-  --arg protect "$protect" '
-  {guest: true, format: $format, lint: $lint, verify: {command: $cmd, maxAttempts: 3}}
+  --arg protect "$protect" --argjson retry "$retry" '
+  {guest: true, format: $format, lint: $lint, verify: ({command: $cmd, maxAttempts: 3} + (if $retry then {retryFailed: true} else {} end))}
   + (($protect | split("\n") | map(select(length > 0))) as $p | if ($p | length) > 0 then {protectedPaths: $p} else {} end)
   + (if $docs then (if $dcmd == "" then {} else {docs: {command: $dcmd}} end) else {docs: {enabled: false}} end)' >"$config" || exit 1
 

@@ -310,7 +310,7 @@ They start as warnings, which double as the migration to-do list. Switch a rule 
 
 A quality tool has to be checked itself. Every release goes through:
 
-- **718 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 713 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
+- **731 automated checks** of the hooks, templates and skills (`tests/run.sh`) on a Mac, and 726 in CI with macOS `/bin/bash` 3.2: there the performance budget comparisons are replaced by one not-compared check, because CI virtual machines count no instructions. Plus ShellCheck, a build of the Swift reference files, and a check-sensitivity run with real builds (`tests/mutate-fixture.sh`): every planted defect is caught by the check it targets. Method and results, on the fixtures and on a real app: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md). The drift score over four years of an open-source SwiftUI app: [tests/evals/drift.md](tests/evals/drift.md).
 - **A smoke test in real Claude Code sessions** (`tests/smoke/`): 23 scenarios for the hooks (snapshots, security settings, docs and performance budgets included), 6 for reusing UI components, 3 for product coherence, 6 for window sizes and 6 for screenshot review (some of them baselines without the plugin), with their invariants checked automatically. Every run is recorded with its cost ([results](tests/smoke/RESULTS.md)).
 
 What Claude did in those sessions:
@@ -396,6 +396,7 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `docs.enabled` | check the docs references at the end of the turn | `true` |
 | `docs.command` | the project's own docs check, run instead of the harness's (an adapter): at the end of a turn when the docs changed, part of the verify approval. Exit 1 means problems, another non-zero exit means it could not run | none |
 | `docs.blocking` | `false` records the project's docs check (evidence, catch log) without ever blocking | `true` |
+| `verify.retryFailed` | a failing verify command runs once more; a pass on the rerun is recorded as unstable (evidence and catch log, with the tests that failed) instead of blocking | `false` |
 | `docs.paths` | the Markdown files and folders checked | `["CLAUDE.md", "AGENTS.md", "docs"]` |
 | `docs.history` | records of the past, where paths that no longer exist are expected (links are still checked) | `["docs/adr", "docs/audit", "docs/archive", "docs/HISTORY.md", "CHANGELOG.md"]` |
 | `docs.ignore` | folders named before they exist | the snapshots folder and `docs/audit` |

@@ -22,7 +22,13 @@ Use it when the arguments (`$ARGUMENTS`) say `audit`, or before choosing between
 Show the table as printed, then in a few lines:
 - what the project already has, and that it is kept: its agent rules, its commands, its own checks;
 - what is *unknown* and why, such as an unreadable file, or the screens UI tests open, which only running them shows;
-- the proposed guest setup, and that the cost of each command is not measured. Timing them runs the project's code: ask the user before doing it, and only then run the commands, one at a time, with `time`.
+- the proposed guest setup, and that the cost of each command is not measured. Timing them runs the project's code: ask the user before doing it. Only with their yes, run:
+
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/time-commands.sh" --project . -- "<fast candidate>" "<full candidate>"
+  ```
+
+  It runs each command twice (cold, then warm) and proposes the fast/full split under 120 seconds. Tests gated by environment variables (the audit lists them) stay out of the fast command. If the project's tests are known to be flaky, propose `--retry-failed` for guest mode: a failure runs once more, and a pass on the rerun is recorded as unstable instead of blocking.
 
 Do not run any other command in this step, do not open the files the audit lists as possibly holding secrets, and do not write any file. If the user agrees, continue with guest mode below using the proposed or corrected commands.
 
