@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- New: one engine for every agent ([#106](https://github.com/davidelarocca/swift-harness/issues/106)). `scripts/check.sh` runs the end-of-turn check from a shell, a git hook or another agent such as Codex. It uses the same approval, the same evidence record and catch log, and the same rule of not re-running code that passed or failed before. Its session is named after the agent (`--agent`). `--json` gives the record and the exit code:
+  - 0: the verify command passed on this code;
+  - 1: a check failed, with the failure output;
+  - 3: the verify command did not run, not approved or turned off.
+
+  It finds the plugin data folder the hooks use: `CLAUDE_PLUGIN_DATA`, else the only `swift-harness-*` folder, else the one that holds this project's approval. The scope contract is reported as information. The README gives a git `pre-commit` recipe (tested: a failing check stops the commit, a fixed one goes through) and a line for another agent's rules.
 - New: in guest mode the project's own rules are protected ([#109](https://github.com/davidelarocca/swift-harness/issues/109)). `setup-guest.sh` adds the agent rules that exist (`CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md`, `.claude/rules/`) to `protectedPaths`, so the guard asks before Claude edits them, and an edit through the shell is reported at the end of the turn. `--owned <path>` adds docs the project lets only some people edit. A path that does not exist is left out, with a message. A project without those files gets none. Remove any of them from the config to lift it.
 - New: the project's own docs check as an adapter ([#105](https://github.com/davidelarocca/swift-harness/issues/105), v0). `docs.command` names it, and it runs instead of the harness's docs check.
   - **Approval:** it is part of the verify approval (the command and the files it names), since it is the project's code. Not approved, it does not run, and the record and the user say so.

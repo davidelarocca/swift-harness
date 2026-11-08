@@ -3538,6 +3538,47 @@ G3="$TMP/guest-docs"; mkdir -p "$G3"
 if [ "$(jq -c '.docs' "$G3/.claude/swift-harness.json")" = '{"command":"scripts/check-docs.sh"}' ]; then ok "adapter: setup-guest --docs-command sets docs.command"
 else nok "adapter: setup-guest --docs-command sets docs.command" "$(cat "$G3/.claude/swift-harness.json")"; fi
 
+# ---------- one engine for every agent: check.sh (#106) ----------
+
+chk() { local o c; o="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+CK="$(new_project check-cli)"
+CKL="$TMP/check-cli.log"; : >"$CKL"
+echo 'let app = 2' >"$CK/Sources/App.swift"
+out="$(FAKE_VERIFY_LOG="$CKL" chk --project "$CK" --agent codex)"
+expect_result "check: from a shell, the approved verify command runs and passes" 0 'Result: passed\.' "$out"
+cli_checks="$(jq -c '[.session, (.checks | map([.name, .result]))]' "$(state_of "$CK")/evidence.json")"
+echo 'let app = 3' >"$CK/Sources/App.swift"
+FAKE_VERIFY_LOG="$CKL" hook stop-verify.sh "$CK" >/dev/null 2>&1
+hook_checks="$(jq -c '[.session, (.checks | map([.name, .result]))]' "$(state_of "$CK")/evidence.json")"
+if [ "${cli_checks#*,}" = "${hook_checks#*,}" ] && [[ "$cli_checks" == '["agent-codex",'* ]]; then ok "check: the same checks and results as the Stop hook, recorded as the agent's session"
+else nok "check: the same checks and results as the Stop hook, recorded as the agent's session" "cli $cli_checks hook $hook_checks"; fi
+expect_result "check: code that passed before is not run again, and says so" 0 'Outcome: unchanged.*Result: passed' "$(chk --project "$CK" --agent codex | tr '\n' ' ' | sed 's/^exit=0 /exit=0\n/')"
+echo 'let app = 4' >"$CK/Sources/App.swift"
+out="$(FAKE_VERIFY_EXIT=1 chk --project "$CK" --agent codex)"
+expect_result "check: a failing check exits 1 with the failure output" 1 'Verification failed.*Result: FAILED' "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/^exit=1 /exit=1\n/')"
+if tail -n 1 "$(state_of "$CK")/catches.jsonl" | jq -e '.session == "agent-codex" and .kind == "blocked"' >/dev/null; then ok "check: the catch log names the agent"
+else nok "check: the catch log names the agent" "$(tail -n 1 "$(state_of "$CK")/catches.jsonl")"; fi
+printf '#!/bin/bash\necho changed\n' >"$CK/scripts/verify.sh"
+expect_result "check: an unapproved verify command is not run: exit 3, not verified" 3 'Result: NOT VERIFIED: the verify command did not run\.' "$(chk --project "$CK")"
+expect_result "check: --json gives the record and the exit" 3 '"exit": 3' "$(chk --project "$CK" --json)"
+git -C "$CK" checkout -q -- scripts/verify.sh
+# The data folder the hooks use, found without CLAUDE_PLUGIN_DATA.
+FH="$TMP/fake-home"; mkdir -p "$FH/.claude/plugins/data"
+ln -s "$TMP/data" "$FH/.claude/plugins/data/swift-harness-inline"
+echo 'let app = 5' >"$CK/Sources/App.swift"
+expect_result "check: without CLAUDE_PLUGIN_DATA, the only swift-harness data folder is used" 0 'Result: passed\.' "$(o="$(env -u CLAUDE_PLUGIN_DATA HOME="$FH" "$SCRIPTS/check.sh" --project "$CK" 2>&1)"; printf 'exit=%s\n%s' "$?" "$o")"
+mkdir -p "$FH/.claude/plugins/data/swift-harness-other"
+echo 'let app = 6' >"$CK/Sources/App.swift"
+expect_result "check: with two, the one that holds this project's approval" 0 'Result: passed\.' "$(o="$(env -u CLAUDE_PLUGIN_DATA HOME="$FH" "$SCRIPTS/check.sh" --project "$CK" 2>&1)"; printf 'exit=%s\n%s' "$?" "$o")"
+expect_result "check: with none, it says to set CLAUDE_PLUGIN_DATA" 2 'Set CLAUDE_PLUGIN_DATA' "$(o="$(env -u CLAUDE_PLUGIN_DATA HOME="$TMP/no-home" "$SCRIPTS/check.sh" --project "$CK" 2>&1)"; printf 'exit=%s\n%s' "$?" "$o")"
+# The git pre-commit recipe.
+printf '#!/bin/bash\nCLAUDE_PLUGIN_DATA="%s" exec "%s/check.sh" --agent git-hook >/dev/null\n' "$TMP/data" "$SCRIPTS" >"$CK/.git/hooks/pre-commit"
+chmod +x "$CK/.git/hooks/pre-commit"
+echo 'let app = 7' >"$CK/Sources/App.swift"
+git -C "$CK" add -A
+if ! FAKE_VERIFY_EXIT=1 git -C "$CK" commit -qm "breaks" 2>/dev/null && echo 'let app = 8' >"$CK/Sources/App.swift" && git -C "$CK" add -A && git -C "$CK" commit -qm "fixed" 2>/dev/null; then ok "check: as a git pre-commit hook, a failing check stops the commit and a passing one lets it through"
+else nok "check: as a git pre-commit hook, a failing check stops the commit and a passing one lets it through" "$(git -C "$CK" log --oneline -2)"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
