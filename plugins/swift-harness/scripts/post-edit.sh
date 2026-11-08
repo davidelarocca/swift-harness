@@ -85,6 +85,9 @@ if [ "$(sh_cfg '.lint' 'swiftlint')" = "swiftlint" ]; then
     excluded) add_note "SwiftLint: $rel is excluded by .swiftlint.yml, so it was not linted." ;;
     warnings | errors)
       count="$(printf '%s\n' "$SH_LINT_OUTPUT" | grep -cE ': (warning|error):')"
+      rules="$(printf '%s\n' "$SH_LINT_OUTPUT" | grep -oE '\([a-z_]+\)$' | tr -d '()' | sort -u | paste -sd, - | sed 's/,/, /g')"
+      if [ "$SH_LINT_RESULT" = errors ] && [ "$blocking" = "true" ]; then sh_catch SwiftLint blocked "$count issue(s) in $rel${rules:+: $rules}"
+      else sh_catch SwiftLint reported "$count issue(s) in $rel${rules:+: $rules}"; fi
       add_note "SwiftLint: $count issue(s) in $rel. Fix the ones on lines you wrote or changed; leave pre-existing ones unless the task covers them.
 $SH_LINT_OUTPUT"
       ;;
@@ -123,6 +126,7 @@ fi
 if sh_registry_on; then
   registry="$(sh_registry)"
   missing="$("$(dirname "$0")/registry.sh" missing "$SH_ROOT" "$rel" | cut -f1 | paste -sd, - | sed 's/,/, /g')"
+  [ -z "$missing" ] || sh_catch "component registry" reported "$rel declares $missing, not in the registry"
   [ -z "$missing" ] || add_note "Component registry: $rel declares shared UI that $registry does not list: $missing. Add an entry in the same change, or list it under Internal if it is not meant for reuse."
   entries="$("$(dirname "$0")/registry.sh" entries "$SH_ROOT" "$rel" | paste -sd, - | sed 's/,/, /g')"
   [ -z "$entries" ] || add_note "Component registry: $rel is the file of $entries in $registry. If you changed its API, variants, behavior or callers, update the entry in the same change."
@@ -142,6 +146,7 @@ if [ "${rel##*/}" = "Package.swift" ] && [ -f "$SH_ROOT/$SH_CONTRACT" ] &&
   [ "$(sh_cfg '.verify.enabled' 'true')" = "true" ] &&
   sh_verify_approved "$(sh_cfg '.verify.command' 'scripts/verify.sh fast')" "$(sh_state_dir)"; then
   if ! contract_out="$("$(dirname "$0")/contracts.sh" "$SH_ROOT" 2>&1)"; then
+    sh_catch "architecture contracts" blocked "$(printf '%s\n' "$contract_out" | grep -m1 '^- ' | sed 's/^- //')"
     printf '%s%s\n\nThe edit is applied, but the end-of-turn check will fail until the package matches the contract.\n' \
       "${notes:+$notes
 

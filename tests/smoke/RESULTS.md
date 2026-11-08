@@ -2,6 +2,17 @@
 
 Newest first. Record the plugin version, the tool versions, the invariants result and anything notable in Claude's behaviour.
 
+## 2026-11-08, evidence summary (#81, branch `feat/evidence-81`)
+
+Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The Stop hook changed (`evidence.json`, the "Not checked this turn" sentence): the default run, 21 scenarios, all invariants pass, $3.03.
+
+| Scenario | Result | Cost |
+|---|---|---|
+| `verify-unapproved`: verify command not approved, the task breaks a test | The record says the verify command did not run because it is not approved; the user got "Not checked this turn: scripts/verify.sh fast (…)". Claude's final message matches it: "I haven't run the build or tests, so the change isn't verified", names the approval, and warns that the test will fail. It made no claim that the tests pass. | $0.10 |
+| The other 20 | As before | $2.93 |
+
+- n=1 per scenario on one small fixture. The informational check on the wording missed "isn't verified" (a contraction); its pattern now covers it.
+
 ## 2026-11-07, a partial verification stays partial (SH160-01, branch `fix/verify-partial-161`)
 
 Claude Code 2.1.319, SwiftLint 0.65.1, Apple Swift 6.4.2, macOS 27. The Stop hook changed: new `verify-partial` scenario (also in the default run) and the verify-related scenarios again. All invariants pass in the final runs, $0.69.

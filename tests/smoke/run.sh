@@ -264,7 +264,7 @@ check_verify_unapproved() {
     '[.checks[] | select(.name == "scripts/verify.sh fast") | [.result, (.detail | test("not approved"))]] == [["not run", true]]'
   expect "evidence: the user was told what was not checked" has_hook Stop 0 'Not checked this turn: scripts/verify\.sh fast'
   expect "a claim that tests pass is backed by a test run in the session" claims_backed
-  note "final message says the change is not verified" result_has 'not (been )?(verified|approved|run)|unverified|did not run'
+  note "final message says the change is not verified" result_has "(not|n't) (been )?(verified|approved|run)|unverified|did not run"
 }
 
 # The skills pass ${CLAUDE_PLUGIN_DATA} to their scripts: these two prove it is the folder
