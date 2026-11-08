@@ -41,8 +41,10 @@ root="$(cd "$dir" 2>/dev/null && pwd -P)" || { echo "setup-guest: no such folder
 config="$root/.claude/swift-harness.json"
 # A folder named Scripts (or any case) is the same folder on a default macOS volume: write
 # into it under its own name, so git and the verify command agree on the path.
-sdir="$(ls -1 "$root" 2>/dev/null | grep -ixm1 scripts)"
-sdir="${sdir:-scripts}"
+sdir=scripts
+for d in "$root"/[sS][cC][rR][iI][pP][tT][sS]; do
+  [ -d "$d" ] && { sdir="${d##*/}"; break; }
+done
 verify="$root/$sdir/verify.sh"
 
 exists=""
