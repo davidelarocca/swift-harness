@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Fix: the proposal to let an observed check block counted wrongly ([#105](https://github.com/davidelarocca/swift-harness/issues/105), SH180-R07 of an external review). A set of problems that grew turn by turn counted each time, and only the last as fixed: 12 lines from one root cause, all fixed, read "1 of 12 fixed". `/swift-harness:report` now counts episodes (the findings in a row in a session, until they are gone), and proposes blocking only with at least 10 episodes over at least 3 sessions, more than 90% fixed in their session. The log is unchanged, so what was recorded before is read correctly. A fix does not prove a finding was right, and the proposal says so.
+- Fix: `check.sh` said `Result: passed` for a partial result (SH180-R01), and for a pass on a rerun (SH180-R02). It now says `PARTIAL` or `UNSTABLE`, `--json` has `result`, and the evidence record has `stability: "unstable"`. New `--strict` exits 4 for both; without it they still exit 0, so existing git hooks keep working.
+- Fix: `check.sh` with no plugin data folder printed an empty list of folders. It now says what to do.
+- New: scripts the approval does not cover are named ([#127](https://github.com/davidelarocca/swift-harness/issues/127)). An approved script that calls another one: if the second changes, nothing asks again. `/swift-harness:approve-verify` and `/swift-harness:doctor` now list the scripts the approved files name and the approval does not cover, with the `verify.inputs` entry to add. They read the files as text and run nothing, so a mention in a comment counts and a path built at run time is not seen.
+- New: a one-time permit for a Codex edit of a protected file. The guard refused it again even after the user agreed. Now the user runs `bash .codex/swift-harness-hook.sh --allow <file>` in their own terminal: one permit, for that file, in that checkout, for one patch within an hour, in the catch log. A patch that also touches another protected file is refused whole, and the permit stays.
+- Docs: what Codex does not cover: its shell commands are not guarded, only reported, and a new worktree without the local files gets no notice. Hooks are trusted per checkout.
+
 ## swift-harness 1.8.0 (2026-11-08)
 
 Adoption on real projects. A project that already has its own agent rules, docs, checks and several agents gets the harness without being reshaped: it looks first (a read-only audit), wraps what is there (the project's docs check, its commands, timed), protects the project's own files, and runs the same checks for Codex and other agents, with one approval across worktrees. Measured on a real ~97k-line app with its own tools, on a copy. Checked with 756 hook tests, real Codex sessions on a fixture, and the full smoke run in real Claude Code sessions (24 scenarios, 0 failed invariants).

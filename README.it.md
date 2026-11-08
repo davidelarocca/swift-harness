@@ -96,7 +96,7 @@ Il costo fisso di contesto è di circa 770 token per sessione; le skill caricano
 <details>
 <summary><b>Come si comporta il controllo a fine turno</b></summary>
 
-- Il comando di verifica parte solo dopo che lo approvi con `/swift-harness:approve-verify`. L'approvazione vale per il percorso del progetto, il comando e il contenuto di ogni file che il comando nomina, ed è salvata fuori dalla repo. Un altro worktree git della stessa repository la eredita quando il comando e quei file sono identici (qualsiasi differenza la richiede di nuovo; un altro clone non la eredita mai). Finché manca, o dopo che uno di questi cambia, il controllo non lo esegue e ti avvisa una volta per stato del codice; `lintBlocking` resta attivo.
+- Il comando di verifica parte solo dopo che lo approvi con `/swift-harness:approve-verify`. L'approvazione vale per il percorso del progetto, il comando e il contenuto di ogni file che il comando nomina, ed è salvata fuori dalla repo. Un altro worktree git della stessa repository la eredita quando il comando e quei file sono identici (qualsiasi differenza la richiede di nuovo; un altro clone non la eredita mai). Uno script chiamato da quei file è coperto solo se è in `verify.inputs`: lo stato e `/swift-harness:doctor` nominano gli script che trovano citati e non coperti, leggendo i file come testo. Finché manca, o dopo che uno di questi cambia, il controllo non lo esegue e ti avvisa una volta per stato del codice; `lintBlocking` resta attivo.
 - Codice invariato dall'inizio della sessione o dall'ultima verifica riuscita: non parte nulla. Lo stato di partenza è un riferimento, non una verifica superata: se era già rotto, la prima modifica della sessione fa partire la verifica e lo mostra.
 - Codice cambiato e verifica fallita: Claude viene bloccato e riceve le ultime 60 righe dell'output.
 - Claude prova a fermarsi di nuovo senza modificare nulla: può fermarsi, e ricevi un avviso.
@@ -244,7 +244,7 @@ final class LibraryBudgetTests: XCTestCase {
 <details>
 <summary><b>Gli stessi controlli per altri agenti, git hook e CI</b></summary>
 
-`scripts/check.sh` esegue il controllo di fine turno fuori da Claude Code, con la stessa approvazione, lo stesso riepilogo delle prove e lo stesso registro, come una sessione con il nome dell'agente (`--agent codex`). Esce con 0 quando il comando di verifica è passato su questo codice, 1 quando un controllo è fallito, 3 quando il comando di verifica non è girato (non approvato, o spento). Trova da solo la cartella dati del plugin, o usa `CLAUDE_PLUGIN_DATA`. Ricette, con il plugin installato dal marketplace:
+`scripts/check.sh` esegue il controllo di fine turno fuori da Claude Code, con la stessa approvazione, lo stesso riepilogo delle prove e lo stesso registro, come una sessione con il nome dell'agente (`--agent codex`). Esce con 0 quando il comando di verifica è passato su questo codice, 1 quando un controllo è fallito, 3 quando il comando di verifica non è girato (non approvato, o spento). Un risultato parziale (una piattaforma non controllata) o instabile (fallito una volta, passato alla seconda) esce con 0 ed è nominato nell'output e in `--json`; con `--strict` esce con 4. Trova da solo la cartella dati del plugin, o usa `CLAUDE_PLUGIN_DATA`. Ricette, con il plugin installato dal marketplace:
 
 ```bash
 # dove è installato il plugin (cambia a ogni versione)
@@ -260,11 +260,13 @@ SH="$(jq -r '.plugins["swift-harness@swift-harness"][0].installPath' ~/.claude/p
 In CI non c'è una cartella di approvazioni: lì lancia direttamente il comando di verifica del progetto.
 
 **Codex esegue gli stessi hook.** `setup-guest.sh --codex` (o `/swift-harness:setup guest` quando dici che sul progetto lavora anche Codex) scrive `.codex/hooks.json` e un piccolo launcher accanto. Codex esegue poi, ai suoi eventi:
-- il guard prima di una modifica. Codex non può chiederti nulla da un hook, quindi una modifica su cui il guard chiederebbe viene rifiutata, e a Codex viene detto di fermarsi e chiederti prima;
+- il guard prima di una modifica. Codex non può chiederti nulla da un hook, quindi una modifica su cui il guard chiederebbe viene rifiutata, e a Codex viene detto di fermarsi e chiederti prima. Se sei d'accordo, lancia `bash .codex/swift-harness-hook.sh --allow <file>` nel tuo terminale: un permesso, per quel file, per una patch entro un'ora;
 - i controlli dopo una modifica, letti dalle patch di Codex;
 - il controllo di fine turno. Un fallimento tiene Codex al lavoro, come Claude.
 
-L'approvazione, il riepilogo delle prove e il registro sono gli stessi di Claude Code, e nominano l'agente. Codex chiede una volta di fidarsi degli hook del progetto (`/hooks`). Con `--local`, anche i file di Codex restano fuori da git.
+L'approvazione, il riepilogo delle prove e il registro sono gli stessi di Claude Code, e nominano l'agente. Codex chiede di fidarsi degli hook del progetto (`/hooks`), per ogni checkout. Con `--local`, anche i file di Codex restano fuori da git.
+
+Limiti: un comando shell lanciato da Codex non passa dal guard, viene solo segnalato a fine turno. Un nuovo worktree senza questi file non esegue nessun controllo, e Codex non riceve avvisi, perché lì non si carica niente di swift-harness: quando ne crei uno, lancia `setup-guest.sh --project <worktree> --from <checkout> --local`.
 
 </details>
 
@@ -272,7 +274,7 @@ L'approvazione, il riepilogo delle prove e il registro sono gli stessi di Claude
 <summary><b>Misurare il harness: riepilogo delle prove, registro, deriva e sensibilità dei controlli</b></summary>
 
 - **Un riepilogo a ogni fine turno.** Il controllo di fine turno scrive cosa ha eseguito, su quale codice, con quale risultato, e perché qualcosa non è girato (comando di verifica non approvato, SwiftLint mancante). Te lo dice solo quando qualcosa non è stato controllato; `/swift-harness:doctor` e il checkpoint dopo una compattazione lo mostrano. La skill `ui-change` e l'agente `ui-reviewer` marcano ogni affermazione come *measured*, *seen* o *inferred*.
-- **Registro e `/swift-harness:report`.** Ogni blocco, segnalazione, domanda e controllo saltato, e come è finito (corretto da Claude, lasciato fallire, approvato da te), in un registro locale. Il report lo riassume in testo, JSON o una pagina HTML statica. Per un controllo del progetto in osservazione (`docs.blocking` false), dice quando i problemi trovati sono stati corretti abbastanza spesso da farlo bloccare: almeno 10 problemi, più del 90% corretti nella loro sessione. Niente lascia la tua macchina.
+- **Registro e `/swift-harness:report`.** Ogni blocco, segnalazione, domanda e controllo saltato, e come è finito (corretto da Claude, lasciato fallire, approvato da te), in un registro locale. Il report lo riassume in testo, JSON o una pagina HTML statica. Per un controllo del progetto in osservazione (`docs.blocking` false), propone quando potrebbe bloccare: almeno 10 episodi in 3 sessioni, più del 90% corretti nella loro sessione. Una correzione non prova che il problema fosse vero, quindi guarda prima: decidi tu. Niente lascia la tua macchina.
 - **`/swift-harness:drift`.** Valori di design a mano contro token, componenti quasi duplicati e problemi dei controlli, per ogni commit di un intervallo. Su quattro anni di un'app SwiftUI open source: [tests/evals/drift.md](tests/evals/drift.md).
 - **`/swift-harness:check-sensitivity`.** Pianta un difetto alla volta in una copia del progetto e dice quale controllo l'ha trovato; `--verify` lancia anche i tuoi test e SwiftLint. Sulle fixture ogni difetto viene trovato dal suo controllo; su un'app reale quello sopravvissuto è spiegato: [tests/evals/check-sensitivity.md](tests/evals/check-sensitivity.md).
 

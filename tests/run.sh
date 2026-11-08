@@ -3527,7 +3527,7 @@ rm "$DA/docs/new2.md"
 ADAPTER_LOG="$ALOGA" ev_stop "$DA" >/dev/null
 if tail -n 1 "$CLA" | jq -e '.kind == "fixed" and (.what | startswith("observed problems gone"))' >/dev/null; then ok "adapter H2: observed problems that go away are logged as fixed"
 else nok "adapter H2: observed problems that go away are logged as fixed" "$(tail -n 2 "$CLA")"; fi
-expect_result "adapter H2: the report waits for 10 observed findings before it proposes anything" 0 'docs: scripts/check-docs\.sh: 1 finding\(s\) observed, 1 fixed: too few to decide' "exit=0
+expect_result "adapter H2: the report waits for 10 observed findings before it proposes anything" 0 'docs: scripts/check-docs\.sh: 1 episode\(s\) in 1 session\(s\), 1 fixed in their session: too few to decide' "exit=0
 $(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$DA" 2>&1)"
 HR="$(new_project h2-report)"; HRL="$(state_of "$HR")/catches.jsonl"; mkdir -p "$(dirname "$HRL")"
 for i in 1 2 3 4 5 6 7 8 9 10 11; do
@@ -3538,7 +3538,7 @@ out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$HR" --jso
 if [ "$(jq -c '.checks[] | select(.check == "docs: d") | [.observed, .observed_fixed, .promotion.proposal]' <<<"$out")" = '[11,10,"block"]' ]; then ok "adapter H2: more than 90% of 10 or more observed findings fixed: the report proposes blocking"
 else nok "adapter H2: more than 90% of 10 or more observed findings fixed: the report proposes blocking" "$out"; fi
 printf '{"time":"2099-01-01T00:00:09Z","session":"s12","check":"docs: d","kind":"observed","what":"1 new"}\n' >>"$HRL"
-expect_result "adapter H2: with fewer fixed, the report says to look at the others first" 0 'only 10 of 12 observed findings were fixed in their session' "exit=0
+expect_result "adapter H2: with fewer fixed, the report says to look at the others first" 0 '12 episode\(s\) in 12 session\(s\), 10 fixed in their session: look at the others' "exit=0
 $(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$HR" 2>&1)"
 printf '#!/bin/bash\necho "check-docs: python not found" >&2\nexit 127\n' >"$DA/scripts/check-docs.sh"
 approve "$DA" >/dev/null
@@ -3592,7 +3592,7 @@ expect_result "check: without CLAUDE_PLUGIN_DATA, the only swift-harness data fo
 mkdir -p "$FH/.claude/plugins/data/swift-harness-other"
 echo 'let app = 6' >"$CK/Sources/App.swift"
 expect_result "check: with two, the one that holds this project's approval" 0 'Result: passed\.' "$(o="$(env -u CLAUDE_PLUGIN_DATA HOME="$FH" "$SCRIPTS/check.sh" --project "$CK" 2>&1)"; printf 'exit=%s\n%s' "$?" "$o")"
-expect_result "check: with none, it says to set CLAUDE_PLUGIN_DATA" 2 'Set CLAUDE_PLUGIN_DATA' "$(o="$(env -u CLAUDE_PLUGIN_DATA HOME="$TMP/no-home" "$SCRIPTS/check.sh" --project "$CK" 2>&1)"; printf 'exit=%s\n%s' "$?" "$o")"
+expect_result "check: with none, it says to set CLAUDE_PLUGIN_DATA" 2 'set CLAUDE_PLUGIN_DATA' "$(o="$(env -u CLAUDE_PLUGIN_DATA HOME="$TMP/no-home" "$SCRIPTS/check.sh" --project "$CK" 2>&1)"; printf 'exit=%s\n%s' "$?" "$o")"
 # The git pre-commit recipe.
 printf '#!/bin/bash\nCLAUDE_PLUGIN_DATA="%s" exec "%s/check.sh" --agent git-hook >/dev/null\n' "$TMP/data" "$SCRIPTS" >"$CK/.git/hooks/pre-commit"
 chmod +x "$CK/.git/hooks/pre-commit"
@@ -3694,7 +3694,7 @@ patch_input() { # $1 patch text
 X="$(new_project codex)"
 PROT="$(patch_input $'*** Begin Patch\n*** Update File: Sources/App.swift\n@@\n-let app = 1\n+let app = 2\n*** Update File: Sources/Audio/Engine.swift\n@@\n-let engine = 1\n+let engine = 2\n*** End Patch')"
 out="$(codex_hook guard.sh "$X" "$PROT")"
-if [ "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$out" 2>/dev/null)" = deny ] && grep -q 'Sources/Audio' <<<"$out" && grep -q 'only after they agree' <<<"$out"; then
+if [ "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$out" 2>/dev/null)" = deny ] && grep -q 'Sources/Audio' <<<"$out" && grep -q 'If they agree' <<<"$out"; then
   ok "codex: an apply_patch that touches a protected path is denied, with the reason and how to ask the user"
 else nok "codex: an apply_patch that touches a protected path is denied, with the reason and how to ask the user" "$out"; fi
 if tail -1 "$(state_of "$X")/catches.jsonl" 2>/dev/null | jq -e '.agent == "codex" and .kind == "blocked" and (.what | test("refused"))' >/dev/null; then
@@ -3749,6 +3749,118 @@ expect_result "guest --codex: needs the data folder when it cannot tell" 1 'pass
 $(HOME="$TMP/codex-home" CLAUDE_PLUGIN_DATA='' "$SCRIPTS/setup-guest.sh" --project "$TMP/guest-codex2" --fast 'swift build' --codex 2>&1)"
 if [ -z "$(ls -A "$TMP/guest-codex2")" ]; then ok "guest --codex: without a data folder, nothing is written"
 else nok "guest --codex: without a data folder, nothing is written" "$(ls -A "$TMP/guest-codex2")"; fi
+
+# ---------- 1.8.1: what an external review found (SH180-R01, R02, R07, #127), and Codex permits ----------
+
+# One root cause, the set of problems growing at each turn, all fixed in the end: one episode.
+HE="$(new_project h2-episodes)"; HEL="$(state_of "$HE")/catches.jsonl"; mkdir -p "$(dirname "$HEL")"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  printf '{"time":"2099-01-01T00:00:00Z","session":"one","check":"docs: d","kind":"observed","what":"%s new"}\n' "$i" >>"$HEL"
+done
+printf '{"time":"2099-01-01T00:00:01Z","session":"one","check":"docs: d","kind":"fixed","what":"observed problems gone: passes again"}\n' >>"$HEL"
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$HE" --json 2>&1)"
+if [ "$(jq -c '.checks[] | select(.check == "docs: d") | [.observed, .observed_fixed, .observed_sessions, .promotion.proposal]' <<<"$out")" = '[1,1,1,"wait"]' ]; then
+  ok "report: findings growing from one root cause are one episode, fixed"
+else nok "report: findings growing from one root cause are one episode, fixed" "$out"; fi
+: >"$HEL"
+for i in 1 2 3 4 5 6 7 8 9 10 11; do
+  printf '{"time":"2099-01-01T00:00:00Z","session":"one","check":"docs: d","kind":"observed","what":"1 new"}\n{"time":"2099-01-01T00:00:01Z","session":"one","check":"docs: d","kind":"fixed","what":"observed problems gone: passes again"}\n' >>"$HEL"
+done
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$HE" --json 2>&1)"
+if [ "$(jq -c '.checks[] | select(.check == "docs: d") | [.observed, .promotion.proposal]' <<<"$out")" = '[11,"wait"]' ]; then
+  ok "report: 11 fixed episodes in one session do not propose blocking"
+else nok "report: 11 fixed episodes in one session do not propose blocking" "$out"; fi
+
+# check.sh says what passing means.
+CS="$(new_project check-strict)"
+cat >"$CS/scripts/verify.sh" <<'EOF'
+#!/bin/bash
+echo "swift-harness-result/1: partial; checked=macOS; tested=macOS; not checked=iOS"
+exit 0
+EOF
+git -C "$CS" add -A; git -C "$CS" commit -qm partial; approve "$CS" >/dev/null
+csc() { local o c; o="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$CS" --agent t "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+echo 'let app = 2' >"$CS/Sources/App.swift"
+expect_result "check: a partial result exits 0 by default, and says PARTIAL, not passed" 0 'Result: PARTIAL' "$(csc)" 'Result: passed'
+expect_result "check --strict: a partial result exits 4" 4 'Result: PARTIAL' "$(csc --strict)"
+if [ "$(csc --json | sed 1d | jq -r '.result')" = partial ]; then ok "check --json: the result is named"
+else nok "check --json: the result is named" "$(csc --json)"; fi
+CU="$(new_project check-unstable)"
+cat >"$CU/scripts/verify.sh" <<'EOF'
+#!/bin/bash
+f="$(dirname "$0")/../.git/count"; n="$(cat "$f" 2>/dev/null || echo 0)"; echo $((n + 1)) >"$f"
+[ "$n" -gt 0 ] || { echo boom; exit 1; }
+exit 0
+EOF
+set_config "$CU" '{"verify":{"command":"scripts/verify.sh fast","retryFailed":true}}'
+git -C "$CU" add -A; git -C "$CU" commit -qm unstable; approve "$CU" >/dev/null
+echo 'let app = 2' >"$CU/Sources/App.swift"
+out="exit=$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$CU" --agent t --strict >"$TMP/cu.out" 2>&1; echo $?)
+$(cat "$TMP/cu.out")"
+expect_result "check --strict: a pass on the rerun exits 4, and says UNSTABLE" 4 'Result: UNSTABLE' "$out"
+if [ "$(ev_of "$CU" '.stability')" = '"unstable"' ]; then ok "evidence: a pass on the rerun has stability unstable"
+else nok "evidence: a pass on the rerun has stability unstable" "$(ev_of "$CU" .)"; fi
+PASS_REC="$(ev_of "$E" '.stability')"
+if [ "$PASS_REC" = null ]; then ok "evidence: a clean pass has no stability field"
+else nok "evidence: a clean pass has no stability field" "$PASS_REC"; fi
+out="$(HOME="$TMP/no-home" CLAUDE_PLUGIN_DATA='' "$SCRIPTS/check.sh" --project "$CS" 2>&1)"
+if grep -q 'no plugin data folder' <<<"$out" && ! grep -q 'one of: )' <<<"$out"; then ok "check: with no data folder, it says what to do"
+else nok "check: with no data folder, it says what to do" "$out"; fi
+
+# Scripts an approved file names, not covered by the approval (#127).
+UC="$(new_project uncovered)"
+cat >"$UC/scripts/verify.sh" <<'EOF'
+#!/bin/bash
+# See also scripts/gone.sh, which no longer exists.
+python3 "$(dirname "$0")/helper.py"
+bash scripts/nested/run.sh
+exit 0
+EOF
+mkdir -p "$UC/scripts/nested"; echo 'print(1)' >"$UC/scripts/helper.py"; echo 'exit 0' >"$UC/scripts/nested/run.sh"
+git -C "$UC" add -A; git -C "$UC" commit -qm uncovered
+out="$(approval "$UC" --status)"
+if grep -q 'Not covered: scripts/helper.py, named in scripts/verify.sh' <<<"$out" && grep -q 'Not covered: scripts/nested/run.sh, named in scripts/verify.sh' <<<"$out" && ! grep -q 'gone.sh' <<<"$out" && ! grep -q 'Not covered: scripts/verify.sh' <<<"$out"; then
+  ok "approval: a script named by the approved one and not covered is shown; a name that does not exist is not"
+else nok "approval: a script named by the approved one and not covered is shown; a name that does not exist is not" "$out"; fi
+expect_row "doctor: scripts the approval does not cover are a warning" "$(doctor "$UC")" WARN "Verify coverage" "scripts/helper.py scripts/nested/run.sh"
+set_config "$UC" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts/helper.py","scripts/nested"]},"protectedPaths":[]}'
+out="$(approval "$UC" --status)"
+if grep -q 'Not covered' <<<"$out"; then nok "approval: inputs, a file or a folder, cover them" "$out"; else ok "approval: inputs, a file or a folder, cover them"; fi
+approve "$UC" >/dev/null
+echo 'print(2)' >"$UC/scripts/helper.py"
+if approval "$UC" --status | grep -q '^Status: not approved'; then ok "approval: once covered, a change to that script asks again"
+else nok "approval: once covered, a change to that script asks again" "$(approval "$UC" --status)"; fi
+
+# A one-time permit for a Codex edit of a protected file.
+PX="$(new_project codex-permit)"
+PERM="$(patch_input $'*** Begin Patch\n*** Update File: Sources/Audio/Engine.swift\n@@\n-let engine = 1\n+let engine = 2\n*** End Patch')"
+MIX="$(patch_input $'*** Begin Patch\n*** Update File: Sources/Audio/Engine.swift\n*** Update File: App.xcodeproj/project.pbxproj\n*** End Patch')"
+allow() { (cd "$PX" && { sleep 3; printf 'yes\n'; sleep 2; } | CLAUDE_PLUGIN_DATA="$TMP/data" script -q /dev/null "$SCRIPTS/codex-hook.sh" --allow "$@" 2>&1); }
+denied() { [ "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$1" 2>/dev/null)" = deny ]; }
+out="$(codex_hook guard.sh "$PX" "$PERM")"
+if denied "$out" && grep -q -- '--allow' <<<"$out" && grep -q 'Never run that command yourself' <<<"$out"; then ok "codex permit: without one, the edit is refused, and the reason says how the user gives it"
+else nok "codex permit: without one, the edit is refused, and the reason says how the user gives it" "$out"; fi
+out="$(cd "$PX" && CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/codex-hook.sh" --allow Sources/Audio/Engine.swift </dev/null 2>&1)"; code=$?
+if [ "$code" = 1 ] && grep -q 'own terminal' <<<"$out" && denied "$(codex_hook guard.sh "$PX" "$PERM")"; then ok "codex permit: not given without a terminal"
+else nok "codex permit: not given without a terminal" "exit=$code $out"; fi
+out="$(allow Sources/Audio/Engine.swift)"
+if grep -q 'Allowed: one edit of Sources/Audio/Engine.swift' <<<"$out" && tail -n 1 "$(state_of "$PX")/catches.jsonl" | jq -e '.agent == "user"' >/dev/null; then ok "codex permit: given from a terminal, with a typed yes"
+else nok "codex permit: given from a terminal, with a typed yes" "$out"; fi
+out="$(cd "$PX" && { printf 'yes\n'; sleep 4; printf 'no\n'; sleep 2; } | CLAUDE_PLUGIN_DATA="$TMP/data" script -q /dev/null "$SCRIPTS/codex-hook.sh" --allow Sources/Audio/Tool.swift 2>&1)"
+if grep -q 'Nothing allowed' <<<"$out"; then ok "codex permit: a yes typed before the question is not an answer"
+else nok "codex permit: a yes typed before the question is not an answer" "$out"; fi
+out="$(codex_hook guard.sh "$PX" "$MIX")"
+if denied "$out" && [ -n "$(ls -A "$(state_of "$PX")/edit-permits")" ]; then ok "codex permit: a patch that also touches another protected file is refused, and the permit stays"
+else nok "codex permit: a patch that also touches another protected file is refused, and the permit stays" "$out"; fi
+out="$(codex_hook guard.sh "$PX" "$PERM")"
+if [ -z "$out" ] && tail -n 1 "$(state_of "$PX")/catches.jsonl" | jq -e '.kind == "approved" and .agent == "codex" and (.what | test("one-time permit"))' >/dev/null; then ok "codex permit: the same patch goes through, and the log says so"
+else nok "codex permit: the same patch goes through, and the log says so" "$out $(tail -n 1 "$(state_of "$PX")/catches.jsonl")"; fi
+if denied "$(codex_hook guard.sh "$PX" "$PERM")"; then ok "codex permit: it works once"
+else nok "codex permit: it works once"; fi
+allow Sources/Audio/Engine.swift >/dev/null
+f="$(ls "$(state_of "$PX")/edit-permits/"* | head -n 1)"; { echo 1000; sed -n 2p "$f"; } >"$f.tmp"; mv "$f.tmp" "$f"
+if denied "$(codex_hook guard.sh "$PX" "$PERM")"; then ok "codex permit: an old one has expired"
+else nok "codex permit: an old one has expired"; fi
 
 # ---------- summary ----------
 

@@ -77,16 +77,25 @@ summary="$(
           fixed: map(select(.kind == "fixed")) | length,
           left_failing: map(select(.kind == "left-failing")) | length,
           approved: map(select(.kind == "approved")) | length,
-          observed: map(select(.kind == "observed")) | length,
-          observed_fixed: map(select(.kind == "fixed" and ((.what // "") | startswith("observed")))) | length,
+          # In observation (H2 of #105): the findings in a row, in one session, until they are
+          # gone, are one episode, however often the set changed. Raw lines would count one
+          # root cause many times and say it was never fixed.
+          observed_episodes: (map(select(.kind == "observed" or (.kind == "fixed" and ((.what // "") | startswith("observed")))))
+            | group_by(.session) | map(reduce .[] as $e ({n: 0, fixed: 0, open: false};
+                if $e.kind == "observed" then (if .open then . else .n += 1 | .open = true end)
+                elif .open then .fixed += 1 | .open = false else . end))),
           last: (map(select(.kind == "blocked" or .kind == "reported" or .kind == "asked")) | last | .what // null)
         }) | sort_by(-(.blocked + .reported + .asked), .check)
-          # A check in observation (H2 of #105): propose that it block only when at least 10 of
-          # its findings were seen and more than 90% of them were fixed in their session.
+          # A check in observation: propose that it block only with at least 10 episodes over at
+          # least 3 sessions, more than 90% fixed in their session. A fix is not proof the finding
+          # was right, so the proposal says to look first, and the user decides.
+          | map(. + {observed: ([.observed_episodes[].n] | add // 0), observed_fixed: ([.observed_episodes[].fixed] | add // 0),
+                     observed_sessions: ([.observed_episodes[] | select(.n > 0)] | length)} | del(.observed_episodes))
           | map(if .observed == 0 then . else . + {promotion: (
-              if .observed < 10 then {proposal: "wait", why: "\(.observed) finding(s) observed, \(.observed_fixed) fixed: too few to decide (10 needed)"}
-              elif .observed_fixed * 10 > .observed * 9 then {proposal: "block", why: "\(.observed_fixed) of \(.observed) observed findings were fixed in their session: set docs.blocking to true"}
-              else {proposal: "observe", why: "only \(.observed_fixed) of \(.observed) observed findings were fixed in their session: look at the others before it blocks"} end)} end)),
+              "\(.observed) episode(s) in \(.observed_sessions) session(s), \(.observed_fixed) fixed in their session" as $seen
+              | if .observed < 10 or .observed_sessions < 3 then {proposal: "wait", why: "\($seen): too few to decide (10 episodes over 3 sessions needed)"}
+                elif .observed_fixed * 10 > .observed * 9 then {proposal: "block", why: "\($seen). If those findings were right, not just obeyed, set docs.blocking to true"}
+                else {proposal: "observe", why: "\($seen): look at the others before it blocks"} end)} end)),
         skipped: (map(select(.kind == "skipped")) | group_by(.check) | map({
           check: .[0].check, times: length, why: (map(.what) | unique)
         }))

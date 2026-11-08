@@ -75,7 +75,8 @@ ev_write() { # $1 outcome, $2 note
     + (if $note == "" then {} else {note: $note} end)
     + {checks: ($lines | split("\n") | map(select(length > 0) | split("\t")
         | {name: .[0], result: .[1]} + (if (.[2] // "") == "" then {} else {detail: .[2]} end)
-          + (if (.[3] // "") == "" then {} else {seconds: (.[3] | tonumber)} end)))}')" || return 0
+          + (if (.[3] // "") == "" then {} else {seconds: (.[3] | tonumber)} end)))}
+    | if any(.checks[]; (.detail // "") | contains("failed once, passed on a rerun")) then . + {stability: "unstable"} else . end')" || return 0
   printf '%s\n' "$json" >"$sess/evidence.json.tmp" && mv "$sess/evidence.json.tmp" "$sess/evidence.json"
   printf '%s\n' "$json" >"$state/evidence.json.tmp" && mv "$state/evidence.json.tmp" "$state/evidence.json"
   ev_history "$json"

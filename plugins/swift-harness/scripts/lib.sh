@@ -422,6 +422,48 @@ sh_verify_manifest() {
   done < <(jq -r '.verify.inputs // [] | if type == "array" then .[] | strings else empty end' "$SH_CONFIG" 2>/dev/null)
 }
 
+# Scripts an approved file names, in the project, that the approval does not cover (#127): if one
+# changes, the new version runs and nothing asks again. A reading of the approved files as text:
+# nothing runs, a name in a comment counts, and a path built at run time is not seen, so this is
+# a hint, never a proof of coverage. Prints "<script>\t<named in>", one per line.
+sh_verify_uncovered() { # $1 command
+  local line word path sha kind token cand rel covered=() files=() f c hit
+  while IFS= read -r line; do
+    case "$line" in
+      "file "*)
+        read -r _ word sha <<<"$line"
+        case "$word" in "$SH_ROOT"/*) path="$word" ;; *) path="$SH_ROOT/$word" ;; esac
+        covered+=("$path"); files+=("$path")
+        ;;
+      input$'\t'*)
+        IFS=$'\t' read -r kind word sha <<<"$line"
+        rel="$(sh_relpath "$word")"
+        [ -n "$rel" ] || continue
+        covered+=("$SH_ROOT/$rel")
+        [ ! -f "$SH_ROOT/$rel" ] || files+=("$SH_ROOT/$rel")
+        ;;
+    esac
+  done < <(sh_verify_manifest "$1")
+  for f in ${files[@]+"${files[@]}"}; do
+    [ "$(wc -c <"$f" 2>/dev/null || echo 0)" -le 1048576 ] || continue
+    while IFS= read -r token; do
+      token="${token#./}"
+      hit=""
+      for cand in "$SH_ROOT/${token#/}" "$(dirname "$f")/${token#/}"; do
+        [ -f "$cand" ] && { hit="$cand"; break; }
+      done
+      [ -n "$hit" ] || continue
+      rel="$(sh_relpath "$hit")"
+      [ -n "$rel" ] || continue
+      # -ef, not the text: on a case-insensitive disk scripts/x.sh and Scripts/x.sh are one file.
+      for c in ${covered[@]+"${covered[@]}"}; do
+        if [ "$hit" -ef "$c" ] || { [ -d "$c" ] && [[ "$SH_ROOT/$rel" == "$c"/* ]]; }; then rel=""; break; fi
+      done
+      [ -z "$rel" ] || printf '%s\t%s\n' "$rel" "$(sh_relpath "$f")"
+    done < <(LC_ALL=C grep -IoE '[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.(sh|bash|zsh|py|rb|pl|js|mjs)\b' "$f" 2>/dev/null | sort -u)
+  done | sort -u
+}
+
 # Digest of a verify.inputs folder: names and contents of every file, so added and removed
 # files count, and every link with its target and the content it points to (SH130-04).
 # "outside" when a link inside resolves outside the project, which cannot be covered.

@@ -3,7 +3,7 @@
 # another agent (Codex), with the same approval, the same evidence record and the same catch
 # log as Claude Code's Stop hook.
 #
-#   check.sh [--project DIR] [--agent NAME] [--json]
+#   check.sh [--project DIR] [--agent NAME] [--strict] [--json]
 #
 # It runs stop-verify.sh as the Stop hook does, as a session named "agent-<NAME>" (default
 # "agent-cli"), so its results are told apart in the record and the log. The verify command
@@ -15,25 +15,29 @@
 # Like the hook, it does not run the same checks again on code that already passed: it reports
 # that. The scope contract (#72) is checked too, as information.
 #
-# Exit 0: passed (or passed before on this code). Exit 1: a check failed. Exit 3: the verify
-# command did not run (not approved, or turned off), so the build and tests are not verified.
-# Exit 2: usage, no swift-harness config, or no data folder found.
+# Exit 0: passed (or passed before on this code). That includes a partial result (a platform was
+# not checked) and an unstable one (it failed once, then passed on a rerun): the output says so,
+# by name, and --json has it in "result"; --strict exits 4 for them instead. Exit 1: a check
+# failed. Exit 3: the verify command did not run (not approved, or turned off), so the build and
+# tests are not verified. Exit 2: usage, no swift-harness config, or no data folder found.
 
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
-  echo "usage: check.sh [--project DIR] [--agent NAME] [--json]" >&2
+  echo "usage: check.sh [--project DIR] [--agent NAME] [--strict] [--json]" >&2
   exit 2
 }
 dir="$PWD"
 agent="cli"
 json=false
+strict=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) [ $# -ge 2 ] || usage; dir="$2"; shift 2 ;;
     --agent) [ $# -ge 2 ] && [ -n "$2" ] || usage; agent="$2"; shift 2 ;;
     --json) json=true; shift ;;
+    --strict) strict=true; shift ;;
     *) usage ;;
   esac
 done
@@ -55,7 +59,11 @@ if [ -z "${CLAUDE_PLUGIN_DATA:-}" ]; then
       [ -n "$d" ] && [ -f "$d/state/$key/verify-approved" ] && { printf '%s' "$d"; break; }; done)"
   fi
   [ -n "$CLAUDE_PLUGIN_DATA" ] || {
-    echo "check: cannot tell which plugin data folder the hooks use. Set CLAUDE_PLUGIN_DATA (one of: $(printf '%s\n' "$candidates" | paste -sd' ' -))." >&2
+    if [ -z "$candidates" ]; then
+      echo "check: no plugin data folder in ~/.claude/plugins/data: approve the verify command in Claude Code first, or set CLAUDE_PLUGIN_DATA to the folder that holds the approval." >&2
+    else
+      echo "check: cannot tell which plugin data folder the hooks use. Set CLAUDE_PLUGIN_DATA (one of: $(printf '%s\n' "$candidates" | paste -sd' ' -))." >&2
+    fi
     exit 2
   }
 fi
@@ -83,9 +91,21 @@ elif [ "$verified" = true ]; then result=0
 elif printf '%s' "$record" | jq -e '.outcome == "failed"' >/dev/null 2>&1; then result=1
 else result=3; fi
 
+# What passing means here, by name: an exit status alone cannot tell (SH180-R01, SH180-R02).
+case "$result" in
+  1) word=failed ;;
+  3) word=not-run ;;
+  *)
+    word=passed
+    if printf '%s' "$record" | jq -e --arg c "$command_line" 'any(.checks[]?; .name == $c and .result == "partial")' >/dev/null 2>&1; then word=partial
+    elif printf '%s' "$record" | jq -e '.stability == "unstable"' >/dev/null 2>&1; then word=unstable; fi
+    ;;
+esac
+[ "$strict" = false ] || [ "$result" -ne 0 ] || [ "$word" = passed ] || result=4
+
 if [ "$json" = true ]; then
-  jq -n --argjson record "${record:-null}" --arg agent "$agent" --argjson exit "$result" --arg notice "$notice" --arg scope "$scope" \
-    --rawfile failure "$err" '{agent: $agent, exit: $exit, record: $record}
+  jq -n --argjson record "${record:-null}" --arg agent "$agent" --argjson exit "$result" --arg word "$word" --argjson strict "$strict" --arg notice "$notice" --arg scope "$scope" \
+    --rawfile failure "$err" '{agent: $agent, result: $word, strict: $strict, exit: $exit, record: $record}
       + (if $notice == "" then {} else {notice: $notice} end) + (if $scope == "" then {} else {scope: $scope} end)
       + (if ($failure | length) > 0 then {failure: $failure} else {} end)'
   exit "$result"
@@ -99,9 +119,11 @@ fi
 [ ! -s "$err" ] || { printf '\n'; cat "$err"; }
 [ -z "$notice" ] || printf '\n%s\n' "$notice"
 [ -z "$scope" ] || printf '\n%s\n' "$scope"
-case "$result" in
-  0) printf '\nResult: passed.\n' ;;
-  1) printf '\nResult: FAILED.\n' ;;
-  3) printf '\nResult: NOT VERIFIED: the verify command did not run.\n' ;;
+case "$word" in
+  passed) printf '\nResult: passed.\n' ;;
+  partial) printf '\nResult: PARTIAL: what ran passed, but not everything was checked.\n' ;;
+  unstable) printf '\nResult: UNSTABLE: it failed once, then passed on a rerun.\n' ;;
+  failed) printf '\nResult: FAILED.\n' ;;
+  not-run) printf '\nResult: NOT VERIFIED: the verify command did not run.\n' ;;
 esac
 exit "$result"
