@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix: the doctor's `Verify coverage` row advised adding scripts that never run ([#131](https://github.com/davidelarocca/swift-harness/issues/131)). It reads files as text, so a name in a comment counts, and the fix could move on to that script's own helpers. The row is now INFO, says which file names each script, and tells a script that runs from one that is only mentioned. `/swift-harness:approve-verify` still lists them when you review the approval.
+
 ## swift-harness 1.8.1 (2026-11-09)
 
 Fixes from using 1.8.0 on a real project and from an external review, each reproduced first. What the harness says is now more exact: a partial or unstable result is named as such, an observed check is counted by episode, and an approval says which scripts it does not cover. Codex can edit a protected file once the user allows it. Checked with 778 hook tests, real Codex sessions on a fixture, and three real Claude Code sessions (0 failed invariants).

@@ -3822,7 +3822,16 @@ out="$(approval "$UC" --status)"
 if grep -q 'Not covered: scripts/helper.py, named in scripts/verify.sh' <<<"$out" && grep -q 'Not covered: scripts/nested/run.sh, named in scripts/verify.sh' <<<"$out" && ! grep -q 'gone.sh' <<<"$out" && ! grep -q 'Not covered: scripts/verify.sh' <<<"$out"; then
   ok "approval: a script named by the approved one and not covered is shown; a name that does not exist is not"
 else nok "approval: a script named by the approved one and not covered is shown; a name that does not exist is not" "$out"; fi
-expect_row "doctor: scripts the approval does not cover are a warning" "$(doctor "$UC")" WARN "Verify coverage" "scripts/helper.py scripts/nested/run.sh"
+out="$(doctor "$UC")"
+expect_row "doctor: scripts the approval does not cover are a hint, not a warning" "$out" INFO "Verify coverage"
+expect_row "doctor: each script not covered says which file names it" "$out" INFO "Verify coverage" "scripts/helper.py \(named in scripts/verify.sh\); scripts/nested/run.sh \(named in scripts/verify.sh\)"
+expect_row "doctor: the advice depends on whether the script runs" "$out" INFO "Verify coverage" "If one of them runs.*verify.inputs.*If it is only mentioned, nothing to do"
+UC2="$(new_project uncovered-two)"
+printf '#!/bin/bash\n# See scripts/helper.sh\nexit 0\n' >"$UC2/scripts/verify.sh"
+printf '# See scripts/helper.sh\n' >"$UC2/scripts/other.py"
+echo 'exit 0' >"$UC2/scripts/helper.sh"
+set_config "$UC2" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts/other.py"]},"protectedPaths":[]}'
+expect_row "doctor: a script named by two approved files lists both, once" "$(doctor "$UC2")" INFO "Verify coverage" "scripts/helper.sh \(named in scripts/other.py, scripts/verify.sh\)"
 set_config "$UC" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts/helper.py","scripts/nested"]},"protectedPaths":[]}'
 out="$(approval "$UC" --status)"
 if grep -q 'Not covered' <<<"$out"; then nok "approval: inputs, a file or a folder, cover them" "$out"; else ok "approval: inputs, a file or a folder, cover them"; fi
