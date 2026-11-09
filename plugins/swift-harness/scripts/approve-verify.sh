@@ -60,6 +60,7 @@ status() {
         case "$sha" in
           missing) printf 'Input: %s (missing: approving again is needed once it exists)\n' "$path" ;;
           outside) printf 'Input: %s (outside the project, or links outside it: cannot be covered, so approval is refused. Remove it from verify.inputs)\n' "$path" ;;
+          linkdir) printf 'Input: %s (a link in it points to another folder: cannot be covered, so approval is refused. List that folder in verify.inputs instead)\n' "$path" ;;
           *) printf 'Input: %s (sha256 %s)\n' "$path" "$sha" ;;
         esac
         ;;
@@ -103,8 +104,8 @@ case "$action" in
       status
       exit 1
     fi
-    if sh_verify_manifest "$command_line" | grep -q $'^input\t.*\toutside$'; then
-      echo "swift-harness: verify.inputs lists a path outside the project (or a folder with links outside it), which an approval cannot cover. Nothing approved; remove it from verify.inputs in .claude/swift-harness.json."
+    if sh_verify_manifest "$command_line" | grep -qE $'^input\t.*\t(outside|linkdir)$'; then
+      echo "swift-harness: verify.inputs has a path an approval cannot cover: one is outside the project (or links outside it), or is a folder reached by a link inside another input. Nothing approved; fix verify.inputs in .claude/swift-harness.json (list the real folder, or remove the path)."
       status
       exit 1
     fi

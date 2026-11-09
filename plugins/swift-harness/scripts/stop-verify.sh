@@ -83,25 +83,28 @@ ev_write() { # $1 outcome, $2 note
 }
 # History of the records (#110): one line each in evidence-history.jsonl, bounded by count
 # (SWIFT_HARNESS_HISTORY_MAX, 2000) and by age (the retention of session folders). A record that
-# only says nothing ran again on the code of the previous one is not repeated. One lock covers the
-# append and the trim: a line added between the trim's read and its replace would be lost. A lock
-# older than five minutes was left by a killed hook. If the lock stays busy, the line is still
-# added, and only the trim is skipped.
+# only says nothing ran again on the code of the previous one is not repeated. The append and the
+# trim both run only while this process holds the lock, so a line can never be added between the
+# trim's read and its replace, where the holder's replace would erase it. A lock older than five
+# minutes was left by a killed hook and is taken over. A real hold lasts milliseconds; if the lock
+# is still busy after the wait (another hook is wedged), the record is skipped rather than raced.
 ev_history() { # $1 the record as JSON
-  local file="$state/evidence-history.jsonl" lock="$state/evidence-history.lock" line max last held="" i=0
+  local file="$state/evidence-history.jsonl" lock="$state/evidence-history.lock" line max last held="" i=0 tries
   line="$(printf '%s' "$1" | jq -c . 2>/dev/null)" || return 0
   if [ "$(printf '%s' "$line" | jq -r .outcome)" = unchanged ] && [ -s "$file" ]; then
     last="$(tail -n 1 "$file" | jq -r '[.code, .outcome] | join(" ")' 2>/dev/null)"
     [ "$last" = "$fp unchanged" ] && return 0
   fi
   [ -z "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] || rmdir "$lock" 2>/dev/null
-  while [ "$i" -lt 100 ]; do
+  tries="${SWIFT_HARNESS_LOCK_TRIES:-100}"
+  case "$tries" in '' | *[!0-9]*) tries=100 ;; esac
+  while [ "$i" -lt "$tries" ]; do
     if mkdir "$lock" 2>/dev/null; then held=1; break; fi
     sleep 0.1
     i=$((i + 1))
   done
-  printf '%s\n' "$line" >>"$file" 2>/dev/null
   [ -n "$held" ] || return 0
+  printf '%s\n' "$line" >>"$file" 2>/dev/null
   max="${SWIFT_HARNESS_HISTORY_MAX:-2000}"
   case "$max" in '' | *[!0-9]*) max=2000 ;; esac
   local cutoff oldest

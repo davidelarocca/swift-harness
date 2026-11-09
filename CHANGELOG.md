@@ -4,16 +4,17 @@
 
 - Fix: the doctor's `Verify coverage` row advised adding scripts that never run ([#131](https://github.com/davidelarocca/swift-harness/issues/131)). It reads files as text, so a name in a comment counts, and the fix could move on to that script's own helpers. The row is now INFO, says which file names each script, and tells a script that runs from one that is only mentioned. `/swift-harness:approve-verify` still lists them when you review the approval.
 
-Fixes from a review by another agent, each reproduced first.
+Fixes from two rounds of review by another agent (Codex), each reproduced first, then the fixes reviewed again.
 
-**Upgrading:** a verify approval whose `verify.inputs` has a folder with links in it is asked for again once.
+**Upgrading:** a verify approval whose `verify.inputs` has a folder with a link to another folder inside it is refused until you list the real folder; nothing else changes.
 
-- Fix: a config the edit guard could not read switched it off in silence (broken JSON, or `protectedPaths` not a list). The guard now asks before each edit until the config is fixed, and the config itself stays editable.
-- Fix: a verify approval missed changes behind a link to a folder inside a `verify.inputs` folder. What sits behind the link now counts, and a link out of the project behind it is refused.
-- Fix: `setup-guest.sh --codex` overwrote an existing `.codex/swift-harness-hook.sh`. It now refuses, as it does for the other files, also for a link that points nowhere.
-- Fix: the HTML report could overwrite a file outside the project through a link in `.build`. It now refuses a link at `.build`, `.build/swift-harness` or the page itself.
+- Fix: the edit guard switched off in silence when it could not read the config (broken JSON, or `protectedPaths` not a list of strings). It now asks before each edit until the config is fixed, while the config file itself stays editable.
+- Fix: the edit guard let an edit of a protected file through when the path reached it by a different letter case on a case-insensitive disk. It now matches by filesystem identity, so a case-variant name, like a symlink alias, is still protected.
+- Fix: a verify approval silently missed changes to a folder reached by a link inside a `verify.inputs` folder, and following such links could make approval or a hook hang on a large link graph. A folder reached by a link now cannot be covered: the approval is refused until you list the real folder. A link to a file is still covered by its content, and a link out of the project is refused.
+- Fix: `setup-guest.sh --codex` overwrote an existing `.codex/swift-harness-hook.sh`, and `--from` overwrote it or any destination file through a link, including one pointing outside the project. Both now refuse before writing when any destination artifact exists, a link included.
+- Fix: the HTML report could overwrite a file outside the project, through a symlink in `.build` or a hard link at the page itself. It now refuses a symlinked `.build` or `.build/swift-harness`, and writes the page by renaming a temp file into place, so a hard link's shared content is left alone.
 - Fix: the HTML report failed on a project with no catch log yet.
-- Fix: a record added to the evidence history while another session trimmed it could be lost. One lock now covers the append and the trim, and a lock left by a killed hook is taken over.
+- Fix: a record added to the evidence history while another session trimmed it could be lost. The append and the trim now both run only while the process holds the lock; a lock left by a killed hook is taken over, and a writer that cannot get the lock skips rather than racing.
 - Fix: for agents other than Claude, the notice that the verify command is not approved named only a slash command they do not have. It now also names the script for the user's own terminal, and the README gives the steps.
 
 ## swift-harness 1.8.1 (2026-11-09)

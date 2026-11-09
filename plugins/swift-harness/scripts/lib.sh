@@ -83,6 +83,23 @@ sh_relpath() {
   esac
 }
 
+# True when the resolved path $1 is the protected path $2, or (when $2 is a folder) sits under it,
+# compared by filesystem identity. So a case-variant name on a case-insensitive disk, or a symlink
+# alias, still matches, where a plain string compare would miss it. Both must exist for a match.
+sh_same_or_under() { # $1 resolved path, $2 protected path
+  local anc
+  [ -e "$2" ] || return 1
+  [ "$1" -ef "$2" ] && return 0
+  [ -d "$2" ] || return 1
+  anc="$(dirname "$1")"
+  while [ "$anc" != "/" ] && [ "$anc" != "." ] && [ -n "$anc" ]; do
+    [ "$anc" -ef "$2" ] && return 0
+    case "$anc" in "$SH_ROOT"/*) ;; *) return 1 ;; esac
+    anc="$(dirname "$anc")"
+  done
+  return 1
+}
+
 # Read a value from the project config, with a default.
 sh_cfg() {
   local value
@@ -476,17 +493,20 @@ sh_verify_uncovered() { # $1 command
 
 # Digest of a verify.inputs folder: names and contents of every file, so added and removed
 # files count, and every link with its target and the content it points to (SH130-04).
-# "outside" when a link inside resolves outside the project, which cannot be covered.
-# find -L follows a link to a folder, so what sits behind it counts too. It reports a loop of
-# links on stderr and does not enter it.
+# "outside" when a link inside resolves outside the project. "linkdir" when a link points to
+# another folder: a folder reached by a link cannot be hashed safely (aliases can blow a walk up
+# exponentially), so the approval is refused and the user lists the real folder in verify.inputs.
+# A link to a file is covered by its target's content, through `shasum <link` below.
 sh_verify_folder() {
-  local link
+  local link res
   while IFS= read -r -d '' link; do
-    [ ! -L "$SH_ROOT/$1/${link#./}" ] || [ -n "$(sh_relpath "$SH_ROOT/$1/${link#./}")" ] || { printf 'outside'; return; }
-  done < <(cd "$SH_ROOT/$1" && find -L . -print0 2>/dev/null)
+    res="$SH_ROOT/$1/${link#./}"
+    [ -n "$(sh_relpath "$res")" ] || { printf 'outside'; return; }
+    [ ! -d "$res" ] || { printf 'linkdir'; return; }
+  done < <(cd "$SH_ROOT/$1" && find . -type l -print0)
   (
     cd "$SH_ROOT/$1" || exit
-    find -L . -type f -print0 2>/dev/null | sort -z | xargs -0 shasum -a 256
+    find . -type f -print0 | sort -z | xargs -0 shasum -a 256
     find . -type l -print0 | sort -z | while IFS= read -r -d '' link; do
       printf 'link %s -> %s %s\n' "$link" "$(readlink "$link")" "$(shasum -a 256 <"$link" 2>/dev/null | cut -d' ' -f1)"
     done

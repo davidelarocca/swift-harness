@@ -19,11 +19,12 @@ if [ "$(sh_cfg '.guardPbxproj' 'true')" = "true" ] && { [[ "$file" == *.pbxproj 
   reason="swift-harness: direct edits to project.pbxproj corrupt projects easily. Prefer adding files on disk (synchronized folders) or a local Swift package. Approve only if this edit is intended."
 fi
 
-# A config the guard cannot read would switch it off in silence, so it asks instead. The config
-# itself stays editable, so that it can be fixed.
+# A config the guard cannot read, or whose protectedPaths is not a list of strings (the schema
+# the doctor checks), would switch it off in silence, so it asks instead. The config itself stays
+# editable, so that it can be fixed.
 if [ -z "$reason" ] && [ "$rel" != ".claude/swift-harness.json" ] &&
-  ! jq -e '(.protectedPaths // []) | type == "array"' "$SH_CONFIG" >/dev/null 2>&1; then
-  reason="swift-harness: .claude/swift-harness.json is not valid (broken JSON, or protectedPaths is not a list), so protected paths cannot be checked. Approve only if this edit is intended. /swift-harness:doctor says what to fix."
+  ! jq -e '(.protectedPaths // []) | type == "array" and all(.[]; type == "string")' "$SH_CONFIG" >/dev/null 2>&1; then
+  reason="swift-harness: .claude/swift-harness.json is not valid (broken JSON, or protectedPaths is not a list of paths), so protected paths cannot be checked. Approve only if this edit is intended. /swift-harness:doctor says what to fix."
 fi
 
 if [ -z "$reason" ] && [ -n "$rel" ]; then
@@ -32,10 +33,12 @@ if [ -z "$reason" ] && [ -n "$rel" ]; then
     [[ "$protected" == *"{{"* ]] && continue
     protected="${protected#./}"
     protected="${protected%/}"
-    # A protected entry may itself be a symlink: match its real target as well.
+    # A protected entry may itself be a symlink: match its real target as well. sh_same_or_under
+    # also matches by filesystem identity, so a case-variant on a case-insensitive disk is caught.
     target="$(sh_relpath "$SH_ROOT/$protected")"
     if [ "$rel" = "$protected" ] || [[ "$rel" == "$protected"/* ]] ||
-      { [ -n "$target" ] && { [ "$rel" = "$target" ] || [[ "$rel" == "$target"/* ]]; }; }; then
+      { [ -n "$target" ] && { [ "$rel" = "$target" ] || [[ "$rel" == "$target"/* ]]; }; } ||
+      sh_same_or_under "$real" "$SH_ROOT/$protected"; then
       reason="swift-harness: $protected is a protected area. Approve only if this change was explicitly requested and planned."
       break
     fi
