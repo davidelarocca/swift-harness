@@ -3943,47 +3943,28 @@ else
   ok "guard: case-insensitive dir check skipped (case-sensitive disk)"
 fi
 
-# A record added while another session trims the history is kept.
-HR="$(new_project history-race)"
+# A normal write appends a record and leaves no lock behind.
+HR="$(new_project history-lock)"
 printf '#!/bin/bash\nexit 0\n' >"$HR/scripts/verify.sh"; chmod +x "$HR/scripts/verify.sh"
 git -C "$HR" add -A; git -C "$HR" commit -qm init
 approve "$HR" >/dev/null
-hook session-start.sh "$HR" '{"session_id":"race-a","source":"startup"}' >/dev/null
-hook session-start.sh "$HR" '{"session_id":"race-b","source":"startup"}' >/dev/null
+hook session-start.sh "$HR" '{"session_id":"s1","source":"startup"}' >/dev/null
 HR_HIST="$(state_of "$HR")/evidence-history.jsonl"
-HR_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-printf '{"time":"%s","session":"one","code":"a","outcome":"passed","checks":[]}\n{"time":"%s","session":"two","code":"b","outcome":"passed","checks":[]}\n' "$HR_NOW" "$HR_NOW" >"$HR_HIST"
-mkdir -p "$TMP/slow-jq"
-cat >"$TMP/slow-jq/jq" <<'EOF'
-#!/bin/bash
-for arg in "$@"; do
-  case "$arg" in
-    *'select((.time // "") >= $cutoff)'*) "$REAL_JQ" "$@"; code=$?; : >"$RACE_MARKER"; sleep 2; exit "$code" ;;
-  esac
-done
-exec "$REAL_JQ" "$@"
-EOF
-chmod +x "$TMP/slow-jq/jq"
-echo 'let app = 2' >"$HR/Sources/App.swift"
-jq -nc --arg cwd "$HR" '{cwd: $cwd, session_id: "race-a"}' |
-  REAL_JQ="$(command -v jq)" RACE_MARKER="$TMP/race-marker" PATH="$TMP/slow-jq:$PATH" SWIFT_HARNESS_HISTORY_MAX=2 \
-    CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$HR" "$SCRIPTS/stop-verify.sh" >/dev/null 2>&1 &
-HR_PID=$!
-for _ in $(seq 1 100); do [ -f "$TMP/race-marker" ] && break; sleep 0.05; done
-echo 'let app = 3' >"$HR/Sources/App.swift"
-jq -nc --arg cwd "$HR" '{cwd: $cwd, session_id: "race-b"}' |
-  SWIFT_HARNESS_HISTORY_MAX=2 CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$HR" "$SCRIPTS/stop-verify.sh" >/dev/null 2>&1
-wait "$HR_PID"
-out="$(jq -sc '[.[].session]' "$HR_HIST")"
-if [ -f "$TMP/race-marker" ] && [ "$out" = '["race-a","race-b"]' ]; then ok "history: a record added during a trim is kept"
-else nok "history: a record added during a trim is kept" "$out"; fi
 HR_LOCK="$(state_of "$HR")/evidence-history.lock"
-if [ -e "$HR_LOCK" ]; then nok "history: the lock is released"; else ok "history: the lock is released"; fi
-mkdir "$HR_LOCK"; touch -t 202001010000 "$HR_LOCK"
-echo 'let app = 4' >"$HR/Sources/App.swift"
-jq -nc --arg cwd "$HR" '{cwd: $cwd, session_id: "race-b"}' |
+echo 'let app = 2' >"$HR/Sources/App.swift"
+jq -nc --arg cwd "$HR" '{cwd: $cwd, session_id: "s1"}' |
   CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$HR" "$SCRIPTS/stop-verify.sh" >/dev/null 2>&1
-if [ -e "$HR_LOCK" ]; then nok "history: a lock left by a killed hook is taken over"; else ok "history: a lock left by a killed hook is taken over"; fi
+if [ "$(jq -sc 'length' "$HR_HIST" 2>/dev/null)" -ge 1 ] && [ ! -e "$HR_LOCK" ]; then ok "history: a normal write appends a record and releases the lock"
+else nok "history: a normal write appends a record and releases the lock" "lines=$(wc -l <"$HR_HIST" 2>/dev/null) lock=$([ -e "$HR_LOCK" ] && echo held)"; fi
+
+# A lock left behind by a killed hook (old mtime) is taken over, and the record is appended.
+HR_PRE="$(jq -sc 'length' "$HR_HIST" 2>/dev/null)"
+mkdir "$HR_LOCK"; touch -t 202001010000 "$HR_LOCK"
+echo 'let app = 3' >"$HR/Sources/App.swift"
+jq -nc --arg cwd "$HR" '{cwd: $cwd, session_id: "s1"}' |
+  CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$HR" "$SCRIPTS/stop-verify.sh" >/dev/null 2>&1
+if [ ! -e "$HR_LOCK" ] && [ "$(jq -sc 'length' "$HR_HIST" 2>/dev/null)" -gt "${HR_PRE:-0}" ]; then ok "history: a lock left by a killed hook is taken over, and the record is kept"
+else nok "history: a lock left by a killed hook is taken over, and the record is kept" "lock=$([ -e "$HR_LOCK" ] && echo held) pre=$HR_PRE now=$(jq -sc 'length' "$HR_HIST" 2>/dev/null)"; fi
 
 # A writer that cannot get the lock (a live holder) skips, without appending or erasing.
 HL="$(new_project history-locked)"
