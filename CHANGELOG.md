@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## swift-harness 1.8.2 (2026-11-09)
+
+A reporting fix, and a round of hardening found by reviewing the hook scripts with another agent (Codex), each reproduced before its fix and then reviewed again. The edit guard now fails closed on a config it cannot read and matches protected paths by filesystem identity; verify approval, the guest setup and the HTML report no longer write or read through a link that leaves the project; and the evidence history serialises its writers. Checked with 818 hook tests and real Claude Code sessions (0 failed invariants).
+
+**Upgrading:** nothing to do for most projects. One behaviour change: a verify approval whose `verify.inputs` has a folder with a link to another folder inside it is refused until you list the real folder.
 
 - Fix: the doctor's `Verify coverage` row advised adding scripts that never run ([#131](https://github.com/davidelarocca/swift-harness/issues/131)). It reads files as text, so a name in a comment counts, and the fix could move on to that script's own helpers. The row is now INFO, says which file names each script, and tells a script that runs from one that is only mentioned. `/swift-harness:approve-verify` still lists them when you review the approval.
-
-Fixes from two rounds of review by another agent (Codex), each reproduced first, then the fixes reviewed again.
-
-**Upgrading:** a verify approval whose `verify.inputs` has a folder with a link to another folder inside it is refused until you list the real folder; nothing else changes.
 
 - Fix: the edit guard switched off in silence when it could not read the config (broken JSON, or `protectedPaths` not a list of strings). It now asks before each edit until the config is fixed, while the config file itself stays editable.
 - Fix: the edit guard let an edit of a protected file through when the path reached it by a different letter case on a case-insensitive disk. It now matches by filesystem identity, so a case-variant name, like a symlink alias, is still protected.
