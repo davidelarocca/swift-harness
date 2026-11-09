@@ -118,6 +118,15 @@ sh_agent_name() {
   case "${SH_AGENT:-claude}" in claude) printf 'Claude' ;; codex) printf 'Codex' ;; *) printf 'the agent' ;; esac
 }
 
+# How the user approves the verify command, for messages: a slash command exists only in Claude
+# Code. This names the script, never a digest: the approval stays the user's to give.
+sh_approve_how() {
+  case "${SH_AGENT:-claude}" in
+    claude) printf 'type /swift-harness:approve-verify' ;;
+    *) printf "use /swift-harness:approve-verify in Claude Code, or approve-verify.sh in the user's own terminal (README, \"Codex runs the same hooks\")" ;;
+  esac
+}
+
 sh_catch() { # $1 check, $2 kind, $3 what, $4 seconds (optional)
   local dir line
   dir="$(sh_state_dir 2>/dev/null)" || return 0
@@ -457,7 +466,8 @@ sh_verify_uncovered() { # $1 command
       [ -n "$rel" ] || continue
       # -ef, not the text: on a case-insensitive disk scripts/x.sh and Scripts/x.sh are one file.
       for c in ${covered[@]+"${covered[@]}"}; do
-        if [ "$hit" -ef "$c" ] || { [ -d "$c" ] && [[ "$SH_ROOT/$rel" == "$c"/* ]]; }; then rel=""; break; fi
+        # Both the resolved path and the named one: a covered folder may reach the script by a link.
+        if [ "$hit" -ef "$c" ] || { [ -d "$c" ] && { [[ "$SH_ROOT/$rel" == "$c"/* ]] || [[ "$hit" == "$c"/* ]]; }; }; then rel=""; break; fi
       done
       [ -z "$rel" ] || printf '%s\t%s\n' "$rel" "$(sh_relpath "$f")"
     done < <(LC_ALL=C grep -IoE '[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.(sh|bash|zsh|py|rb|pl|js|mjs)\b' "$f" 2>/dev/null | sort -u)
@@ -467,14 +477,16 @@ sh_verify_uncovered() { # $1 command
 # Digest of a verify.inputs folder: names and contents of every file, so added and removed
 # files count, and every link with its target and the content it points to (SH130-04).
 # "outside" when a link inside resolves outside the project, which cannot be covered.
+# find -L follows a link to a folder, so what sits behind it counts too. It reports a loop of
+# links on stderr and does not enter it.
 sh_verify_folder() {
   local link
   while IFS= read -r -d '' link; do
-    [ -n "$(sh_relpath "$SH_ROOT/$1/${link#./}")" ] || { printf 'outside'; return; }
-  done < <(cd "$SH_ROOT/$1" && find . -type l -print0)
+    [ ! -L "$SH_ROOT/$1/${link#./}" ] || [ -n "$(sh_relpath "$SH_ROOT/$1/${link#./}")" ] || { printf 'outside'; return; }
+  done < <(cd "$SH_ROOT/$1" && find -L . -print0 2>/dev/null)
   (
     cd "$SH_ROOT/$1" || exit
-    find . -type f -print0 | sort -z | xargs -0 shasum -a 256
+    find -L . -type f -print0 2>/dev/null | sort -z | xargs -0 shasum -a 256
     find . -type l -print0 | sort -z | while IFS= read -r -d '' link; do
       printf 'link %s -> %s %s\n' "$link" "$(readlink "$link")" "$(shasum -a 256 <"$link" 2>/dev/null | cut -d' ' -f1)"
     done

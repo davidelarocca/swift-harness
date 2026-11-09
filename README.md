@@ -282,6 +282,13 @@ In CI there is no approval folder: run the project's verify command itself there
 
 The approval, the evidence record and the catch log are the same as Claude Code's, and they name the agent. Codex asks to trust the project's hooks (`/hooks`), per checkout. With `--local`, the Codex files stay out of git too.
 
+To approve the verify command without Claude Code, run this in your own terminal, not through Codex, with the plugin folder and the data folder written in `.codex/swift-harness-hook.sh`. The first command shows the command, its files and a digest; after reviewing them, the second approves:
+
+```bash
+CLAUDE_PLUGIN_DATA=<data folder> <plugin folder>/scripts/approve-verify.sh --status <project>
+CLAUDE_PLUGIN_DATA=<data folder> <plugin folder>/scripts/approve-verify.sh --approve <digest> <project>
+```
+
 Limits: a shell command Codex runs is not guarded, only reported at the end of the turn. A new worktree without these files runs no check, and Codex gets no notice of it, because nothing of swift-harness loads there: run `setup-guest.sh --project <worktree> --from <checkout> --local` when you create one.
 
 </details>

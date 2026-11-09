@@ -19,6 +19,13 @@ if [ "$(sh_cfg '.guardPbxproj' 'true')" = "true" ] && { [[ "$file" == *.pbxproj 
   reason="swift-harness: direct edits to project.pbxproj corrupt projects easily. Prefer adding files on disk (synchronized folders) or a local Swift package. Approve only if this edit is intended."
 fi
 
+# A config the guard cannot read would switch it off in silence, so it asks instead. The config
+# itself stays editable, so that it can be fixed.
+if [ -z "$reason" ] && [ "$rel" != ".claude/swift-harness.json" ] &&
+  ! jq -e '(.protectedPaths // []) | type == "array"' "$SH_CONFIG" >/dev/null 2>&1; then
+  reason="swift-harness: .claude/swift-harness.json is not valid (broken JSON, or protectedPaths is not a list), so protected paths cannot be checked. Approve only if this edit is intended. /swift-harness:doctor says what to fix."
+fi
+
 if [ -z "$reason" ] && [ -n "$rel" ]; then
   while IFS= read -r protected; do
     [ -n "$protected" ] || continue

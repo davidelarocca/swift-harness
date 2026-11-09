@@ -4,6 +4,18 @@
 
 - Fix: the doctor's `Verify coverage` row advised adding scripts that never run ([#131](https://github.com/davidelarocca/swift-harness/issues/131)). It reads files as text, so a name in a comment counts, and the fix could move on to that script's own helpers. The row is now INFO, says which file names each script, and tells a script that runs from one that is only mentioned. `/swift-harness:approve-verify` still lists them when you review the approval.
 
+Fixes from a review by another agent, each reproduced first.
+
+**Upgrading:** a verify approval whose `verify.inputs` has a folder with links in it is asked for again once.
+
+- Fix: a config the edit guard could not read switched it off in silence (broken JSON, or `protectedPaths` not a list). The guard now asks before each edit until the config is fixed, and the config itself stays editable.
+- Fix: a verify approval missed changes behind a link to a folder inside a `verify.inputs` folder. What sits behind the link now counts, and a link out of the project behind it is refused.
+- Fix: `setup-guest.sh --codex` overwrote an existing `.codex/swift-harness-hook.sh`. It now refuses, as it does for the other files, also for a link that points nowhere.
+- Fix: the HTML report could overwrite a file outside the project through a link in `.build`. It now refuses a link at `.build`, `.build/swift-harness` or the page itself.
+- Fix: the HTML report failed on a project with no catch log yet.
+- Fix: a record added to the evidence history while another session trimmed it could be lost. One lock now covers the append and the trim, and a lock left by a killed hook is taken over.
+- Fix: for agents other than Claude, the notice that the verify command is not approved named only a slash command they do not have. It now also names the script for the user's own terminal, and the README gives the steps.
+
 ## swift-harness 1.8.1 (2026-11-09)
 
 Fixes from using 1.8.0 on a real project and from an external review, each reproduced first. What the harness says is now more exact: a partial or unstable result is named as such, an observed check is counted by episode, and an approval says which scripts it does not cover. Codex can edit a protected file once the user allows it. Checked with 778 hook tests, real Codex sessions on a fixture, and three real Claude Code sessions (0 failed invariants).

@@ -86,7 +86,12 @@ verify="$root/$sdir/verify.sh"
 exists=""
 [ -e "$config" ] && exists="$exists .claude/swift-harness.json"
 [ -e "$verify" ] && exists="$exists $sdir/verify.sh"
-[ "$codex" = false ] || [ ! -e "$root/.codex/hooks.json" ] || exists="$exists .codex/hooks.json"
+if [ "$codex" = true ]; then
+  # -L as well: a link that points nowhere fails -e, and writing would go through it.
+  for file in .codex/hooks.json .codex/swift-harness-hook.sh; do
+    if [ -e "$root/$file" ] || [ -L "$root/$file" ]; then exists="$exists $file"; fi
+  done
+fi
 # The plugin data folder the Codex launcher uses, found before anything is written.
 if [ "$codex" = true ] && [ -z "$data" ]; then
   data="${CLAUDE_PLUGIN_DATA:-}"
