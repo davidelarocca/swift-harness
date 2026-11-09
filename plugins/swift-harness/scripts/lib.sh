@@ -25,12 +25,43 @@ sh_in() { printf '%s' "$SH_INPUT" | jq -r "$1 // empty" 2>/dev/null; }
 
 # Project root: git top level of the hook's cwd (follows worktrees), else CLAUDE_PROJECT_DIR.
 # Always a physical path (symlinks resolved), like the output of sh_realpath.
+# When that top level has no config, the cwd may be inside a nested repository or a submodule
+# of the project (a local package with its own .git): the repositories that enclose it are
+# tried, then CLAUDE_PROJECT_DIR when it holds the cwd (#138). A worktree of the same
+# repository is never passed over this way: it is a checkout of its own, set up apart, and the
+# session-start notice says when it has no config.
+sh_same_repository() { # $1, $2 folders: true when both are checkouts of one repository
+  local a b
+  a="$(cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || return 1
+  b="$(cd "$2" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || return 1
+  [ "$a" = "$b" ]
+}
 sh_root() {
-  local cwd root
+  local cwd root outer project hops=0
   cwd="$(sh_in '.cwd')"
   [ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
   root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || root="${CLAUDE_PROJECT_DIR:-$cwd}"
-  (cd "$root" 2>/dev/null && pwd -P) || printf '%s' "$root"
+  root="$( (cd "$root" 2>/dev/null && pwd -P) || printf '%s' "$root")"
+  if [ ! -f "$root/.claude/swift-harness.json" ]; then
+    outer="$root"
+    while [ "$hops" -lt 8 ] && [ "$outer" != "/" ]; do
+      outer="$(git -C "$(dirname "$outer")" rev-parse --show-toplevel 2>/dev/null)" || break
+      outer="$(cd "$outer" 2>/dev/null && pwd -P)" || break
+      sh_same_repository "$root" "$outer" && break
+      if [ -f "$outer/.claude/swift-harness.json" ]; then
+        printf '%s' "$outer"
+        return
+      fi
+      hops=$((hops + 1))
+    done
+    project="$(cd "${CLAUDE_PROJECT_DIR:-/nonexistent}" 2>/dev/null && pwd -P)" || project=""
+    if [ -n "$project" ] && [ "$project" != "$root" ] && [ -f "$project/.claude/swift-harness.json" ] &&
+      [[ "$(cd "$cwd" 2>/dev/null && pwd -P)/" == "$project"/* ]] && ! sh_same_repository "$root" "$project"; then
+      printf '%s' "$project"
+      return
+    fi
+  fi
+  printf '%s' "$root"
 }
 
 # Remove ".", ".." and repeated slashes from an absolute path without touching the disk,
@@ -195,6 +226,7 @@ SH_BUILD_INPUTS=(
   '*.pbxproj' '*.xcconfig' '*.xcscheme' '*.xctestplan' '*.plist' '*.entitlements'
   '*.xcassets/*' '*.xcstrings' '*.strings' '*.stringsdict' '*.xib' '*.storyboard'
   '*.xcdatamodeld/*' '*.xcmappingmodel/*' '*.metal' '*.h' '*.m' '*.mm' '*.c'
+  '*.cpp' '*.cc' '*.cxx' '*.hpp' '*.hh' '*.hxx'
   '*/Resources/*' '*__Snapshots__/*'
   'Sources/*' '*/Sources/*' 'Tests/*' '*/Tests/*'
   '.swiftlint.yml' '.swiftformat' '.swift-format' '.claude/swift-harness.json' 'scripts/*'
@@ -322,8 +354,9 @@ sh_dirty_list() {
 SH_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$(dirname "${BASH_SOURCE[0]}")/../.claude-plugin/plugin.json" 2>/dev/null | head -1)"
 
 # What a verification result is about (#18): the code state and the plugin version. The
-# project's policy (lintBlocking, verify.command, ...) is part of the code state, since
-# .claude/swift-harness.json and scripts/ are build inputs. A plugin update can make the
+# project's policy (lintBlocking, verify.command, ...) is part of the code state: the
+# fingerprint reads .claude/swift-harness.json and the approved verify files from disk, whether
+# git shows them or not (#137). A plugin update can make the
 # checks stricter or change the defaults, so a result recorded by another version does not
 # count: unchanged code is verified again once.
 sh_identity() {
@@ -331,13 +364,55 @@ sh_identity() {
 }
 
 # Fingerprint of the code state: HEAD, uncommitted changes to build inputs (including
-# deletions), and the content of untracked build inputs.
+# deletions), and the content of untracked build inputs. It also covers what git does not show
+# for the project (#137):
+# - the config and the files the verify approval covers, read from disk, so they count when
+#   they are kept out of git (guest mode --local, an ignored .claude/);
+# - a repository with no commit yet, by the content of the build inputs in its index;
+# - nested repositories and submodules under the project (a local package with its own .git),
+#   each by its own HEAD and changes. One ignored by the project's .gitignore is not looked at.
+sh_fingerprint_repo() { # $1 repository root, then pathspecs added to the build inputs
+  local repo="$1" f
+  shift
+  if git -C "$repo" rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1; then
+    git -C "$repo" rev-parse HEAD 2>/dev/null
+    git -C "$repo" diff HEAD -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null
+  else
+    printf 'no commit yet\n'
+    git -C "$repo" ls-files -z --cached -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null |
+      while IFS= read -r -d '' f; do
+        printf '%s ' "$f"
+        if [ -f "$repo/$f" ]; then shasum <"$repo/$f" 2>/dev/null; else printf 'deleted\n'; fi
+      done
+  fi
+  git -C "$repo" ls-files -z --others --exclude-standard -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null |
+    while IFS= read -r -d '' f; do shasum "$repo/$f" 2>/dev/null; done
+}
+# Nested repositories of $1, as paths from its root: links in the index (submodules, or a
+# repository added as one) and untracked folders that are repositories.
+sh_nested_repos() {
+  {
+    git -C "$1" ls-files -s -z 2>/dev/null | tr '\0' '\n' | sed -n 's/^160000 [0-9a-f]* [0-9]	//p'
+    git -C "$1" ls-files -z --others --exclude-standard 2>/dev/null | tr '\0' '\n' | sed -n 's#/$##p'
+  } | LC_ALL=C sort -u
+}
+sh_fingerprint_tree() { # $1 repository root, $2 depth, then pathspecs for this repository only
+  local repo="$1" depth="$2" sub
+  shift 2
+  sh_fingerprint_repo "$repo" "$@"
+  [ "$depth" -lt 4 ] || return 0
+  sh_nested_repos "$repo" | while IFS= read -r sub; do
+    [ -n "$sub" ] && [ -e "$repo/$sub/.git" ] || continue
+    printf 'nested %s\n' "$sub"
+    sh_fingerprint_tree "$repo/$sub" $((depth + 1))
+  done
+}
 sh_fingerprint() {
   {
-    git -C "$SH_ROOT" rev-parse HEAD 2>/dev/null
-    git -C "$SH_ROOT" diff HEAD -- "${SH_BUILD_INPUTS[@]}" "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" "$(sh_performance)" 2>/dev/null
-    git -C "$SH_ROOT" ls-files -z --others --exclude-standard -- "${SH_BUILD_INPUTS[@]}" "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" "$(sh_performance)" 2>/dev/null |
-      while IFS= read -r -d '' f; do shasum "$SH_ROOT/$f" 2>/dev/null; done
+    sh_fingerprint_tree "$SH_ROOT" 0 "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" "$(sh_performance)"
+    printf 'policy\n'
+    shasum <"$SH_CONFIG" 2>/dev/null
+    sh_verify_manifest "$(sh_cfg '.verify.command' 'scripts/verify.sh fast')" 2>/dev/null | sed 1d
   } | shasum | cut -d' ' -f1
 }
 

@@ -4071,6 +4071,136 @@ out="$(hook session-start.sh "$AN" '{"source":"startup"}' 2>&1)"
 if grep -q 'type /swift-harness:approve-verify' <<<"$out" && ! grep -q "own terminal" <<<"$out"; then ok "session start: for Claude, the slash command"
 else nok "session start: for Claude, the slash command" "$out"; fi
 
+# ---------- changes the fingerprint did not see (#137) ----------
+
+fp_of() { fingerprint "$1"; }
+fp_differs() { # $1 name, $2 before, $3 project
+  if [ "$(fp_of "$3")" != "$2" ]; then ok "$1"; else nok "$1" "fingerprint did not change"; fi
+}
+
+# Guest files kept out of git (--local): the config and the verify script are in .git/info/exclude.
+FL="$(new_project fp-local)"
+git -C "$FL" rm -q --cached .claude/swift-harness.json scripts/verify.sh
+git -C "$FL" commit -qm 'keep the harness files local'
+printf '/.claude/swift-harness.json\n/scripts/verify.sh\n' >>"$FL/.git/info/exclude"
+approve "$FL" >/dev/null
+before="$(fp_of "$FL")"
+printf '%s\n' '{"verify":{"command":"scripts/verify.sh fast","maxAttempts":3},"lintBlocking":true}' >"$FL/.claude/swift-harness.json"
+fp_differs "fingerprint: a config kept out of git still counts" "$before" "$FL"
+before="$(fp_of "$FL")"
+printf '#!/bin/bash\necho changed\nexit 1\n' >"$FL/scripts/verify.sh"
+fp_differs "fingerprint: a verify script kept out of git still counts" "$before" "$FL"
+FL2="$(new_project fp-local-stop)"
+git -C "$FL2" rm -q --cached .claude/swift-harness.json scripts/verify.sh
+git -C "$FL2" commit -qm 'keep the harness files local'
+printf '/.claude/swift-harness.json\n/scripts/verify.sh\n' >>"$FL2/.git/info/exclude"
+approve "$FL2" >/dev/null
+hook session-start.sh "$FL2" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$FL2/Sources/App.swift"
+hook stop-verify.sh "$FL2" >/dev/null 2>&1
+printf '#!/bin/bash\necho the new script fails\nexit 1\n' >"$FL2/scripts/verify.sh"
+approve "$FL2" >/dev/null
+expect_result "stop: a verify script kept out of git, changed and approved, runs on code that passed the old one" 2 'the new script fails' "exit=$(hook stop-verify.sh "$FL2" >/dev/null 2>&1; echo $?)
+$(rm -f "$TMP/data/state/"*/failed; hook stop-verify.sh "$FL2" 2>&1)"
+
+# A repository with no commit yet: files staged, HEAD not born.
+FU="$TMP/fp-unborn"; mkdir -p "$FU/.claude" "$FU/Sources" "$FU/scripts"; git -C "$FU" init -q
+printf '%s\n' '{"verify":{"command":"scripts/verify.sh fast"}}' >"$FU/.claude/swift-harness.json"
+printf '#!/bin/bash\nexit 0\n' >"$FU/scripts/verify.sh"; chmod +x "$FU/scripts/verify.sh"
+echo 'let a = 1' >"$FU/Sources/A.swift"; echo 'let b = 1' >"$FU/Sources/B.swift"
+git -C "$FU" add -A
+before="$(fp_of "$FU")"
+echo 'let a = 2' >"$FU/Sources/A.swift"
+fp_differs "fingerprint: no commit yet, an edit to a staged file counts" "$before" "$FU"
+before="$(fp_of "$FU")"
+rm "$FU/Sources/B.swift"
+fp_differs "fingerprint: no commit yet, a deleted staged file counts" "$before" "$FU"
+
+# Nested repositories: a folder with its own .git, tracked as a link, untracked, or a submodule.
+nested_repo() { # $1 folder: a repository with one Swift file and one commit
+  mkdir -p "$1/Sources/Core"; git -C "$1" init -q
+  git -C "$1" config user.email t@example.com; git -C "$1" config user.name t
+  echo 'let core = 1' >"$1/Sources/Core/Core.swift"; echo '# core' >"$1/README.md"
+  git -C "$1" add -A && git -C "$1" commit -qm core
+}
+FN="$(new_project fp-nested)"
+nested_repo "$FN/Packages/Core"
+git -C "$FN" add -A 2>/dev/null; git -C "$FN" commit -qm 'a nested repository, as a link'
+before="$(fp_of "$FN")"
+echo 'let core = 2' >"$FN/Packages/Core/Sources/Core/Core.swift"
+fp_differs "fingerprint: an edit inside a nested repository counts" "$before" "$FN"
+before="$(fp_of "$FN")"
+echo 'let core = 3' >"$FN/Packages/Core/Sources/Core/Core.swift"
+fp_differs "fingerprint: a second edit inside a nested repository counts" "$before" "$FN"
+before="$(fp_of "$FN")"
+echo 'let more = 1' >"$FN/Packages/Core/Sources/Core/More.swift"
+fp_differs "fingerprint: a new file inside a nested repository counts" "$before" "$FN"
+git -C "$FN/Packages/Core" checkout -q -- . && git -C "$FN/Packages/Core" clean -qfd
+before="$(fp_of "$FN")"
+echo '# changed' >"$FN/Packages/Core/README.md"
+if [ "$(fp_of "$FN")" = "$before" ]; then ok "fingerprint: a README inside a nested repository is ignored"
+else nok "fingerprint: a README inside a nested repository is ignored" "fingerprint changed"; fi
+FN2="$(new_project fp-nested-untracked)"
+nested_repo "$FN2/Vendor/Core"
+before="$(fp_of "$FN2")"
+echo 'let core = 2' >"$FN2/Vendor/Core/Sources/Core/Core.swift"
+fp_differs "fingerprint: an edit inside an untracked nested repository counts" "$before" "$FN2"
+FS="$(new_project fp-submodule)"
+nested_repo "$TMP/fp-submodule-origin"
+git -C "$FS" -c protocol.file.allow=always submodule add -q "$TMP/fp-submodule-origin" Packages/Sub 2>/dev/null
+git -C "$FS" commit -qm 'a submodule'
+before="$(fp_of "$FS")"
+echo 'let core = 2' >"$FS/Packages/Sub/Sources/Core/Core.swift"
+fp_differs "fingerprint: an edit inside a submodule counts" "$before" "$FS"
+before="$(fp_of "$FS")"
+echo 'let core = 3' >"$FS/Packages/Sub/Sources/Core/Core.swift"
+fp_differs "fingerprint: a second edit inside a submodule counts" "$before" "$FS"
+
+# C and C++ sources of an Xcode target, outside Sources/.
+FC="$(new_project fp-cpp)"
+mkdir -p "$FC/App/DSP"
+for f in filter.cpp filter.hpp mix.cc mix.hh gain.cxx; do echo '// one' >"$FC/App/DSP/$f"; done
+git -C "$FC" add -A && git -C "$FC" commit -qm dsp
+for f in filter.cpp filter.hpp mix.cc mix.hh gain.cxx; do
+  before="$(fp_of "$FC")"
+  echo '// two' >"$FC/App/DSP/$f"
+  fp_differs "fingerprint: edited $f in an app folder" "$before" "$FC"
+done
+
+# ---------- a working directory inside a nested repository (#138) ----------
+
+root_of() { # $1 cwd, $2 CLAUDE_PROJECT_DIR (default: the cwd)
+  jq -nc --arg cwd "$1" '{cwd: $cwd}' | CLAUDE_PROJECT_DIR="${2:-$1}" bash -c '. "$0"; sh_root' "$SCRIPTS/lib.sh"
+}
+if [ "$(root_of "$FN/Packages/Core")" = "$FN" ]; then ok "root: from a nested repository, the project that holds the config"
+else nok "root: from a nested repository, the project that holds the config" "$(root_of "$FN/Packages/Core")"; fi
+if [ "$(root_of "$FN/Packages/Core/Sources/Core")" = "$FN" ]; then ok "root: from a folder of a nested repository, the same"
+else nok "root: from a folder of a nested repository, the same" "$(root_of "$FN/Packages/Core/Sources/Core")"; fi
+if [ "$(root_of "$FS/Packages/Sub")" = "$FS" ]; then ok "root: from a submodule, the project that holds the config"
+else nok "root: from a submodule, the project that holds the config" "$(root_of "$FS/Packages/Sub")"; fi
+if [ "$(root_of "$FN2/Vendor/Core")" = "$FN2" ]; then ok "root: from an untracked nested repository, the same"
+else nok "root: from an untracked nested repository, the same" "$(root_of "$FN2/Vendor/Core")"; fi
+RN="$TMP/root-none"; mkdir -p "$RN"; nested_repo "$RN/inner"
+if [ "$(root_of "$RN/inner")" = "$RN/inner" ]; then ok "root: a repository with no config above it stays its own root"
+else nok "root: a repository with no config above it stays its own root" "$(root_of "$RN/inner")"; fi
+# A worktree placed inside the checkout, without the local guest files: its own root, so the
+# session-start notice still says no check runs there, and the main checkout is not checked for it.
+git -C "$FL" worktree add -q "$FL/.worktrees/w1" -b w1 2>/dev/null
+if [ "$(root_of "$FL/.worktrees/w1" "$FL")" = "$FL/.worktrees/w1" ]; then ok "root: a worktree inside the checkout, without the files, stays its own root"
+else nok "root: a worktree inside the checkout, without the files, stays its own root" "$(root_of "$FL/.worktrees/w1" "$FL")"; fi
+out="$(jq -nc --arg cwd "$FL/.worktrees/w1" '{cwd: $cwd, session_id: "test", source: "startup"}' | CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$FL" "$SCRIPTS/session-start.sh" 2>&1)"
+if grep -q 'no check runs here' <<<"$out"; then ok "root: that worktree still says no check runs there"
+else nok "root: that worktree still says no check runs there" "$out"; fi
+
+nested_guard() { hook guard.sh "$FN/Packages/Core" "$(edit_input "$FN/Sources/Audio/Engine.swift")" | grep -q '"permissionDecision": "ask"'; }
+if nested_guard; then ok "guard: from a nested repository, a protected file of the project still asks"
+else nok "guard: from a nested repository, a protected file of the project still asks" "no approval request"; fi
+git -C "$FN/Packages/Core" checkout -q -- . && git -C "$FN/Packages/Core" clean -qfd
+hook session-start.sh "$FN" '{"source":"startup"}' >/dev/null
+echo 'let app = 7' >"$FN/Sources/App.swift"
+expect_result "stop: from a nested repository, the project is still verified" 2 'Verification failed' "exit=$(FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$FN/Packages/Core" >/dev/null 2>&1; echo $?)
+$(rm -f "$TMP/data/state/"*/failed; FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$FN/Packages/Core" 2>&1)"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

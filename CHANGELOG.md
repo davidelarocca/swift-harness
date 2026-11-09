@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fix: the end-of-turn check ran nothing after changes git did not show ([#137](https://github.com/davidelarocca/swift-harness/issues/137)). The code fingerprint was built from `git diff HEAD` and the untracked files, so four kinds of change left it as it was, and the turn ended as "nothing changed" or "passed before":
+  - **the config and the verify script kept out of git** (guest mode `--local`, or an ignored `.claude/`): a changed verify script, approved again, was not run on code that had passed the old one. They are now read from disk, with every file the verify approval covers;
+  - **a repository with no commit yet**: an edit to a staged file now counts;
+  - **nested repositories and submodules** (a local package with its own `.git`): their commit and their changes to build inputs now count. One that the project's `.gitignore` ignores is not looked at;
+  - **C++ sources outside `Sources/`** (`.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`), as in an Xcode app target.
+
+  After the update every project is verified again once, as after any update.
+- Fix: a working directory inside a nested repository or a submodule turned every hook off ([#138](https://github.com/davidelarocca/swift-harness/issues/138)). The project root was the git top level of the working directory; in a nested repository that folder has no config, so the guard stopped asking about protected files and the Stop hook verified nothing, in silence. The root is now looked for in the repositories that enclose it. A worktree without its config is still its own root, and still says at session start that no check runs there.
 - Fix: the notice about protected files changed outside Edit and Write said "changed in this session" ([#135](https://github.com/davidelarocca/swift-harness/issues/135)). It compares with the files as they were when the session started, so it also reports changes made by another session or agent on the same checkout, and told the user to check and maybe restore work that was legitimate and already committed. It now says "changed since this session started", names the commit that holds a change made since then (and whether the file changed again after it), and says a committed change may come from another session or agent. Changes not in a commit are reported as before.
 
 ## swift-harness 1.8.2 (2026-11-09)
