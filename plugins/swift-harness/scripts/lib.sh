@@ -499,11 +499,16 @@ sh_verify_uncovered() { # $1 command
 # A link to a file is covered by its target's content, through `shasum <link` below.
 sh_verify_folder() {
   local link res
-  while IFS= read -r -d '' link; do
+  local -a links=()
+  # Drain find fully into an array first, then test the links. Returning early from a loop that
+  # reads a process substitution would abandon the find child; it keeps this function's stdout (the
+  # pipe to shasum in sh_verify_digest) open, and shasum then blocks for ever on a slow machine.
+  while IFS= read -r -d '' link; do links+=("$link"); done < <(cd "$SH_ROOT/$1" && find . -type l -print0)
+  for link in ${links[@]+"${links[@]}"}; do
     res="$SH_ROOT/$1/${link#./}"
     [ -n "$(sh_relpath "$res")" ] || { printf 'outside'; return; }
     [ ! -d "$res" ] || { printf 'linkdir'; return; }
-  done < <(cd "$SH_ROOT/$1" && find . -type l -print0)
+  done
   (
     cd "$SH_ROOT/$1" || exit
     find . -type f -print0 | sort -z | xargs -0 shasum -a 256

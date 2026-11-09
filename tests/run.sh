@@ -3879,9 +3879,6 @@ if denied "$(codex_hook guard.sh "$PX" "$PERM")"; then ok "codex permit: an old 
 else nok "codex permit: an old one has expired"; fi
 
 # ---------- findings of a review by another agent ----------
-# TEMP DIAGNOSTIC (revert): trace this block to stderr to pinpoint a CI-only hang.
-export PS4='+TRACE ${LINENO}: '
-set -x
 
 # A config the guard cannot read must not switch the guard off.
 GI="$(new_project guard-invalid)"
@@ -3906,11 +3903,14 @@ printf '#!/bin/bash\nbash scripts/tree/run.sh\n' >"$VF/scripts/verify.sh"; chmod
 echo 'exit 0' >"$VF/shared/run.sh"
 ln -s ../shared "$VF/scripts/tree"
 set_config "$VF" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts"]},"protectedPaths":[]}'
-if approval "$VF" --status | grep -q 'cannot be covered'; then ok "approval: a folder reached by a link in an input folder cannot be covered"
-else nok "approval: a folder reached by a link in an input folder cannot be covered" "$(approval "$VF" --status)"; fi
-VF_DIG="$(approval "$VF" --status | sed -n 's/^Digest: *//p')"
-if approval "$VF" --approve "$VF_DIG" | grep -q 'cannot cover'; then ok "approval: such an input is refused at approve time"
-else nok "approval: such an input is refused at approve time" "$(approval "$VF" --approve "$VF_DIG")"; fi
+# Capture the whole output and grep the variable, never `| grep -q` which closes the pipe early.
+VF_OUT="$(approval "$VF" --status)"
+if grep -q 'cannot be covered' <<<"$VF_OUT"; then ok "approval: a folder reached by a link in an input folder cannot be covered"
+else nok "approval: a folder reached by a link in an input folder cannot be covered" "$VF_OUT"; fi
+VF_DIG="$(sed -n 's/^Digest: *//p' <<<"$VF_OUT")"
+VF_APP="$(approval "$VF" --approve "$VF_DIG")"
+if grep -q 'cannot cover' <<<"$VF_APP"; then ok "approval: such an input is refused at approve time"
+else nok "approval: such an input is refused at approve time" "$VF_APP"; fi
 
 # A link to a file inside an input folder is still covered by the target's content.
 VF2="$(new_project verify-file-link)"
@@ -3921,16 +3921,18 @@ ln -s ../shared/run.sh "$VF2/scripts/run.sh"
 set_config "$VF2" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts"]},"protectedPaths":[]}'
 approve "$VF2" >/dev/null
 echo 'exit 1' >"$VF2/shared/run.sh"
-if approval "$VF2" --status | grep -q '^Status: not approved'; then ok "approval: a change behind a file link in an input folder asks again"
-else nok "approval: a change behind a file link in an input folder asks again" "$(approval "$VF2" --status)"; fi
+VF2_OUT="$(approval "$VF2" --status)"
+if grep -q '^Status: not approved' <<<"$VF2_OUT"; then ok "approval: a change behind a file link in an input folder asks again"
+else nok "approval: a change behind a file link in an input folder asks again" "$VF2_OUT"; fi
 
 # A link out of the project inside an input folder is refused.
 VF3="$(new_project verify-link-out)"
 printf '#!/bin/bash\n' >"$VF3/scripts/verify.sh"; chmod +x "$VF3/scripts/verify.sh"
 ln -s "$TMP" "$VF3/scripts/away"
 set_config "$VF3" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts"]},"protectedPaths":[]}'
-if approval "$VF3" --status | grep -q 'cannot be covered'; then ok "approval: a link out of the project in an input folder is refused"
-else nok "approval: a link out of the project in an input folder is refused" "$(approval "$VF3" --status)"; fi
+VF3_OUT="$(approval "$VF3" --status)"
+if grep -q 'cannot be covered' <<<"$VF3_OUT"; then ok "approval: a link out of the project in an input folder is refused"
+else nok "approval: a link out of the project in an input folder is refused" "$VF3_OUT"; fi
 
 # A protected file edited through a case-variant name is still protected on a case-insensitive disk.
 CS="$(new_project guard-caseins)"
@@ -4050,7 +4052,6 @@ out="$(hook session-start.sh "$AN" '{"source":"startup"}' 2>&1)"
 if grep -q 'type /swift-harness:approve-verify' <<<"$out" && ! grep -q "own terminal" <<<"$out"; then ok "session start: for Claude, the slash command"
 else nok "session start: for Claude, the slash command" "$out"; fi
 
-set +x
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
