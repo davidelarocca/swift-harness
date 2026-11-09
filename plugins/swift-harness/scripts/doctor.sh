@@ -332,8 +332,13 @@ if [ "$verify_enabled" = true ]; then
   else
     row FAIL "Verify approval" "'$command_line' is not approved (new, or it or a file it runs changed): the end-of-turn check does not run it. Fix: review it, then type /swift-harness:approve-verify"
   fi
-  uncovered="$(sh_verify_uncovered "$command_line" | cut -f1 | sort -u | paste -sd' ' -)"
-  [ -z "$uncovered" ] || row WARN "Verify coverage" "the approved files name scripts the approval does not cover: $uncovered. If they run, a change to them asks nothing. Read as text, so a path built at run time is not seen. Fix: add them to verify.inputs in .claude/swift-harness.json, then /swift-harness:approve-verify"
+  # A hint, not a warning (#131): a name in a comment counts, so it may name a script that never
+  # runs. approve-verify shows the same list when the user reviews the approval.
+  uncovered="$(sh_verify_uncovered "$command_line" | awk -F'\t' '
+    !($1 in named) { order[++n] = $1 }
+    { named[$1] = ($1 in named) ? named[$1] ", " $2 : $2 }
+    END { for (i = 1; i <= n; i++) printf "%s%s (named in %s)", (i > 1 ? "; " : ""), order[i], named[order[i]] }')"
+  [ -z "$uncovered" ] || row INFO "Verify coverage" "the approved files name scripts the approval does not cover: $uncovered. Read as text, so a name in a comment counts and a path built at run time is not seen. If one of them runs, a change to it asks nothing: add it to verify.inputs in .claude/swift-harness.json, then /swift-harness:approve-verify. If it is only mentioned, nothing to do"
 fi
 
 # ---------- security settings (#32) ----------
