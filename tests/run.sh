@@ -3879,6 +3879,9 @@ if denied "$(codex_hook guard.sh "$PX" "$PERM")"; then ok "codex permit: an old 
 else nok "codex permit: an old one has expired"; fi
 
 # ---------- findings of a review by another agent ----------
+# TEMP DIAGNOSTIC (revert): trace this block to stderr to pinpoint a CI-only hang.
+export PS4='+TRACE ${LINENO}: '
+set -x
 
 # A config the guard cannot read must not switch the guard off.
 GI="$(new_project guard-invalid)"
@@ -4047,6 +4050,7 @@ out="$(hook session-start.sh "$AN" '{"source":"startup"}' 2>&1)"
 if grep -q 'type /swift-harness:approve-verify' <<<"$out" && ! grep -q "own terminal" <<<"$out"; then ok "session start: for Claude, the slash command"
 else nok "session start: for Claude, the slash command" "$out"; fi
 
+set +x
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
