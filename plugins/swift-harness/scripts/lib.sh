@@ -87,17 +87,17 @@ sh_relpath() {
 # compared by filesystem identity. So a case-variant name on a case-insensitive disk, or a symlink
 # alias, still matches, where a plain string compare would miss it. Both must exist for a match.
 sh_same_or_under() { # $1 resolved path, $2 protected path
-  local anc
+  local anc="$1"
   [ -e "$2" ] || return 1
   [ "$1" -ef "$2" ] && return 0
   [ -d "$2" ] || return 1
-  anc="$(dirname "$1")"
-  while [ "$anc" != "/" ] && [ "$anc" != "." ] && [ -n "$anc" ]; do
+  # Walk the ancestors by stripping the last path component (no dirname subshell per step).
+  while :; do
+    anc="${anc%/*}"
+    [ -n "$anc" ] || return 1
     [ "$anc" -ef "$2" ] && return 0
     case "$anc" in "$SH_ROOT"/*) ;; *) return 1 ;; esac
-    anc="$(dirname "$anc")"
   done
-  return 1
 }
 
 # Read a value from the project config, with a default.
