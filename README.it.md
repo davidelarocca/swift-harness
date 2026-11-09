@@ -266,6 +266,13 @@ In CI non c'è una cartella di approvazioni: lì lancia direttamente il comando 
 
 L'approvazione, il riepilogo delle prove e il registro sono gli stessi di Claude Code, e nominano l'agente. Codex chiede di fidarsi degli hook del progetto (`/hooks`), per ogni checkout. Con `--local`, anche i file di Codex restano fuori da git.
 
+Per approvare il comando di verifica senza Claude Code, lancialo nel tuo terminale, non tramite Codex, con la cartella del plugin e la cartella dati scritte in `.codex/swift-harness-hook.sh`. Il primo comando mostra il comando, i suoi file e un digest; dopo averli controllati, il secondo approva:
+
+```bash
+CLAUDE_PLUGIN_DATA=<cartella dati> <cartella plugin>/scripts/approve-verify.sh --status <progetto>
+CLAUDE_PLUGIN_DATA=<cartella dati> <cartella plugin>/scripts/approve-verify.sh --approve <digest> <progetto>
+```
+
 Limiti: un comando shell lanciato da Codex non passa dal guard, viene solo segnalato a fine turno. Un nuovo worktree senza questi file non esegue nessun controllo, e Codex non riceve avvisi, perché lì non si carica niente di swift-harness: quando ne crei uno, lancia `setup-guest.sh --project <worktree> --from <checkout> --local`.
 
 </details>
