@@ -84,7 +84,7 @@ if git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
       echo "swift-harness: the last verification ('$verify_cmd') failed on the current code and has not passed since. Treat the project as not verified."
     fi
     if [ "$(sh_cfg '.verify.enabled' 'true')" = "true" ] && ! sh_verify_approved "$verify_cmd" "$state"; then
-      echo "swift-harness: the verify command '$verify_cmd' is not approved for this project (it is new, or it or a file it runs changed since the last approval). The end-of-turn check does not run it, so code changes are not verified. Ask the user to review it and type /swift-harness:approve-verify. Do not run the approval yourself."
+      echo "swift-harness: the verify command '$verify_cmd' is not approved for this project (it is new, or it or a file it runs changed since the last approval). The end-of-turn check does not run it, so code changes are not verified. Ask the user to review it and $(sh_approve_how). Do not run the approval yourself."
     fi
     # Files blocked by lintBlocking are re-linted when the code changes; say so now, since
     # unchanged code is not re-checked.

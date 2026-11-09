@@ -83,6 +83,23 @@ sh_relpath() {
   esac
 }
 
+# True when the resolved path $1 is the protected path $2, or (when $2 is a folder) sits under it,
+# compared by filesystem identity. So a case-variant name on a case-insensitive disk, or a symlink
+# alias, still matches, where a plain string compare would miss it. Both must exist for a match.
+sh_same_or_under() { # $1 resolved path, $2 protected path
+  local anc="$1"
+  [ -e "$2" ] || return 1
+  [ "$1" -ef "$2" ] && return 0
+  [ -d "$2" ] || return 1
+  # Walk the ancestors by stripping the last path component (no dirname subshell per step).
+  while :; do
+    anc="${anc%/*}"
+    [ -n "$anc" ] || return 1
+    [ "$anc" -ef "$2" ] && return 0
+    case "$anc" in "$SH_ROOT"/*) ;; *) return 1 ;; esac
+  done
+}
+
 # Read a value from the project config, with a default.
 sh_cfg() {
   local value
@@ -116,6 +133,15 @@ sh_state_dir() {
 # check.sh, and is Claude Code otherwise.
 sh_agent_name() {
   case "${SH_AGENT:-claude}" in claude) printf 'Claude' ;; codex) printf 'Codex' ;; *) printf 'the agent' ;; esac
+}
+
+# How the user approves the verify command, for messages: a slash command exists only in Claude
+# Code. This names the script, never a digest: the approval stays the user's to give.
+sh_approve_how() {
+  case "${SH_AGENT:-claude}" in
+    claude) printf 'type /swift-harness:approve-verify' ;;
+    *) printf "use /swift-harness:approve-verify in Claude Code, or approve-verify.sh in the user's own terminal (README, \"Codex runs the same hooks\")" ;;
+  esac
 }
 
 sh_catch() { # $1 check, $2 kind, $3 what, $4 seconds (optional)
@@ -457,7 +483,8 @@ sh_verify_uncovered() { # $1 command
       [ -n "$rel" ] || continue
       # -ef, not the text: on a case-insensitive disk scripts/x.sh and Scripts/x.sh are one file.
       for c in ${covered[@]+"${covered[@]}"}; do
-        if [ "$hit" -ef "$c" ] || { [ -d "$c" ] && [[ "$SH_ROOT/$rel" == "$c"/* ]]; }; then rel=""; break; fi
+        # Both the resolved path and the named one: a covered folder may reach the script by a link.
+        if [ "$hit" -ef "$c" ] || { [ -d "$c" ] && { [[ "$SH_ROOT/$rel" == "$c"/* ]] || [[ "$hit" == "$c"/* ]]; }; }; then rel=""; break; fi
       done
       [ -z "$rel" ] || printf '%s\t%s\n' "$rel" "$(sh_relpath "$f")"
     done < <(LC_ALL=C grep -IoE '[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.(sh|bash|zsh|py|rb|pl|js|mjs)\b' "$f" 2>/dev/null | sort -u)
@@ -466,12 +493,22 @@ sh_verify_uncovered() { # $1 command
 
 # Digest of a verify.inputs folder: names and contents of every file, so added and removed
 # files count, and every link with its target and the content it points to (SH130-04).
-# "outside" when a link inside resolves outside the project, which cannot be covered.
+# "outside" when a link inside resolves outside the project. "linkdir" when a link points to
+# another folder: a folder reached by a link cannot be hashed safely (aliases can blow a walk up
+# exponentially), so the approval is refused and the user lists the real folder in verify.inputs.
+# A link to a file is covered by its target's content, through `shasum <link` below.
 sh_verify_folder() {
-  local link
-  while IFS= read -r -d '' link; do
-    [ -n "$(sh_relpath "$SH_ROOT/$1/${link#./}")" ] || { printf 'outside'; return; }
-  done < <(cd "$SH_ROOT/$1" && find . -type l -print0)
+  local link res
+  local -a links=()
+  # Drain find fully into an array first, then test the links. Returning early from a loop that
+  # reads a process substitution would abandon the find child; it keeps this function's stdout (the
+  # pipe to shasum in sh_verify_digest) open, and shasum then blocks for ever on a slow machine.
+  while IFS= read -r -d '' link; do links+=("$link"); done < <(cd "$SH_ROOT/$1" && find . -type l -print0)
+  for link in ${links[@]+"${links[@]}"}; do
+    res="$SH_ROOT/$1/${link#./}"
+    [ -n "$(sh_relpath "$res")" ] || { printf 'outside'; return; }
+    [ ! -d "$res" ] || { printf 'linkdir'; return; }
+  done
   (
     cd "$SH_ROOT/$1" || exit
     find . -type f -print0 | sort -z | xargs -0 shasum -a 256

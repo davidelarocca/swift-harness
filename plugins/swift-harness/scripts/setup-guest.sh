@@ -86,7 +86,12 @@ verify="$root/$sdir/verify.sh"
 exists=""
 [ -e "$config" ] && exists="$exists .claude/swift-harness.json"
 [ -e "$verify" ] && exists="$exists $sdir/verify.sh"
-[ "$codex" = false ] || [ ! -e "$root/.codex/hooks.json" ] || exists="$exists .codex/hooks.json"
+if [ "$codex" = true ]; then
+  # -L as well: a link that points nowhere fails -e, and writing would go through it.
+  for file in .codex/hooks.json .codex/swift-harness-hook.sh; do
+    if [ -e "$root/$file" ] || [ -L "$root/$file" ]; then exists="$exists $file"; fi
+  done
+fi
 # The plugin data folder the Codex launcher uses, found before anything is written.
 if [ "$codex" = true ] && [ -z "$data" ]; then
   data="${CLAUDE_PLUGIN_DATA:-}"
@@ -118,12 +123,20 @@ if [ -n "$from" ]; then
   ssdir=scripts
   for d in "$src"/[sS][cC][rR][iI][pP][tT][sS]; do [ -d "$d" ] && { ssdir="${d##*/}"; break; }; done
   [ -f "$src/.claude/swift-harness.json" ] && [ -f "$src/$ssdir/verify.sh" ] || { echo "setup-guest: $src has no guest setup to copy" >&2; exit 2; }
-  if [ -f "$src/.codex/hooks.json" ] && [ -e "$root/.codex/hooks.json" ]; then
-    echo "setup-guest: $root/.codex/hooks.json is already there: nothing was copied. Merge the Codex hooks by hand." >&2; exit 1
+  # Refuse before the first copy if any destination artifact already exists, a link included: cp
+  # follows a link and would overwrite its target, which may sit outside the project.
+  copy_codex=false
+  [ -f "$src/.codex/hooks.json" ] && [ -f "$src/.codex/swift-harness-hook.sh" ] && copy_codex=true
+  exists=""
+  for file in .claude/swift-harness.json "$sdir/verify.sh" $([ "$copy_codex" = true ] && echo .codex/hooks.json .codex/swift-harness-hook.sh); do
+    { [ -e "$root/$file" ] || [ -L "$root/$file" ]; } && exists="$exists $file"
+  done
+  if [ -n "$exists" ]; then
+    echo "setup-guest: already there:$exists. Nothing copied: merge by hand, or remove them first." >&2; exit 1
   fi
   mkdir -p "$root/.claude" "$root/$sdir" || exit 1
   cp "$src/.claude/swift-harness.json" "$config" && cp -p "$src/$ssdir/verify.sh" "$verify" || exit 1
-  if [ -f "$src/.codex/hooks.json" ] && [ -f "$src/.codex/swift-harness-hook.sh" ]; then
+  if [ "$copy_codex" = true ]; then
     mkdir -p "$root/.codex" && cp "$src/.codex/hooks.json" "$root/.codex/hooks.json" && cp -p "$src/.codex/swift-harness-hook.sh" "$root/.codex/swift-harness-hook.sh" || exit 1
     codex_files=".codex/hooks.json .codex/swift-harness-hook.sh"
   fi

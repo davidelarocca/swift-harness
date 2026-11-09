@@ -3878,6 +3878,180 @@ f="$(ls "$(state_of "$PX")/edit-permits/"* | head -n 1)"; { echo 1000; sed -n 2p
 if denied "$(codex_hook guard.sh "$PX" "$PERM")"; then ok "codex permit: an old one has expired"
 else nok "codex permit: an old one has expired"; fi
 
+# ---------- findings of a review by another agent ----------
+
+# A config the guard cannot read must not switch the guard off.
+GI="$(new_project guard-invalid)"
+for bad in '{"protectedPaths":"Sources/Audio/"}' '{"protectedPaths":[{}]}' '{"protectedPaths":["Sources/Audio/",5]}' '{"protectedPaths":["Sources/Audio/"],' ''; do
+  printf '%s\n' "$bad" >"$GI/.claude/swift-harness.json"
+  if guard_asks "$GI" "$GI/Sources/Audio/Engine.swift"; then ok "guard: asks when the config is unusable: '$bad'"
+  else nok "guard: asks when the config is unusable: '$bad'"; fi
+  if guard_asks "$GI" "$GI/.claude/swift-harness.json"; then nok "guard: the unusable config itself stays editable: '$bad'"
+  else ok "guard: the unusable config itself stays editable: '$bad'"; fi
+done
+if hook guard.sh "$GI" "$(edit_input "$GI/Sources/App.swift")" | grep -q 'not valid'; then ok "guard: says the config is the reason"
+else nok "guard: says the config is the reason"; fi
+set_config "$GI" '{}'
+if guard_asks "$GI" "$GI/Sources/App.swift"; then nok "guard: a config with no protected paths asks nothing"
+else ok "guard: a config with no protected paths asks nothing"; fi
+
+# A folder reached by a link inside a verify.inputs folder cannot be covered: refuse, never
+# under-cover and never walk the link graph (which can blow up exponentially).
+VF="$(new_project verify-folder-link)"
+mkdir -p "$VF/shared"
+printf '#!/bin/bash\nbash scripts/tree/run.sh\n' >"$VF/scripts/verify.sh"; chmod +x "$VF/scripts/verify.sh"
+echo 'exit 0' >"$VF/shared/run.sh"
+ln -s ../shared "$VF/scripts/tree"
+set_config "$VF" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts"]},"protectedPaths":[]}'
+# Capture the whole output and grep the variable, never `| grep -q` which closes the pipe early.
+VF_OUT="$(approval "$VF" --status)"
+if grep -q 'cannot be covered' <<<"$VF_OUT"; then ok "approval: a folder reached by a link in an input folder cannot be covered"
+else nok "approval: a folder reached by a link in an input folder cannot be covered" "$VF_OUT"; fi
+VF_DIG="$(sed -n 's/^Digest: *//p' <<<"$VF_OUT")"
+VF_APP="$(approval "$VF" --approve "$VF_DIG")"
+if grep -q 'cannot cover' <<<"$VF_APP"; then ok "approval: such an input is refused at approve time"
+else nok "approval: such an input is refused at approve time" "$VF_APP"; fi
+
+# A link to a file inside an input folder is still covered by the target's content.
+VF2="$(new_project verify-file-link)"
+mkdir -p "$VF2/shared"
+printf '#!/bin/bash\nbash scripts/run.sh\n' >"$VF2/scripts/verify.sh"; chmod +x "$VF2/scripts/verify.sh"
+echo 'exit 0' >"$VF2/shared/run.sh"
+ln -s ../shared/run.sh "$VF2/scripts/run.sh"
+set_config "$VF2" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts"]},"protectedPaths":[]}'
+approve "$VF2" >/dev/null
+echo 'exit 1' >"$VF2/shared/run.sh"
+VF2_OUT="$(approval "$VF2" --status)"
+if grep -q '^Status: not approved' <<<"$VF2_OUT"; then ok "approval: a change behind a file link in an input folder asks again"
+else nok "approval: a change behind a file link in an input folder asks again" "$VF2_OUT"; fi
+
+# A link out of the project inside an input folder is refused.
+VF3="$(new_project verify-link-out)"
+printf '#!/bin/bash\n' >"$VF3/scripts/verify.sh"; chmod +x "$VF3/scripts/verify.sh"
+ln -s "$TMP" "$VF3/scripts/away"
+set_config "$VF3" '{"verify":{"command":"scripts/verify.sh fast","inputs":["scripts"]},"protectedPaths":[]}'
+VF3_OUT="$(approval "$VF3" --status)"
+if grep -q 'cannot be covered' <<<"$VF3_OUT"; then ok "approval: a link out of the project in an input folder is refused"
+else nok "approval: a link out of the project in an input folder is refused" "$VF3_OUT"; fi
+
+# A protected file edited through a case-variant name is still protected on a case-insensitive disk.
+CS="$(new_project guard-caseins)"
+mkdir -p "$CS/Policies"; printf 'secret\n' >"$CS/Policies/secret.txt"
+set_config "$CS" '{"protectedPaths":["Policies/"]}'
+if [ "$CS/policies/secret.txt" -ef "$CS/Policies/secret.txt" ]; then
+  if guard_asks "$CS" "$CS/policies/secret.txt"; then ok "guard: a case-variant of a file in a protected dir still asks"
+  else nok "guard: a case-variant of a file in a protected dir still asks"; fi
+  if guard_asks "$CS" "$CS/policies/new.txt"; then ok "guard: a new file in a case-variant of a protected dir asks"
+  else nok "guard: a new file in a case-variant of a protected dir asks"; fi
+else
+  ok "guard: case-insensitive checks skipped (case-sensitive disk)"
+  ok "guard: case-insensitive dir check skipped (case-sensitive disk)"
+fi
+
+# A normal write appends a record and leaves no lock behind.
+HR="$(new_project history-lock)"
+printf '#!/bin/bash\nexit 0\n' >"$HR/scripts/verify.sh"; chmod +x "$HR/scripts/verify.sh"
+git -C "$HR" add -A; git -C "$HR" commit -qm init
+approve "$HR" >/dev/null
+hook session-start.sh "$HR" '{"session_id":"s1","source":"startup"}' >/dev/null
+HR_HIST="$(state_of "$HR")/evidence-history.jsonl"
+HR_LOCK="$(state_of "$HR")/evidence-history.lock"
+echo 'let app = 2' >"$HR/Sources/App.swift"
+jq -nc --arg cwd "$HR" '{cwd: $cwd, session_id: "s1"}' |
+  CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$HR" "$SCRIPTS/stop-verify.sh" >/dev/null 2>&1
+if [ "$(jq -sc 'length' "$HR_HIST" 2>/dev/null)" -ge 1 ] && [ ! -e "$HR_LOCK" ]; then ok "history: a normal write appends a record and releases the lock"
+else nok "history: a normal write appends a record and releases the lock" "lines=$(wc -l <"$HR_HIST" 2>/dev/null) lock=$([ -e "$HR_LOCK" ] && echo held)"; fi
+
+# A lock left behind by a killed hook (old mtime) is taken over, and the record is appended.
+HR_PRE="$(jq -sc 'length' "$HR_HIST" 2>/dev/null)"
+mkdir "$HR_LOCK"; touch -t 202001010000 "$HR_LOCK"
+echo 'let app = 3' >"$HR/Sources/App.swift"
+jq -nc --arg cwd "$HR" '{cwd: $cwd, session_id: "s1"}' |
+  CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$HR" "$SCRIPTS/stop-verify.sh" >/dev/null 2>&1
+if [ ! -e "$HR_LOCK" ] && [ "$(jq -sc 'length' "$HR_HIST" 2>/dev/null)" -gt "${HR_PRE:-0}" ]; then ok "history: a lock left by a killed hook is taken over, and the record is kept"
+else nok "history: a lock left by a killed hook is taken over, and the record is kept" "lock=$([ -e "$HR_LOCK" ] && echo held) pre=$HR_PRE now=$(jq -sc 'length' "$HR_HIST" 2>/dev/null)"; fi
+
+# A writer that cannot get the lock (a live holder) skips, without appending or erasing.
+HL="$(new_project history-locked)"
+printf '#!/bin/bash\nexit 0\n' >"$HL/scripts/verify.sh"; chmod +x "$HL/scripts/verify.sh"
+git -C "$HL" add -A; git -C "$HL" commit -qm init
+approve "$HL" >/dev/null
+hook session-start.sh "$HL" '{"session_id":"s1","source":"startup"}' >/dev/null
+HL_HIST="$(state_of "$HL")/evidence-history.jsonl"
+printf '{"time":"%s","session":"keep","code":"k","outcome":"passed","checks":[]}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$HL_HIST"
+mkdir "$(state_of "$HL")/evidence-history.lock" # a fresh lock a live holder owns
+echo 'let app = 9' >"$HL/Sources/App.swift"
+jq -nc --arg cwd "$HL" '{cwd: $cwd, session_id: "s1"}' |
+  SWIFT_HARNESS_LOCK_TRIES=3 CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$HL" "$SCRIPTS/stop-verify.sh" >/dev/null 2>&1
+if [ "$(jq -sc '[.[].session]' "$HL_HIST")" = '["keep"]' ]; then ok "history: a writer that cannot get the lock does not append or erase"
+else nok "history: a writer that cannot get the lock does not append or erase" "$(cat "$HL_HIST")"; fi
+rmdir "$(state_of "$HL")/evidence-history.lock" 2>/dev/null
+
+# The HTML report: the first one, with no catch log yet, and never out of the project.
+RN="$(new_project report-no-log)"
+rm -f "$(state_of "$RN")/catches.jsonl" # new_project approves, and an approval is logged
+expect_result "html: works before any catch is logged" 0 'report\.html$' "$(report --project "$RN" --all --html)"
+RO="$TMP/report-outside"; mkdir -p "$RO"; echo keep >"$RO/report.html"
+RL="$(new_project report-link-folder)"; mkdir -p "$RL/.build"; ln -s "$RO" "$RL/.build/swift-harness"
+expect_result "html: refuses a linked output folder" 1 'link' "$(report --project "$RL" --all --html)"
+RB="$(new_project report-link-build)"; ln -s "$RO" "$RB/.build"
+expect_result "html: refuses a linked .build" 1 'link' "$(report --project "$RB" --all --html)"
+if [ -e "$RO/swift-harness" ]; then nok "html: a linked .build gets no new folder"; else ok "html: a linked .build gets no new folder"; fi
+RF="$(new_project report-link-file)"; mkdir -p "$RF/.build/swift-harness"; ln -s "$RO/report.html" "$RF/.build/swift-harness/report.html"
+expect_result "html: refuses a linked page" 1 'link' "$(report --project "$RF" --all --html)"
+if [ "$(cat "$RO/report.html")" = keep ]; then ok "html: the file out of the project is unchanged"
+else nok "html: the file out of the project is unchanged"; fi
+# A hard link is a regular file, so the page is renamed into place rather than truncating it.
+RH="$(new_project report-hardlink)"; mkdir -p "$RH/.build/swift-harness"
+echo keep >"$TMP/report-hardlink-outside"
+ln "$TMP/report-hardlink-outside" "$RH/.build/swift-harness/report.html"
+report --project "$RH" --all --html >/dev/null
+if [ "$(cat "$TMP/report-hardlink-outside")" = keep ]; then ok "html: a hard-linked report.html does not truncate the outside file"
+else nok "html: a hard-linked report.html does not truncate the outside file" "$(head -1 "$TMP/report-hardlink-outside")"; fi
+
+# setup-guest --from must not write through a destination link or over existing files.
+FO="$TMP/from-src"; mkdir -p "$FO/.claude" "$FO/scripts" "$FO/.codex"; git -C "$FO" init -q
+printf '{}\n' >"$FO/.claude/swift-harness.json"; printf '#!/bin/bash\n' >"$FO/scripts/verify.sh"
+printf '{"hooks":{}}\n' >"$FO/.codex/hooks.json"; printf '#!/bin/bash\n' >"$FO/.codex/swift-harness-hook.sh"
+FD="$TMP/from-dest"; mkdir -p "$FD/.codex"; git -C "$FD" init -q
+echo keep >"$TMP/from-outside"
+ln -s "$TMP/from-outside" "$FD/.codex/swift-harness-hook.sh"
+out="$("$SCRIPTS/setup-guest.sh" --from "$FO" --project "$FD" 2>&1)"; code=$?
+expect_result "guest --from: refuses a destination launcher link" 1 'already there.*swift-harness-hook' "exit=$code
+$out"
+if [ "$(cat "$TMP/from-outside")" = keep ]; then ok "guest --from: the outside file behind the link is unchanged"
+else nok "guest --from: the outside file behind the link is unchanged" "$(cat "$TMP/from-outside")"; fi
+
+# setup-guest --codex must not overwrite the user's own launcher file.
+GO="$TMP/guest-codex-own"; mkdir -p "$GO/.codex"; git -C "$GO" init -q
+echo OWN >"$GO/.codex/swift-harness-hook.sh"
+out="$("$SCRIPTS/setup-guest.sh" --project "$GO" --fast 'swift build' --codex --data "$TMP/data" 2>&1)"; code=$?
+expect_result "guest --codex: refuses when the launcher exists" 1 'already there.*swift-harness-hook' "exit=$code
+$out"
+if [ "$(cat "$GO/.codex/swift-harness-hook.sh")" = OWN ] && [ ! -e "$GO/.codex/hooks.json" ] && [ ! -e "$GO/.claude/swift-harness.json" ]; then ok "guest --codex: the file is unchanged and nothing is written"
+else nok "guest --codex: the file is unchanged and nothing is written"; fi
+GD="$TMP/guest-codex-dangling"; mkdir -p "$GD/.codex"; git -C "$GD" init -q
+ln -s "$TMP/guest-nowhere" "$GD/.codex/swift-harness-hook.sh"
+out="$("$SCRIPTS/setup-guest.sh" --project "$GD" --fast 'swift build' --codex --data "$TMP/data" 2>&1)"; code=$?
+expect_result "guest --codex: refuses a link that points nowhere" 1 'already there' "exit=$code
+$out"
+if [ -e "$TMP/guest-nowhere" ]; then nok "guest --codex: nothing is written through that link"; else ok "guest --codex: nothing is written through that link"; fi
+
+# The way to approve depends on the agent: a slash command exists only in Claude Code.
+AN="$(new_project approve-notice)"
+printf '#!/bin/bash\nexit 0\n' >"$AN/scripts/verify.sh"; chmod +x "$AN/scripts/verify.sh"
+git -C "$AN" add -A; git -C "$AN" commit -qm init
+echo 'let app = 2' >"$AN/Sources/App.swift"
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$AN" --agent codex --json 2>&1 | jq -r .notice)"
+if grep -q "own terminal" <<<"$out" && ! grep -q 'then type /swift-harness:approve-verify' <<<"$out"; then ok "check: for another agent, the notice names a way that works there"
+else nok "check: for another agent, the notice names a way that works there" "$out"; fi
+out="$(SH_AGENT=codex hook session-start.sh "$AN" '{"source":"startup"}' 2>&1)"
+if grep -q "own terminal" <<<"$out" && grep -q 'Do not run the approval yourself' <<<"$out"; then ok "session start: for another agent, the same, and it still must not approve"
+else nok "session start: for another agent, the same, and it still must not approve" "$out"; fi
+out="$(hook session-start.sh "$AN" '{"source":"startup"}' 2>&1)"
+if grep -q 'type /swift-harness:approve-verify' <<<"$out" && ! grep -q "own terminal" <<<"$out"; then ok "session start: for Claude, the slash command"
+else nok "session start: for Claude, the slash command" "$out"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

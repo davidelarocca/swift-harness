@@ -121,14 +121,26 @@ if [ "$html" = true ]; then
   evidence="$(sh_state_path)/evidence.json"
   ev='null'
   [ -f "$evidence" ] && ev="$(jq -c . "$evidence" 2>/dev/null || echo null)"
-  recent="$({ [ -f "$log" ] && cat "$log"; } | jq -sc --arg since "$since" 'map(select(type == "object" and (.time // "") >= $since)) | .[-50:] | reverse' 2>/dev/null || echo '[]')"
+  # With no log yet the first command must still succeed: under pipefail, the fallback below would
+  # add a second [] to the one jq printed.
+  recent="$({ [ ! -f "$log" ] || cat "$log"; } | jq -sc --arg since "$since" 'map(select(type == "object" and (.time // "") >= $since)) | .[-50:] | reverse' 2>/dev/null || echo '[]')"
   out_dir="$SH_ROOT/.build/swift-harness"
+  # The scripts change no file outside the project (SECURITY.md), and a link could lead there.
+  for path in "$SH_ROOT/.build" "$out_dir" "$out_dir/report.html"; do
+    [ ! -L "$path" ] || { echo "report: $path is a link, so the page could land outside the project. Nothing written." >&2; exit 1; }
+  done
   mkdir -p "$out_dir" || { echo "report: cannot write $out_dir" >&2; exit 1; }
-  jq -nr --argjson summary "$summary" --argjson ev "$ev" --argjson recent "${recent:-[]}" \
+  # Write a temp file, then rename it over report.html. A plain redirection would truncate the
+  # file in place: if report.html is a hard link to a file outside the project, that shared inode
+  # would be overwritten (SECURITY.md). The rename replaces the name and leaves other links alone.
+  tmp_page="$out_dir/.report.$$.html"
+  if ! jq -nr --argjson summary "$summary" --argjson ev "$ev" --argjson recent "${recent:-[]}" \
     --arg root "$SH_ROOT" --arg label "$label" --arg now "$(sh_identity)" \
     --arg head "$(git -C "$SH_ROOT" rev-parse --short HEAD 2>/dev/null || echo none)" \
     --arg made "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg log "$log" --arg evfile "$evidence" -f "$(dirname "$0")/report-html.jq" \
-    >"$out_dir/report.html" || { echo "report: could not write the page" >&2; exit 1; }
+    >"$tmp_page" || ! mv -f "$tmp_page" "$out_dir/report.html"; then
+    rm -f "$tmp_page"; echo "report: could not write the page" >&2; exit 1
+  fi
   printf '%s\n' "$out_dir/report.html"
   exit 0
 fi

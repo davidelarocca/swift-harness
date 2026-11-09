@@ -83,25 +83,37 @@ ev_write() { # $1 outcome, $2 note
 }
 # History of the records (#110): one line each in evidence-history.jsonl, bounded by count
 # (SWIFT_HARNESS_HISTORY_MAX, 2000) and by age (the retention of session folders). A record that
-# only says nothing ran again on the code of the previous one is not repeated. Trimming takes a
-# lock, so two sessions appending at once lose nothing.
+# only says nothing ran again on the code of the previous one is not repeated. The append and the
+# trim both run only while this process holds the lock, so a line can never be added between the
+# trim's read and its replace, where the holder's replace would erase it. A lock older than five
+# minutes was left by a killed hook and is taken over. A real hold lasts milliseconds; if the lock
+# is still busy after the wait (another hook is wedged), the record is skipped rather than raced.
 ev_history() { # $1 the record as JSON
-  local file="$state/evidence-history.jsonl" line max last
+  local file="$state/evidence-history.jsonl" lock="$state/evidence-history.lock" line max last held="" i=0 tries
   line="$(printf '%s' "$1" | jq -c . 2>/dev/null)" || return 0
   if [ "$(printf '%s' "$line" | jq -r .outcome)" = unchanged ] && [ -s "$file" ]; then
     last="$(tail -n 1 "$file" | jq -r '[.code, .outcome] | join(" ")' 2>/dev/null)"
     [ "$last" = "$fp unchanged" ] && return 0
   fi
-  printf '%s\n' "$line" >>"$file" 2>/dev/null || return 0
+  [ -z "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] || rmdir "$lock" 2>/dev/null
+  tries="${SWIFT_HARNESS_LOCK_TRIES:-100}"
+  case "$tries" in '' | *[!0-9]*) tries=100 ;; esac
+  while [ "$i" -lt "$tries" ]; do
+    if mkdir "$lock" 2>/dev/null; then held=1; break; fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -n "$held" ] || return 0
+  printf '%s\n' "$line" >>"$file" 2>/dev/null
   max="${SWIFT_HARNESS_HISTORY_MAX:-2000}"
   case "$max" in '' | *[!0-9]*) max=2000 ;; esac
   local cutoff oldest
   cutoff="$(date -u -v-"${SH_SESSION_MAX_DAYS}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$SH_SESSION_MAX_DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)"
   oldest="$(head -n 1 "$file" | jq -r '.time // ""' 2>/dev/null)"
-  [ "$(wc -l <"$file" | tr -d ' ')" -gt "$max" ] || [[ "$oldest" < "$cutoff" ]] || return 0
-  mkdir "$state/evidence-history.lock" 2>/dev/null || return 0
-  jq -c --arg cutoff "$cutoff" 'select((.time // "") >= $cutoff)' "$file" 2>/dev/null | tail -n "$max" >"$file.tmp" && mv "$file.tmp" "$file"
-  rmdir "$state/evidence-history.lock" 2>/dev/null
+  if [ "$(wc -l <"$file" | tr -d ' ')" -gt "$max" ] || [[ "$oldest" < "$cutoff" ]]; then
+    jq -c --arg cutoff "$cutoff" 'select((.time // "") >= $cutoff)' "$file" 2>/dev/null | tail -n "$max" >"$file.tmp" && mv "$file.tmp" "$file"
+  fi
+  rmdir "$lock" 2>/dev/null
 }
 # The checks of the last record on this same code, when this turn ran nothing new.
 ev_keep() {
@@ -250,7 +262,7 @@ warn_unapproved() {
   [ "$verify_enabled" = "true" ] && [ "$run_verify" = "false" ] || return 0
   [ "$fp" = "$(cat "$sess/unapproved-warned" 2>/dev/null)" ] && return 0
   printf '%s' "$fp" >"$sess/unapproved-warned"
-  warn_user "swift-harness: the end-of-turn check did not run '$command_line', because this project's verify command is new or changed since you last approved it. These changes are not verified. Review the command and the files it runs, then type /swift-harness:approve-verify."
+  warn_user "swift-harness: the end-of-turn check did not run '$command_line', because this project's verify command is new or changed since you last approved it. These changes are not verified. Review the command and the files it runs, then $(sh_approve_how)."
 }
 
 if [ -z "$checks" ]; then
