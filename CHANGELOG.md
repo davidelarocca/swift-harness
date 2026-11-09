@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix: the notice about protected files changed outside Edit and Write said "changed in this session" ([#135](https://github.com/davidelarocca/swift-harness/issues/135)). It compares with the files as they were when the session started, so it also reports changes made by another session or agent on the same checkout, and told the user to check and maybe restore work that was legitimate and already committed. It now says "changed since this session started", names the commit that holds a change made since then (and whether the file changed again after it), and says a committed change may come from another session or agent. Changes not in a commit are reported as before.
+
 ## swift-harness 1.8.2 (2026-11-09)
 
 A reporting fix, and a round of hardening found by reviewing the hook scripts with another agent (Codex), each reproduced before its fix and then reviewed again. The edit guard now fails closed on a config it cannot read and matches protected paths by filesystem identity; verify approval, the guest setup and the HTML report no longer write or read through a link that leaves the project; and the evidence history serialises its writers. Checked with 818 hook tests and real Claude Code sessions (0 failed invariants).
