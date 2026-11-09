@@ -1,6 +1,7 @@
 #!/bin/bash
-# Stop: tell the user when files under the protected paths changed in this session outside
-# the Edit and Write tools (#11). The guard asks before Claude edits them with those tools;
+# Stop: tell the user when files under the protected paths changed since this session started,
+# outside this session's Edit and Write tools (#11). The change may come from another session or
+# agent on the same checkout: a change already in a commit names that commit (#135). The guard asks before Claude edits them with those tools;
 # a shell command (sed, cp, mv, rm, a script, a build step) is not asked about. This reports
 # it afterwards: detection, not prevention. Claude Code permission rules are the way to block
 # writes. Never blocks. The session-start list is taken by session-start.sh; edits made
@@ -49,9 +50,28 @@ if [ -z "$changed$deleted" ]; then
   exit 0
 fi
 
+# #135: name the commit that holds a change made since the session started, so the user can tell
+# another session's committed work from an unexpected edit. Nothing is added without a commit.
+head="$(cat "$sess/session-head" 2>/dev/null)"
+[ -n "$head" ] && git -C "$SH_ROOT" rev-parse -q --verify "$head^{commit}" >/dev/null 2>&1 || head=""
+annotate() { # $1 kind (changed or deleted), the paths on stdin
+  local p c
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    c=""
+    [ -z "$head" ] || c="$(git -C "$SH_ROOT" log -1 --format='%h: %s' "$head..HEAD" -- "$p" 2>/dev/null | cut -c1-100)"
+    if [ -z "$c" ]; then
+      printf '  %s: %s\n' "$1" "$p"
+    elif [ -n "$(git -C "$SH_ROOT" status --porcelain -- "$p" 2>/dev/null)" ]; then
+      printf '  %s: %s (committed in %s; changed again since, not committed)\n' "$1" "$p" "$c"
+    else
+      printf '  %s: %s (committed in %s)\n' "$1" "$p" "$c"
+    fi
+  done
+}
 report="$(
-  [ -n "$changed" ] && printf '%s\n' "$changed" | sed 's/^/  changed: /'
-  [ -n "$deleted" ] && printf '%s\n' "$deleted" | sed 's/^/  deleted: /'
+  [ -n "$changed" ] && printf '%s\n' "$changed" | annotate changed
+  [ -n "$deleted" ] && printf '%s\n' "$deleted" | annotate deleted
 )"
 sum="$(printf '%s' "$report" | shasum | cut -d' ' -f1)"
 if [ "$sum" = "$(cat "$sess/protected-warned" 2>/dev/null)" ]; then
@@ -61,9 +81,12 @@ fi
 printf '%s' "$sum" >"$sess/protected-warned"
 
 sh_catch "protected paths" reported "$(printf '%s\n' "$report" | grep -c .) protected file(s) changed outside Edit and Write"
-msg="swift-harness: protected files changed in this session without going through Edit or Write, so you were not asked first:
-$(printf '%s\n' "$report" | head -20)
-Check them (git diff -- <file>) and restore any change you did not ask for (git checkout -- <file>)."
+note=""
+case "$report" in *"(committed in "*) note="
+A change already in a commit may come from another session or agent working on this checkout." ;; esac
+msg="swift-harness: protected files changed since this session started, not through this session's Edit or Write, so you were not asked first:
+$(printf '%s\n' "$report" | head -20)$note
+Check them (git diff -- <file>, or git show <commit>) and restore any change you did not ask for (git checkout -- <file>, or git revert <commit>)."
 jq -n --arg msg "${messages:+$messages
 
 }$msg" '{systemMessage: $msg}'

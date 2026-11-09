@@ -2285,7 +2285,9 @@ echo 'let tool = 2' >"$P/Sources/AudioTools/Tool.swift"
 expect_result "protected-watch: a change outside the protected paths says nothing" 0 '^exit=0$' "$(pwatch "$P")"
 echo 'let engine = 2' >>"$P/Sources/Audio/Engine.swift"
 out="$(pwatch "$P")"
-expect_result "protected-watch: a protected file changed by a shell command is shown to the user" 0 'systemMessage.*without going through Edit or Write.*changed: Sources/Audio/Engine\.swift' "$out"
+expect_result "protected-watch: a protected file changed by a shell command is shown to the user" 0 'systemMessage.*changed since this session started.*changed: Sources/Audio/Engine\.swift' "$out"
+expect_result "protected-watch: the notice does not claim this session made the change (#135)" 0 'changed: Sources' "$out" 'in this session without'
+expect_result "protected-watch: an uncommitted change names no commit (#135)" 0 'changed: Sources' "$out" 'committed in'
 expect_result "protected-watch: it never blocks" 0 '^exit=0' "$out"
 expect_result "protected-watch: the same change is shown once" 0 '^exit=0$' "$(pwatch "$P")"
 echo 'let mixer = 1' >"$P/Sources/Audio/Mixer.swift"
@@ -2308,6 +2310,23 @@ hook session-start.sh "$P" '{"source":"startup"}' >/dev/null
 printf '<plist version="1.0"/>\n' >"$P/Info.plist"
 post_edit "$P" "$P/Info.plist" >/dev/null
 expect_result "protected-watch: a guarded edit of a non-Swift protected file is not reported" 0 '^exit=0$' "$(pwatch "$P")"
+
+# #135: another session (or agent) on the same checkout edits and commits a protected file.
+P="$(new_project protected-commit)"
+git -C "$P" add -A && git -C "$P" commit -qm "start" >/dev/null 2>&1
+hook session-start.sh "$P" '{"source":"startup"}' >/dev/null
+echo 'let engine = 5' >>"$P/Sources/Audio/Engine.swift"
+git -C "$P" commit -qam "Engine from another session" >/dev/null 2>&1
+c1="$(git -C "$P" rev-parse --short HEAD)"
+out="$(pwatch "$P")"
+expect_result "protected-watch: a committed change names its commit (#135)" 0 "changed: Sources/Audio/Engine\\.swift \\(committed in $c1: Engine from another session\\)" "$out"
+expect_result "protected-watch: a committed change says it may come from another session (#135)" 0 'another session or agent' "$out"
+echo 'let engine = 6' >>"$P/Sources/Audio/Engine.swift"
+expect_result "protected-watch: a committed file changed again says so (#135)" 0 "changed: Sources/Audio/Engine\\.swift \\(committed in $c1: Engine from another session; changed again since, not committed\\)" "$(pwatch "$P")"
+git -C "$P" checkout -q -- Sources/Audio/Engine.swift
+git -C "$P" rm -q Sources/Audio/Engine.swift && git -C "$P" commit -qm "Engine removed" >/dev/null 2>&1
+c2="$(git -C "$P" rev-parse --short HEAD)"
+expect_result "protected-watch: a committed deletion names its commit (#135)" 0 "deleted: Sources/Audio/Engine\\.swift \\(committed in $c2: Engine removed\\)" "$(pwatch "$P")"
 
 # Review #5: a protected path that is a symlink to a folder is watched through the link.
 P="$(new_project protected-link)"
