@@ -372,10 +372,14 @@ sh_dirty_list() {
 # What the checks stand on, for weaken-watch.sh (#146): "<kind>\t<path>\t<name>\t<count>" lines,
 # sorted. In test files (a folder or a file name ending in Test or Tests): tests (func test...,
 # @Test; always printed, so a file that goes is seen), assertions, skips (XCTSkip, .disabled(,
-# #if false). In any Swift file: swiftlint:disable. In .swiftlint.yml: each rule in
-# disabled_rules, opt_in_rules, only_rules, and each path in excluded. Text only: lines that
-# start as a comment are not counted, except for swiftlint:disable, which is one.
+# #if false), and each tolerance: literal with its count. In any Swift file: swiftlint:disable.
+# In .swiftlint.yml: each rule in disabled_rules, opt_in_rules, only_rules, and each path in
+# excluded. In the layout contract: the Min of each Screens row. In the registry: each
+# Components row ("ID Name") and each Retired ID. Text only: lines that start as a comment are
+# not counted, except for swiftlint:disable, which is one.
 sh_weaken_list() {
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   (
     cd "$SH_ROOT" || exit 0
     git -c core.quotepath=off ls-files -c -o --exclude-standard -z -- '*.swift' 2>/dev/null |
@@ -389,8 +393,14 @@ sh_weaken_list() {
         l ~ /^#if[ \t]+false([ \t]|$)/ { skips[FILENAME]++ }
         l ~ /(^|[^A-Za-z0-9_])func[ \t]+test[A-Za-z0-9_]*[ \t]*\(/ || l ~ /^@Test([ \t(]|$)/ { tests[FILENAME]++ }
         { a = l; asserts[FILENAME] += gsub(/XCTAssert[A-Za-z]*[ \t]*\(|XCTFail[ \t]*\(|XCTUnwrap[ \t]*\(|#expect[ \t]*\(|#require[ \t]*\(/, "", a)
-          a = l; skips[FILENAME] += gsub(/XCTSkip|\.disabled[ \t]*\(/, "", a) }
+          a = l; skips[FILENAME] += gsub(/XCTSkip|\.disabled[ \t]*\(/, "", a)
+          a = l
+          while (match(a, /tolerance:[ \t]*[0-9][0-9._]*/)) {
+            v = substr(a, RSTART, RLENGTH); sub(/^tolerance:[ \t]*/, "", v); gsub(/_/, "", v)
+            tol[FILENAME SUBSEP v]++; a = substr(a, RSTART + RLENGTH)
+          } }
         END {
+          for (k in tol) { split(k, p, SUBSEP); printf "tolerance\t%s\t%s\t%d\n", p[1], p[2], tol[k] }
           for (f in lint) if (lint[f]) printf "lint-disable\t%s\t-\t%d\n", f, lint[f]
           for (f in istest) if (istest[f]) {
             printf "tests\t%s\t-\t%d\n", f, tests[f]
@@ -415,6 +425,13 @@ sh_weaken_list() {
           next
         }
         /^[ \t]+-[ \t]*[^ \t]/ { v = $0; sub(/^[ \t]+-[ \t]*/, "", v); sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v); out(key, v) }' 2>/dev/null
+    # The layout contract's Min per row, and the registry's Components and Retired rows, read by
+    # the scripts that check them.
+    "$here/layout.sh" records "$SH_ROOT" 2>/dev/null | awk -F'\037' -v f="$(sh_layout)" '
+      $1 == "S" { name = ($3 != "" ? $3 : $4); if (name != "") printf "layout-min\t%s\t%s\t%s\n", f, name, ($7 == "" ? "-" : $7) }'
+    "$here/registry.sh" records "$SH_ROOT" 2>/dev/null | awk -F'\037' -v f="$(sh_registry)" '
+      $1 == "C" && $4 != "" { printf "registry\t%s\t%s\t1\n", f, ($3 != "" ? $3 " " $4 : $4) }
+      $1 == "R" && $3 != "" { printf "registry-retired\t%s\t%s\t1\n", f, $3 }'
   ) | LC_ALL=C sort
 }
 

@@ -20,6 +20,8 @@
 #          Internal or To consolidate. Never fails.
 #        registry.sh entries <project root> <file>
 #          Registry entries whose File is the given file: "ID Name" per line.
+#        registry.sh records <project root>
+#          The records below, for weaken-watch.sh (#146).
 
 set -u
 
@@ -215,8 +217,12 @@ case "$mode" in
     done <<<"$records"
     ;;
 
+  records)
+    printf '%s\n' "$records"
+    ;;
+
   *)
-    echo "usage: registry.sh check|summary|missing|entries <project root> [file ...]" >&2
+    echo "usage: registry.sh check|summary|missing|entries|records <project root> [file ...]" >&2
     exit 2
     ;;
 esac

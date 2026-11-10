@@ -3418,6 +3418,65 @@ git -C "$W" mv Tests/AppTests/LibraryTests.swift Tests/AppTests/CatalogTests.swi
 expect_result "weakened: a test file renamed with the same tests is not a removal" 0 '^exit=0$' "$(weaken)" 'swift-harness'
 rm "$W/Tests/AppTests/PlayerTests.swift"
 expect_result "weakened: a deleted test file is reported with what it held" 0 'Tests/AppTests/PlayerTests\.swift: file removed \(2 tests, 4 assertions\)' "$(weaken)"
+# Part 2: tolerances, the layout contract, the registry.
+mkdir -p "$W/docs"
+cat >"$W/Tests/AppTests/LooksTests.swift" <<'EOF'
+import XCTest
+final class LooksTests: XCTestCase {
+    func testLibrary() {
+        Snapshot.verify(LibraryView(), named: "library", tolerance: 0.01)
+        PerformanceBudget.verify("launch",
+                                 tolerance: 0.05) { }
+    }
+}
+EOF
+cat >"$W/docs/LAYOUT_CONTRACT.md" <<'EOF'
+# Layout contract
+
+## Screens
+
+| Screen | View | File | Min |
+|---|---|---|---|
+| Library | LibraryView | Sources/App.swift | 900x600 |
+| Settings | SettingsView | Sources/App.swift | 500 |
+EOF
+cat >"$W/docs/COMPONENT_REGISTRY.md" <<'EOF'
+# Component registry
+
+## Components
+
+| ID | Name | File |
+|---|---|---|
+| UI-001 | PlayButton | Sources/App.swift |
+| UI-002 | Badge | Sources/App.swift |
+| UI-003 | Meter | Sources/App.swift |
+
+## Internal
+
+| Name | Why not registered |
+|---|---|
+
+## Retired
+
+| ID | Replaced by | Date |
+|---|---|---|
+EOF
+git -C "$W" add -A && git -C "$W" commit -qm looks
+hook session-start.sh "$W" '{"source":"startup"}' >/dev/null
+expect_result "weakened: tolerances, layout rows and registry rows at session start say nothing" 0 '^exit=0$' "$(weaken)" 'swift-harness'
+sed -i '' 's/tolerance: 0.01)/tolerance: 0.2)/' "$W/Tests/AppTests/LooksTests.swift"
+sed -i '' 's/| 900x600 |/| 700x600 |/; /| Settings |/d' "$W/docs/LAYOUT_CONTRACT.md"
+sed -i '' '/| UI-002 |/d; /| UI-003 |/d; s/| UI-001 | PlayButton |/| UI-001 | PlayControl |/' "$W/docs/COMPONENT_REGISTRY.md"
+printf '| UI-003 | PlayControl | 2026-11-10 |\n' >>"$W/docs/COMPONENT_REGISTRY.md"
+out="$(weaken)"
+expect_result "weakened: a larger tolerance in a test is reported" 0 'Tests/AppTests/LooksTests\.swift: tolerance raised \(0\.01 -> 0\.2\)' "$out"
+expect_result "weakened: a lower Min in the layout contract is reported" 0 'docs/LAYOUT_CONTRACT\.md: Min of Library lowered \(900x600 -> 700x600\)' "$out"
+expect_result "weakened: a layout row removed is reported" 0 'docs/LAYOUT_CONTRACT\.md: layout row Settings removed' "$out"
+expect_result "weakened: a component gone from Components is reported" 0 'docs/COMPONENT_REGISTRY\.md: UI-002 Badge no longer under Components' "$out"
+expect_result "weakened: a retired component and a renamed one (same ID) are not" 0 'swift-harness' "$out" 'UI-003|UI-001'
+hook session-start.sh "$W" '{"source":"startup"}' >/dev/null
+sed -i '' 's/tolerance: 0.05)/tolerance: 0.01)/; s/| 700x600 |/| 1000x700 |/' "$W/Tests/AppTests/LooksTests.swift" "$W/docs/LAYOUT_CONTRACT.md"
+expect_result "weakened: a smaller tolerance or a larger Min is not a weakening" 0 '^exit=0$' "$(weaken)" 'swift-harness'
 if jq -e '.hooks.Stop[].hooks[] | select(.command | endswith("weaken-watch.sh\""))' "$PLUGIN/hooks/hooks.json" >/dev/null; then
   ok "weakened: the notice runs at the end of every turn"
 else nok "weakened: the notice runs at the end of every turn"; fi
