@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## swift-harness 1.8.3 (2026-11-10)
 
 - Fix: the end-of-turn check ran nothing after changes git did not show ([#137](https://github.com/davidelarocca/swift-harness/issues/137)). The code fingerprint was built from `git diff HEAD` and the untracked files, so four kinds of change left it as it was, and the turn ended as "nothing changed" or "passed before":
   - **the config and the verify script kept out of git** (guest mode `--local`, or an ignored `.claude/`): a changed verify script, approved again, was not run on code that had passed the old one. They are now read from disk, with every file the verify approval covers;
