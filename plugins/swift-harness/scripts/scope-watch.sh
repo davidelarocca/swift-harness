@@ -27,8 +27,8 @@ state="$(sh_state_dir)" || exit 0
 sess="$(sh_session_dir "$state")" || exit 0
 
 fork="$(git -C "$SH_ROOT" merge-base "$base" HEAD 2>/dev/null)" || exit 0
-changed="$({ git -C "$SH_ROOT" diff --name-only "$fork" 2>/dev/null
-  git -C "$SH_ROOT" ls-files --others --exclude-standard 2>/dev/null; } | sort -u | grep -v '^$')"
+changed="$({ git -C "$SH_ROOT" -c core.quotepath=off diff --name-only "$fork" 2>/dev/null
+  git -C "$SH_ROOT" -c core.quotepath=off ls-files --others --exclude-standard 2>/dev/null; } | sort -u | grep -v '^$')"
 outside="$(printf '%s\n' "$changed" | jq -Rr --argjson e "$entry" '
   select(length > 0) as $f
   | if any($e.paths[]? | strings; . as $p | $f == ($p | rtrimstr("/")) or ($f | startswith(($p | rtrimstr("/")) + "/")))

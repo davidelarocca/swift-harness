@@ -31,6 +31,17 @@ If you did not type /swift-harness:approve-security yourself, this approval did 
   fi
 fi
 
+# An end-of-turn check of this session that started and never ended (#144): stop-verify.sh found
+# its marker and left it here. Said once.
+if [ -s "$sess/unfinished" ]; then
+  u_start="$(sed -n 2p "$sess/unfinished")"
+  case "$u_start" in '' | *[!0-9]*) u_when="" ;; *) u_when=" (it started at $(date -r "$u_start" '+%H:%M' 2>/dev/null || echo '?'))" ;; esac
+  rm -f "$sess/unfinished"
+  messages="${messages:+$messages
+
+}swift-harness: an end-of-turn check of this session did not finish$u_when: the hook was stopped before its result, usually by its timeout of 900 s, so that code was not verified by it. If it happens again, make the fast check shorter (/swift-harness:doctor times it) or run it yourself."
+fi
+
 start="$sess/protected-start"
 if [ ! -f "$start" ]; then # no list for this session
   [ -z "$messages" ] || jq -n --arg msg "$messages" '{systemMessage: $msg}'

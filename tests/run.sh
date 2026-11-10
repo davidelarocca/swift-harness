@@ -4201,6 +4201,172 @@ echo 'let app = 7' >"$FN/Sources/App.swift"
 expect_result "stop: from a nested repository, the project is still verified" 2 'Verification failed' "exit=$(FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$FN/Packages/Core" >/dev/null 2>&1; echo $?)
 $(rm -f "$TMP/data/state/"*/failed; FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$FN/Packages/Core" 2>&1)"
 
+# ---------- docs adapter in a UTF-8 locale (#139) ----------
+
+DL="$(new_project adapter-locale)"
+mkdir -p "$DL/docs"; echo '# a' >"$DL/docs/a.md"
+cat >"$DL/scripts/check-docs.sh" <<'EOF'
+#!/bin/bash
+cd "$(dirname "$0")/.." || exit 2
+grep -q fixed docs/a.md || echo "docs/a.md:1: old problem"
+echo "docs/B.md:2: old problem"
+echo "docs/_c.md:3: old problem"
+echo "docs/Z.md:4: old problem"
+exit 1
+EOF
+chmod +x "$DL/scripts/check-docs.sh"
+set_config "$DL" '{"verify":{"command":"scripts/verify.sh fast"},"docs":{"command":"scripts/check-docs.sh"}}'
+git -C "$DL" add -A && git -C "$DL" commit -qm adapter
+approve "$DL" >/dev/null
+LC_ALL=en_US.UTF-8 hook session-start.sh "$DL" '{"source":"startup"}' >/dev/null
+echo fixed >>"$DL/docs/a.md"
+expect_result "adapter: in a UTF-8 locale, fixing one old problem does not make the others new" 0 '^exit=0' "$(LC_ALL=en_US.UTF-8 ev_stop "$DL")" 'were not there when the session started'
+
+# ---------- check.sh run twice (#140) ----------
+
+flat() { printf '%s\n' "${1%%$'\n'*}"; printf '%s' "${1#*$'\n'}" | tr '\n' ' '; }
+CD="$(new_project check-twice)"
+printf '#!/bin/bash\necho "docs/a.md:1: broken link"\nexit 1\n' >"$CD/scripts/check-docs.sh"; chmod +x "$CD/scripts/check-docs.sh"
+set_config "$CD" '{"verify":{"command":"scripts/verify.sh fast"},"docs":{"command":"scripts/check-docs.sh"}}'
+git -C "$CD" add -A && git -C "$CD" commit -qm docs
+approve "$CD" >/dev/null
+expect_result "check: a failing blocking docs check fails the first run" 1 'Result: FAILED' "$(flat "$(chk --project "$CD")")"
+expect_result "check: and the second run, with nothing changed" 1 'Result: FAILED' "$(flat "$(chk --project "$CD")")"
+expect_result "check: and --strict --json says failed, exit 1" 1 '"result": "failed"' "$(chk --project "$CD" --strict --json)"
+set_config "$CD" '{"verify":{"command":"scripts/verify.sh fast"},"docs":{"command":"scripts/check-docs.sh","blocking":false}}'
+expect_result "check: an observed docs check does not fail the run, and is named as failed" 0 'docs: scripts/check-docs\.sh: failed.*Result: passed' "$(flat "$(chk --project "$CD")")"
+expect_result "check: nor the run after it" 0 'docs: scripts/check-docs\.sh: failed.*Result: passed' "$(flat "$(chk --project "$CD")")"
+
+# ---------- an approved security change (#141) ----------
+
+SA="$(sec_project sec-approved)"
+hook session-start.sh "$SA" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$SA/Sources/App.swift"
+entitle "$SA" 'com\.apple\.security\.network\.client' YES
+rstop "$SA" >/dev/null
+sec --approve "$(sec --status --project "$SA" | sed -n 's/^Digest: //p')" --project "$SA" >/dev/null
+expect_result "security: after the user approves the change, the next Stop checks again and passes" 0 '^checked$' "$(ev_stop "$SA" | head -1)
+$(jq -r .outcome "$(state_of "$SA")/evidence.json")"
+out="$(hook session-start.sh "$SA" '{"source":"startup"}')"
+if grep -qi 'failed on the current code' <<<"$out"; then nok "security: the next session does not start as failed after the approval" "$out"
+else ok "security: the next session does not start as failed after the approval"; fi
+
+# ---------- paths with non-ASCII characters (#142) ----------
+
+SN="$(sec_project sec-nonascii)"
+git -C "$SN" mv App/App.entitlements "App/Caffè.entitlements"
+git -C "$SN" mv App.xcodeproj "Caffè.xcodeproj"
+printf '// !$*UTF8*$!\n{\n\t\t\t\tSDKROOT = macosx;\n\t\t\t\tENABLE_HARDENED_RUNTIME = NO;\n}\n' >"$SN/Caffè.xcodeproj/project.pbxproj"
+git -C "$SN" add -A && git -C "$SN" commit -qm 'names with an accent'
+out="$(sec state --project "$SN")"
+expect_result "security: an entitlements file with a non-ASCII name is read" 0 '^App/Caffè\.entitlements: com\.apple\.security\.app-sandbox = true' "exit=0
+$out" 'not a readable plist'
+expect_result "security: build settings of a project with a non-ASCII name are read" 0 '^Caffè\.xcodeproj/project\.pbxproj: ENABLE_HARDENED_RUNTIME = NO' "exit=0
+$out"
+expect_result "platforms: a project with a non-ASCII name is read" 0 '^macOS	Caffè\.xcodeproj/project\.pbxproj' "exit=0
+$(printf '{}' | bash -c '. "$0"; sh_platforms "$1"' "$SCRIPTS/lib.sh" "$SN")"
+SB="$(new_project scope-nonascii)"
+git -C "$SB" branch -M main
+set_config "$SB" '{"verify":{"command":"scripts/verify.sh fast"},"scope":[{"branch":"ios-*","paths":["App-iOS/"],"base":"main"}]}'
+git -C "$SB" add -A && git -C "$SB" commit -qm scope
+git -C "$SB" switch -qc ios-port
+mkdir -p "$SB/App-iOS"; echo 'let c = 1' >"$SB/App-iOS/Città.swift"
+# One call each: the notice is said once per set of files, so a second call would say nothing.
+expect_result "scope: a file with a non-ASCII name inside the scope is not reported as outside" 0 '^exit=0$' "exit=0
+$(hook scope-watch.sh "$SB" 2>&1)" 'outside its scope'
+git -C "$SB" add -A && git -C "$SB" commit -qm 'a committed file with an accent'
+rm -f "$(state_of "$SB")/sessions/test/scope-outside"
+expect_result "scope: nor once it is committed" 0 '^exit=0$' "exit=0
+$(hook scope-watch.sh "$SB" 2>&1)" 'outside its scope'
+
+# ---------- interrupted turns (#143) ----------
+
+RS="$(new_project resume)"
+RSL="$TMP/resume.log"; : >"$RSL"
+hook session-start.sh "$RS" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$RS/Sources/App.swift"
+echo '// by a shell command' >>"$RS/Sources/Audio/Engine.swift"
+hook session-start.sh "$RS" '{"source":"resume"}' >/dev/null
+FAKE_VERIFY_LOG="$RSL" hook stop-verify.sh "$RS" >/dev/null 2>&1
+if [ -s "$RSL" ]; then ok "session start: a resumed session keeps its baseline, so its earlier edits are verified"
+else nok "session start: a resumed session keeps its baseline, so its earlier edits are verified" "$(ev_of "$RS" .)"; fi
+expect_result "session start: a resumed session still reports a protected file changed before the resume" 0 'Sources/Audio/Engine\.swift' "exit=0
+$(hook protected-watch.sh "$RS" 2>&1)"
+hook session-start.sh "$RS" '{"source":"startup"}' >/dev/null
+: >"$RSL"
+FAKE_VERIFY_LOG="$RSL" hook stop-verify.sh "$RS" >/dev/null 2>&1
+if [ ! -s "$RSL" ]; then ok "session start: a new start of the session takes the code as it is"
+else nok "session start: a new start of the session takes the code as it is" "the verify command ran"; fi
+FC="$(new_project failure-count)"
+hook session-start.sh "$FC" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$FC/Sources/App.swift"; FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$FC" '{"stop_hook_active":false}' >/dev/null 2>&1
+echo 'let app = 3' >"$FC/Sources/App.swift"; FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$FC" '{"stop_hook_active":true}' >/dev/null 2>&1
+# The user interrupts here: no Stop. Then a new turn fails once.
+echo 'let app = 4' >"$FC/Sources/App.swift"
+expect_result "stop: after an interrupted turn, a new turn's first failure blocks as attempt 1" 2 'attempt 1 of 3' "$(FAKE_VERIFY_EXIT=1 ev_stop "$FC" '{"stop_hook_active":false}')"
+echo 'let app = 5' >"$FC/Sources/App.swift"; FAKE_VERIFY_EXIT=1 hook stop-verify.sh "$FC" '{"stop_hook_active":true}' >/dev/null 2>&1
+echo 'let app = 6' >"$FC/Sources/App.swift"
+expect_result "stop: within one turn the attempts still add up to the limit" 0 'failed 3 times in a row' "$(FAKE_VERIFY_EXIT=1 ev_stop "$FC" '{"stop_hook_active":true}')"
+
+# ---------- a Stop hook that never ended (#144) ----------
+
+KS="$(new_project killed)"
+# The verify command looks at what the hook has recorded while it is still running.
+cat >"$KS/scripts/verify.sh" <<'EOF'
+#!/bin/bash
+cp "$KS_STATE/evidence.json" "$KS_STATE/evidence.during" 2>/dev/null
+cp "$KS_STATE/sessions/test/running" "$KS_STATE/running.during" 2>/dev/null
+exit 0
+EOF
+git -C "$KS" add -A && git -C "$KS" commit -qm 'a verify script that looks'
+approve "$KS" >/dev/null
+KSS="$(state_of "$KS")"
+hook session-start.sh "$KS" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$KS/Sources/App.swift"
+KS_STATE="$KSS" hook stop-verify.sh "$KS" >/dev/null 2>&1
+if [ "$(jq -r .outcome "$KSS/evidence.during" 2>/dev/null)" = not-finished ] && [ -s "$KSS/running.during" ]; then ok "stop: while the checks run, the record says not finished, and a marker is there"
+else nok "stop: while the checks run, the record says not finished, and a marker is there" "$(cat "$KSS/evidence.during" 2>&1)"; fi
+if [ ! -e "$KSS/sessions/test/running" ] && [ "$(jq -r .outcome "$KSS/evidence.json")" = passed ]; then ok "stop: when they end, the marker is gone and the record is the result"
+else nok "stop: when they end, the marker is gone and the record is the result" "$(cat "$KSS/evidence.json")"; fi
+if [ "$(grep -c '"outcome":"not-finished"' "$KSS/evidence-history.jsonl" 2>/dev/null)" = 0 ]; then ok "stop: the history keeps only the result"
+else nok "stop: the history keeps only the result" "$(cat "$KSS/evidence-history.jsonl")"; fi
+# As after a timeout: the marker of a run whose process is gone, and the record it left.
+echo 'let app = 3' >"$KS/Sources/App.swift"
+printf '%s\n%s\n%s\n' somecode "$(($(date +%s) - 1200))" 999999 >"$KSS/sessions/test/running"
+jq -nc --arg c "$(jq -nc --arg cwd "$KS" '{cwd: $cwd}' | CLAUDE_PLUGIN_DATA="$TMP/data" bash -c '. "$0"; sh_init && sh_identity' "$SCRIPTS/lib.sh")" '{version: 1, code: $c, outcome: "not-finished", checks: []}' >"$KSS/evidence.json"
+expect_row "doctor: a check that started and never ended is a warning" "$(doctor "$KS")" WARN 'Last verification' 'did not finish'
+KS_STATE="$KSS" hook stop-verify.sh "$KS" >/dev/null 2>&1
+if grep -q '"kind":"not-finished"' "$KSS/catches.jsonl" && grep -q '20 min' "$KSS/catches.jsonl"; then ok "stop: the next run records that the last one did not finish, and since when"
+else nok "stop: the next run records that the last one did not finish, and since when" "$(tail -n 3 "$KSS/catches.jsonl")"; fi
+expect_result "stop: the user is told once that a check did not finish" 0 'did not finish.*900' "exit=0
+$(hook protected-watch.sh "$KS" 2>&1 | tr '\n' ' ')"
+expect_result "stop: and not again" 0 '^exit=0$' "exit=0
+$(hook protected-watch.sh "$KS" 2>&1)" 'did not finish'
+mkdir -p "$TMP/own-tmp"
+echo 'let app = 4' >"$KS/Sources/App.swift"
+TMPDIR="$TMP/own-tmp" KS_STATE="$KSS" hook stop-verify.sh "$KS" >/dev/null 2>&1
+if [ -z "$(ls "$TMP/own-tmp")" ] && [ "$(jq -r .outcome "$KSS/evidence.json")" = passed ]; then ok "stop: no temporary output file is left behind"
+else nok "stop: no temporary output file is left behind" "$(ls "$TMP/own-tmp")"; fi
+
+# ---------- the catch log: bound, and a broken line (#145) ----------
+
+CB="$(new_project catch-bound)"
+CBL="$(state_of "$CB")/catches.jsonl"
+now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+{
+  printf '{"time":"%s","session":"s","agent":"claude","check":"SwiftLint","kind":"blocked","what":"one"}\n' "$now"
+  printf '{"time":"%s","session":"s","agent":"cl\n' "$now"
+  printf '{"time":"%s","session":"s","agent":"claude","check":"SwiftLint","kind":"fixed","what":"two"}\n' "$now"
+} >"$CBL"
+out="$(report --project "$CB")"
+expect_result "report: a broken line in the catch log does not empty the report" 0 'SwiftLint: 1 blocked, 1 fixed' "$out" 'Nothing in the catch log'
+expect_result "report: it says how many lines it could not read" 0 '1 line.* could not be read' "$out"
+: >"$CBL"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf '{"time":"%s","session":"s","agent":"claude","check":"old","kind":"reported","what":"%s"}\n' "$now" "$i" >>"$CBL"; done
+SWIFT_HARNESS_CATCH_MAX=8 hook guard.sh "$CB" "$(edit_input "$CB/Sources/Audio/Engine.swift")" >/dev/null
+if [ "$(wc -l <"$CBL" | tr -d ' ')" -le 8 ] && tail -n 1 "$CBL" | jq -e '.check == "guard"' >/dev/null && ! grep -q '"what":"1"' "$CBL"; then ok "catch log: trimmed to its bound, keeping the newest lines"
+else nok "catch log: trimmed to its bound, keeping the newest lines" "$(wc -l <"$CBL") line(s): $(tail -n 2 "$CBL")"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
