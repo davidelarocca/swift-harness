@@ -3332,6 +3332,155 @@ expect_result "scope: commits of the base not merged into the branch are counted
 git -C "$B" switch -q main
 expect_result "scope: on a branch without a scope entry, nothing" 0 '^exit=0$' "$(scope)"
 
+# ---------- weakened checks (#146) ----------
+
+W="$(new_project weaken)"
+mkdir -p "$W/Tests/AppTests"
+cat >"$W/Tests/AppTests/PlayerTests.swift" <<'EOF'
+import XCTest
+final class PlayerTests: XCTestCase {
+    func testPlays() {
+        XCTAssertTrue(true)
+        XCTAssertEqual(1, 1)
+    }
+    func testStops() {
+        XCTAssertFalse(false)
+    }
+    // func testOld() { XCTAssertTrue(true) }
+    func testSeeks() throws {
+        let x = try XCTUnwrap(Optional(1))
+        XCTAssertEqual(x, 1)
+    }
+}
+EOF
+cat >"$W/Tests/AppTests/LibraryTests.swift" <<'EOF'
+import Testing
+@Test func loads() { #expect(1 == 1) }
+@Test("sorts") func sorts() { #expect(2 > 1) }
+EOF
+cat >"$W/.swiftlint.yml" <<'EOF'
+disabled_rules:
+  - todo
+opt_in_rules:
+  - empty_count
+excluded:
+  - .build
+EOF
+git -C "$W" add -A && git -C "$W" commit -qm tests
+hook session-start.sh "$W" '{"source":"startup"}' >/dev/null
+weaken() { local o c; o="$(hook weaken-watch.sh "$W" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+expect_result "weakened: nothing changed, nothing said" 0 '^exit=0$' "$(weaken)" 'swift-harness'
+# A comment that looks like a test is not a test: removing it says nothing.
+sed -i '' '/func testOld/d' "$W/Tests/AppTests/PlayerTests.swift"
+expect_result "weakened: a commented-out test is not counted" 0 '^exit=0$' "$(weaken)" 'swift-harness'
+# Remove testStops (one test, one assertion).
+sed -i '' '/func testStops/,/^    }$/d' "$W/Tests/AppTests/PlayerTests.swift"
+out="$(weaken)"
+expect_result "weakened: a removed test is reported with its file, and never blocks" 0 'Tests/AppTests/PlayerTests\.swift: 1 test removed \(3 -> 2\)' "$out" '"decision"'
+expect_result "weakened: ... and its assertion" 0 'Tests/AppTests/PlayerTests\.swift: 1 assertion removed \(5 -> 4\)' "$out"
+expect_result "weakened: ... to the user and to the agent" 0 'systemMessage.*additionalContext' "exit=0
+$(printf '%s' "${out#*$'\n'}" | tr '\n' ' ')"
+expect_result "weakened: the same set is not said twice" 0 '^exit=0$' "$(weaken)" 'swift-harness'
+if jq -e 'select(.check == "weakened checks" and .kind == "reported")' "$(state_of "$W")/catches.jsonl" >/dev/null 2>&1; then
+  ok "weakened: recorded in the catch log, so the report counts it"
+else nok "weakened: recorded in the catch log, so the report counts it" "$(cat "$(state_of "$W")/catches.jsonl" 2>/dev/null)"; fi
+# Skips: XCTSkip, .disabled(...), #if false.
+sed -i '' 's/func testPlays() {/func testPlays() throws {\
+        throw XCTSkip("later")/' "$W/Tests/AppTests/PlayerTests.swift"
+sed -i '' 's/@Test("sorts")/@Test("sorts", .disabled("flaky"))/' "$W/Tests/AppTests/LibraryTests.swift"
+out="$(weaken)"
+expect_result "weakened: an XCTSkip added to a test is reported" 0 'Tests/AppTests/PlayerTests\.swift: 1 skip added' "$out"
+expect_result "weakened: a .disabled(...) trait added is reported" 0 'Tests/AppTests/LibraryTests\.swift: 1 skip added' "$out"
+expect_result "weakened: ... and the message lists the whole set, the earlier removal included" 0 '1 test removed' "$out"
+printf '#if false\n@Test func hidden() { #expect(true) }\n#endif\n' >>"$W/Tests/AppTests/LibraryTests.swift"
+expect_result "weakened: an #if false block in a test file is reported" 0 'LibraryTests\.swift: 2 skips added' "$(weaken)"
+# Lint: a new swiftlint:disable anywhere in Swift code, and the config.
+printf '// swiftlint:disable:next force_unwrapping\nlet forced = Int("1")!\n' >>"$W/Sources/App.swift"
+expect_result "weakened: a swiftlint:disable added to the code is reported" 0 'Sources/App\.swift: 1 swiftlint:disable added' "$(weaken)"
+cat >"$W/.swiftlint.yml" <<'EOF'
+disabled_rules:
+  - todo
+  - force_cast
+opt_in_rules: []
+excluded:
+  - .build
+  - Sources/Audio
+EOF
+out="$(weaken)"
+expect_result "weakened: a rule added to disabled_rules is reported" 0 '\.swiftlint\.yml: rule force_cast disabled' "$out"
+expect_result "weakened: an opt-in rule removed is reported" 0 '\.swiftlint\.yml: rule empty_count no longer opted in' "$out"
+expect_result "weakened: a path added to excluded is reported" 0 '\.swiftlint\.yml: Sources/Audio excluded from lint' "$out"
+# A new session starts from the code as it is; a renamed test file is not a removal.
+git -C "$W" add -A && git -C "$W" commit -qm weaker
+hook session-start.sh "$W" '{"source":"startup"}' >/dev/null
+expect_result "weakened: a new session starts from the code as it is" 0 '^exit=0$' "$(weaken)" 'swift-harness'
+git -C "$W" mv Tests/AppTests/LibraryTests.swift Tests/AppTests/CatalogTests.swift
+expect_result "weakened: a test file renamed with the same tests is not a removal" 0 '^exit=0$' "$(weaken)" 'swift-harness'
+rm "$W/Tests/AppTests/PlayerTests.swift"
+expect_result "weakened: a deleted test file is reported with what it held" 0 'Tests/AppTests/PlayerTests\.swift: file removed \(2 tests, 4 assertions\)' "$(weaken)"
+# Part 2: tolerances, the layout contract, the registry.
+mkdir -p "$W/docs"
+cat >"$W/Tests/AppTests/LooksTests.swift" <<'EOF'
+import XCTest
+final class LooksTests: XCTestCase {
+    func testLibrary() {
+        Snapshot.verify(LibraryView(), named: "library", tolerance: 0.01)
+        PerformanceBudget.verify("launch",
+                                 tolerance: 0.05) { }
+    }
+}
+EOF
+cat >"$W/docs/LAYOUT_CONTRACT.md" <<'EOF'
+# Layout contract
+
+## Screens
+
+| Screen | View | File | Min |
+|---|---|---|---|
+| Library | LibraryView | Sources/App.swift | 900x600 |
+| Settings | SettingsView | Sources/App.swift | 500 |
+EOF
+cat >"$W/docs/COMPONENT_REGISTRY.md" <<'EOF'
+# Component registry
+
+## Components
+
+| ID | Name | File |
+|---|---|---|
+| UI-001 | PlayButton | Sources/App.swift |
+| UI-002 | Badge | Sources/App.swift |
+| UI-003 | Meter | Sources/App.swift |
+
+## Internal
+
+| Name | Why not registered |
+|---|---|
+
+## Retired
+
+| ID | Replaced by | Date |
+|---|---|---|
+EOF
+git -C "$W" add -A && git -C "$W" commit -qm looks
+hook session-start.sh "$W" '{"source":"startup"}' >/dev/null
+expect_result "weakened: tolerances, layout rows and registry rows at session start say nothing" 0 '^exit=0$' "$(weaken)" 'swift-harness'
+sed -i '' 's/tolerance: 0.01)/tolerance: 0.2)/' "$W/Tests/AppTests/LooksTests.swift"
+sed -i '' 's/| 900x600 |/| 700x600 |/; /| Settings |/d' "$W/docs/LAYOUT_CONTRACT.md"
+sed -i '' '/| UI-002 |/d; /| UI-003 |/d; s/| UI-001 | PlayButton |/| UI-001 | PlayControl |/' "$W/docs/COMPONENT_REGISTRY.md"
+printf '| UI-003 | PlayControl | 2026-11-10 |\n' >>"$W/docs/COMPONENT_REGISTRY.md"
+out="$(weaken)"
+expect_result "weakened: a larger tolerance in a test is reported" 0 'Tests/AppTests/LooksTests\.swift: tolerance raised \(0\.01 -> 0\.2\)' "$out"
+expect_result "weakened: a lower Min in the layout contract is reported" 0 'docs/LAYOUT_CONTRACT\.md: Min of Library lowered \(900x600 -> 700x600\)' "$out"
+expect_result "weakened: a layout row removed is reported" 0 'docs/LAYOUT_CONTRACT\.md: layout row Settings removed' "$out"
+expect_result "weakened: a component gone from Components is reported" 0 'docs/COMPONENT_REGISTRY\.md: UI-002 Badge no longer under Components' "$out"
+expect_result "weakened: a retired component and a renamed one (same ID) are not" 0 'swift-harness' "$out" 'UI-003|UI-001'
+hook session-start.sh "$W" '{"source":"startup"}' >/dev/null
+sed -i '' 's/tolerance: 0.05)/tolerance: 0.01)/; s/| 700x600 |/| 1000x700 |/' "$W/Tests/AppTests/LooksTests.swift" "$W/docs/LAYOUT_CONTRACT.md"
+expect_result "weakened: a smaller tolerance or a larger Min is not a weakening" 0 '^exit=0$' "$(weaken)" 'swift-harness'
+if jq -e '.hooks.Stop[].hooks[] | select(.command | endswith("weaken-watch.sh\""))' "$PLUGIN/hooks/hooks.json" >/dev/null; then
+  ok "weakened: the notice runs at the end of every turn"
+else nok "weakened: the notice runs at the end of every turn"; fi
+
 # ---------- adoption audit (#104) ----------
 
 AD="$TMP/adopt"

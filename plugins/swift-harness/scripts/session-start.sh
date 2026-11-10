@@ -59,6 +59,9 @@ if git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
       # The performance baselines too (#33), for the same notice.
       rm -f "$sess/performance-warned" "$sess/performance-approved"
       sh_snapshot_list "$(sh_performance)" >"$sess/performance-start"
+      # What the checks stand on (tests, assertions, skips, lint), for weaken-watch.sh (#146).
+      rm -f "$sess/weaken-warned"
+      sh_weaken_list >"$sess/weaken-start"
     fi
     # The docs problems already there at session start, for docs-watch.sh (#70).
     rm -f "$sess/docs-start" "$sess/docs-blocked" "$sess/docs-warned"

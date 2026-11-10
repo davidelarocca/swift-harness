@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- New: the end of a turn says when the session made a check weaker ([#146](https://github.com/davidelarocca/swift-harness/issues/146)). The quickest way to turn a failing check green is to weaken it, and nothing said so. Compared with the session start, by file: tests or assertions removed, a test file removed, skips added (`XCTSkip`, `.disabled(...)`, `#if false`), a larger `tolerance:` in a test file (as in `Snapshot.verify` and `PerformanceBudget.verify`), `swiftlint:disable` added, in `.swiftlint.yml` a rule disabled, no longer opted in or removed from `only_rules`, or a path excluded, a layout contract row removed or its Min lowered, and a component gone from the registry's Components without being retired. A test file renamed with the same counts is not a removal, nor a component that keeps its ID. Told to the user and to the agent, once per set, recorded in the catch log; never blocks, and no project code runs (about a second on an app with 329 test files).
+
 ## swift-harness 1.8.3 (2026-11-10)
 
 - Fix: the end-of-turn check ran nothing after changes git did not show ([#137](https://github.com/davidelarocca/swift-harness/issues/137)). The code fingerprint was built from `git diff HEAD` and the untracked files, so four kinds of change left it as it was, and the turn ended as "nothing changed" or "passed before":

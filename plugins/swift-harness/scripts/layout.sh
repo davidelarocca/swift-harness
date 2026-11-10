@@ -16,6 +16,7 @@
 #          Exit 3: no Screens table with View, File and Min columns (printed, never blocks).
 #        layout.sh summary <project root>          one line for doctor.sh
 #        layout.sh entries <project root> <file>   rows whose File is the file, one per line
+#        layout.sh records <project root>          the records below, for weaken-watch.sh (#146)
 
 set -u
 
@@ -203,8 +204,12 @@ case "$mode" in
     done <<<"$records"
     ;;
 
+  records)
+    printf '%s\n' "$records"
+    ;;
+
   *)
-    echo "usage: layout.sh check|summary|entries <project root> [file]" >&2
+    echo "usage: layout.sh check|summary|entries|records <project root> [file]" >&2
     exit 2
     ;;
 esac
