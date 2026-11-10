@@ -75,7 +75,7 @@ trap 'rm -rf "$work"' EXIT
 ui_files() {
   local root="$1" excluded files
   if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
-    files="$(git -C "$root" ls-files -co --exclude-standard -- '*.swift' 2>/dev/null)"
+    files="$(git -C "$root" -c core.quotepath=off ls-files -co --exclude-standard -- '*.swift' 2>/dev/null)"
   else
     files="$(cd "$root" && find . -name '*.swift' -not -path '*/.build/*' | sed 's#^\./##')"
   fi

@@ -107,7 +107,7 @@ history="$(jq -r '.docs.history[]? | strings' "$root/.claude/swift-harness.json"
 [ -n "$history" ] || history=$'docs/adr\ndocs/audit\ndocs/archive\ndocs/HISTORY.md\nCHANGELOG.md'
 docs_files="$(pick '^(README[^/]*\.md|docs/.*\.md)$' | A_HIST="$history" awk '
   BEGIN { n = split(ENVIRON["A_HIST"], h, "\n") }
-  { for (i = 1; i <= n; i++) { p = h[i]; sub(/\/$/, "", p); if (p != "" && ($0 == p || index($0, p "/") == 1)) next } print }' | head -n 200)"
+  { for (i = 1; i <= n; i++) { p = h[i]; sub(/\/$/, "", p); if (p != "" && ($0 == p || index($0, p "/") == 1)) next } print; if (++kept == 200) exit }')"
 script_files="$(pick '^([Ss]cripts/[^/]+|[^/]+\.sh|Makefile|Taskfile\.ya?ml|fastlane/Fastfile|ci_scripts/[^/]+)$' | grep -vE '\.(md|txt|json|png|jpe?g)$')"
 ci_files="$(pick '^(\.github/workflows/[^/]+\.ya?ml|\.gitlab-ci\.yml|bitrise\.yml|\.circleci/config\.yml|Jenkinsfile|\.buildkite/[^/]+\.ya?ml)$')"
 manifests="$(pick '(^|/)Package\.swift$' | awk -F/ 'NF <= 4')"
@@ -277,7 +277,7 @@ while IFS= read -r f; do
   readable "$f" || { row ci unknown "$f" "could not read it"; continue; }
   case "$f" in
     *.yml | *.yaml)
-      problem="$(yaml_problem "$root/$f" | head -1)"
+      problem="$(yaml_problem "$root/$f")" # one line at most; no pipe, so awk never writes to a closed reader
       if [ -n "$problem" ]; then row ci unknown "$f" "cannot be read as YAML: $problem"
       else row ci configured "$f" "workflow (structure checked, not parsed)"; fi
       ;;

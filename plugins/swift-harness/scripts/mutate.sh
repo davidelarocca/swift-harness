@@ -151,7 +151,7 @@ verify_new() {
 }
 
 # Swift files of the copy, split into tests and the rest (Package.swift left out).
-swift_files() { git -C "$copy" ls-files -co --exclude-standard -- '*.swift' 2>/dev/null | grep -v '/\.build/' | sort; }
+swift_files() { git -C "$copy" -c core.quotepath=off ls-files -co --exclude-standard -- '*.swift' 2>/dev/null | grep -v '/\.build/' | sort; }
 is_test() { grep -E '(^|/)[^/]*Tests?/|Tests?\.swift$'; }
 test_files() { swift_files | is_test; }
 source_files() { swift_files | grep -vE '(^|/)[^/]*Tests?/|Tests?\.swift$|(^|/)Package\.swift$'; }
@@ -363,7 +363,7 @@ site_docs_stale_link() {
 
 site_security_relax() {
   local f key line pb=/usr/libexec/PlistBuddy
-  f="$(cd "$copy" && git ls-files -co --exclude-standard -- '*.entitlements' 2>/dev/null | sort | head -1)"
+  f="$(cd "$copy" && git -c core.quotepath=off ls-files -co --exclude-standard -- '*.entitlements' 2>/dev/null | sort | head -1)"
   [ -n "$f" ] && [ -x "$pb" ] || return 0
   # PlistBuddy separates key paths with ":", so the dots in entitlement names are safe.
   for key in com.apple.security.cs.disable-library-validation com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.allow-jit; do

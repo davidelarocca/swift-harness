@@ -62,8 +62,12 @@ fi
 label="since $since"
 [ "$since" = "0000-00-00" ] && label="since the log began"
 
+# One JSON value per line that parses; a line cut short by a crash is skipped, and counted (#145).
+lines_of() { { [ ! -f "$1" ] || cat "$1"; } | jq -cR 'fromjson? // empty' 2>/dev/null; }
+unread=0
+if [ -f "$log" ]; then unread=$(($(grep -c . "$log") - $(lines_of "$log" | grep -c .))); fi
 summary="$(
-  { [ -f "$log" ] && cat "$log"; } | jq -sc --arg since "$since" '
+  lines_of "$log" | jq -sc --arg since "$since" '
     map(select(type == "object" and (.time // "") >= $since))
     | . as $all
     | {
@@ -73,6 +77,7 @@ summary="$(
           blocked: map(select(.kind == "blocked")) | length,
           reported: map(select(.kind == "reported" or .kind == "observed")) | length,
           unstable: map(select(.kind == "unstable")) | length,
+          not_finished: map(select(.kind == "not-finished")) | length,
           asked: map(select(.kind == "asked")) | length,
           fixed: map(select(.kind == "fixed")) | length,
           left_failing: map(select(.kind == "left-failing")) | length,
@@ -105,12 +110,12 @@ summary="$(
 
 # The end-of-turn records of the period (#110): how many, by outcome, and the time checks took.
 hist="$(sh_state_path)/evidence-history.jsonl"
-turns="$({ [ -f "$hist" ] && cat "$hist"; } | jq -sc --arg since "$since" '
+turns="$(lines_of "$hist" | jq -sc --arg since "$since" '
   map(select(type == "object" and (.time // "") >= $since))
   | {records: length, outcomes: (group_by(.outcome) | map({(.[0].outcome): length}) | add // {}),
      seconds: ([.[].checks[]?.seconds // 0] | add // 0)}' 2>/dev/null)"
 [ -n "$turns" ] || turns='{"records":0,"outcomes":{},"seconds":0}'
-summary="$(printf '%s' "$summary" | jq -c --argjson turns "$turns" '. + {turns: $turns}')"
+summary="$(printf '%s' "$summary" | jq -c --argjson turns "$turns" --argjson unread "$unread" '. + {turns: $turns} + (if $unread > 0 then {unread_lines: $unread} else {} end)')"
 
 if [ "$json" = true ]; then
   printf '%s\n' "$summary" | jq --arg since "$since" '{since: $since} + .'
@@ -123,7 +128,7 @@ if [ "$html" = true ]; then
   [ -f "$evidence" ] && ev="$(jq -c . "$evidence" 2>/dev/null || echo null)"
   # With no log yet the first command must still succeed: under pipefail, the fallback below would
   # add a second [] to the one jq printed.
-  recent="$({ [ ! -f "$log" ] || cat "$log"; } | jq -sc --arg since "$since" 'map(select(type == "object" and (.time // "") >= $since)) | .[-50:] | reverse' 2>/dev/null || echo '[]')"
+  recent="$(lines_of "$log" | jq -sc --arg since "$since" 'map(select(type == "object" and (.time // "") >= $since)) | .[-50:] | reverse' 2>/dev/null || echo '[]')"
   out_dir="$SH_ROOT/.build/swift-harness"
   # The scripts change no file outside the project (SECURITY.md), and a link could lead there.
   for path in "$SH_ROOT/.build" "$out_dir" "$out_dir/report.html"; do
@@ -149,13 +154,14 @@ printf '%s\n' "$summary" | jq -r --arg label "$label" --arg root "$SH_ROOT" '
   def n($k): [.checks[] | .[$k]] | add // 0;
   def part($v; $word): if $v > 0 then ["\($v) \($word)"] else [] end;
   "swift-harness report for \($root), \($label):",
+  (if (.unread_lines // 0) > 0 then "\(.unread_lines) line(s) of the catch log could not be read and were skipped." else empty end),
   (if .turns.records > 0 then "End of turn: \(.turns.records) record(s) (\(.turns.outcomes | to_entries | map("\(.value) \(.key)") | join(", "))); the checks that ran took \(.turns.seconds) s." else empty end),
   (if .events == 0 then "Nothing in the catch log: no check blocked, reported, asked or was skipped."
    else
      "\(n("blocked")) block(s), \(n("reported")) report(s), \(n("asked")) question(s) before an edit; \(n("fixed")) fixed by Claude, \(n("left_failing")) left failing, \(n("approved")) approval(s) by you.",
      (if (.checks | length) > 0 then "Caught:" else empty end),
      (.checks[] | "- \(.check): " + ((part(.blocked; "blocked") + part(.reported; "reported") + part(.asked; "asked")
-        + part(.unstable; "unstable (failed once, passed on a rerun)") + part(.fixed; "fixed by Claude") + part(.left_failing; "left failing") + part(.approved; "approved by you")) | join(", "))
+        + part(.unstable; "unstable (failed once, passed on a rerun)") + part(.not_finished; "did not finish (the hook was stopped before its result)") + part(.fixed; "fixed by Claude") + part(.left_failing; "left failing") + part(.approved; "approved by you")) | join(", "))
         + (if .last then ". Last: \(.last)" else "" end)),
      (if any(.checks[]; .promotion) then "In observation (recorded, never blocking):" else empty end),
      (.checks[] | select(.promotion) | "- \(.check): \(.promotion.why).")

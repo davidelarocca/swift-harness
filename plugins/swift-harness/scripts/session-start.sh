@@ -37,21 +37,29 @@ if git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
       contract-warned snapshots-start snapshots-warned snapshots-approved protected-start protected-warned \
       protected-edited session-head session-dirty security-start security-start-unreviewed security-approval-warned)
     fp="$(sh_identity)"
-    printf '%s' "$fp" > "$sess/baseline"
-    printf '0' > "$sess/failures"
-    # The contract as it was at session start, for contract-watch.sh (#13).
-    rm -f "$sess/contract-start.json" "$sess/contract-start.none" "$sess/contract-warned"
-    if [ -f "$SH_ROOT/$SH_CONTRACT" ]; then
-      cp "$SH_ROOT/$SH_CONTRACT" "$sess/contract-start.json"
-    else
-      : >"$sess/contract-start.none"
+    # A resumed session keeps what it recorded when it started (#143): a turn interrupted before
+    # its end left edits that no Stop has seen, and taking the code as it is now would turn them
+    # into the starting code, never verified and never reported. Only the docs list is taken
+    # again below: that check blocks, and must not blame the session for what changed meanwhile.
+    resumed=false
+    [ "$(sh_in '.source')" = resume ] && [ -s "$sess/baseline" ] && resumed=true
+    if [ "$resumed" = false ]; then
+      printf '%s' "$fp" > "$sess/baseline"
+      printf '0' > "$sess/failures"
+      # The contract as it was at session start, for contract-watch.sh (#13).
+      rm -f "$sess/contract-start.json" "$sess/contract-start.none" "$sess/contract-warned"
+      if [ -f "$SH_ROOT/$SH_CONTRACT" ]; then
+        cp "$SH_ROOT/$SH_CONTRACT" "$sess/contract-start.json"
+      else
+        : >"$sess/contract-start.none"
+      fi
+      # The snapshot baselines as they were at session start, for snapshot-watch.sh (#9).
+      rm -f "$sess/snapshots-warned" "$sess/snapshots-approved"
+      sh_snapshot_list "$(sh_snapshots)" >"$sess/snapshots-start"
+      # The performance baselines too (#33), for the same notice.
+      rm -f "$sess/performance-warned" "$sess/performance-approved"
+      sh_snapshot_list "$(sh_performance)" >"$sess/performance-start"
     fi
-    # The snapshot baselines as they were at session start, for snapshot-watch.sh (#9).
-    rm -f "$sess/snapshots-warned" "$sess/snapshots-approved"
-    sh_snapshot_list "$(sh_snapshots)" >"$sess/snapshots-start"
-    # The performance baselines too (#33), for the same notice.
-    rm -f "$sess/performance-warned" "$sess/performance-approved"
-    sh_snapshot_list "$(sh_performance)" >"$sess/performance-start"
     # The docs problems already there at session start, for docs-watch.sh (#70).
     rm -f "$sess/docs-start" "$sess/docs-blocked" "$sess/docs-warned"
     rm -f "$sess/docs-adapter" "$sess/docs-adapter-blocked"
@@ -66,20 +74,22 @@ if git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     else
       sh_docs_on && "$(dirname "$0")/docs.sh" check "$SH_ROOT" 2>/dev/null | sh_docs_keys >"$sess/docs-start"
     fi
-    # Protected files as they were at session start, for protected-watch.sh (#11).
-    rm -f "$sess/protected-warned" "$sess/protected-edited"
-    sh_protected_list >"$sess/protected-start"
-    # Where the session started, for the checkpoint after a compaction (#10).
-    git -C "$SH_ROOT" rev-parse HEAD >"$sess/session-head" 2>/dev/null || : >"$sess/session-head"
-    sh_dirty_list >"$sess/session-dirty"
-    # The security settings as they are the first time, the baseline the user can approve (#32).
-    [ "$(sh_cfg '.security.enabled' 'true')" = "true" ] &&
-      "$(dirname "$0")/security.sh" --record --project "$SH_ROOT" >/dev/null 2>&1
-    # The approved security state at session start: an approval made during the session is
-    # shown to the user at the end of the turn (protected-watch.sh), whoever ran it.
-    rm -f "$sess/security-start" "$sess/security-start-unreviewed" "$sess/security-approval-warned"
-    [ -f "$state/security-approved" ] && cp "$state/security-approved" "$sess/security-start"
-    [ -f "$state/security-unreviewed" ] && : >"$sess/security-start-unreviewed"
+    if [ "$resumed" = false ]; then
+      # Protected files as they were at session start, for protected-watch.sh (#11).
+      rm -f "$sess/protected-warned" "$sess/protected-edited"
+      sh_protected_list >"$sess/protected-start"
+      # Where the session started, for the checkpoint after a compaction (#10).
+      git -C "$SH_ROOT" rev-parse HEAD >"$sess/session-head" 2>/dev/null || : >"$sess/session-head"
+      sh_dirty_list >"$sess/session-dirty"
+      # The security settings as they are the first time, the baseline the user can approve (#32).
+      [ "$(sh_cfg '.security.enabled' 'true')" = "true" ] &&
+        "$(dirname "$0")/security.sh" --record --project "$SH_ROOT" >/dev/null 2>&1
+      # The approved security state at session start: an approval made during the session is
+      # shown to the user at the end of the turn (protected-watch.sh), whoever ran it.
+      rm -f "$sess/security-start" "$sess/security-start-unreviewed" "$sess/security-approval-warned"
+      [ -f "$state/security-approved" ] && cp "$state/security-approved" "$sess/security-start"
+      [ -f "$state/security-unreviewed" ] && : >"$sess/security-start-unreviewed"
+    fi
     if [ -n "$fp" ] && [ "$fp" = "$(cat "$state/failed" 2>/dev/null)" ]; then
       echo "swift-harness: the last verification ('$verify_cmd') failed on the current code and has not passed since. Treat the project as not verified."
     fi

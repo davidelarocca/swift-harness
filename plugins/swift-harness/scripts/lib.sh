@@ -184,6 +184,23 @@ sh_catch() { # $1 check, $2 kind, $3 what, $4 seconds (optional)
     + (if $code == "" then {} else {code: $code} end)
     + (if ($seconds | test("^[0-9]+$")) then {seconds: ($seconds | tonumber)} else {} end)' 2>/dev/null)" || return 0
   printf '%s\n' "$line" >>"$dir/catches.jsonl" 2>/dev/null || true
+  sh_catch_trim "$dir/catches.jsonl"
+}
+# The log is bounded by count (#145): past SWIFT_HARNESS_CATCH_MAX lines (20000), the oldest
+# quarter goes. Looked at only when the file is large enough to hold that many lines, and done
+# under a lock, so two hooks never trim at once; a busy lock skips the trim until the next line.
+sh_catch_trim() { # $1 the log
+  local max lines
+  max="${SWIFT_HARNESS_CATCH_MAX:-20000}"
+  case "$max" in '' | *[!0-9]* | 0) max=20000 ;; esac
+  [ "$(wc -c <"$1" 2>/dev/null || echo 0)" -gt $((max * 60)) ] || return 0
+  lines="$(wc -l <"$1" | tr -d ' ')"
+  [ "$lines" -gt "$max" ] || return 0
+  [ -z "$(find "$1.lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] || rmdir "$1.lock" 2>/dev/null
+  mkdir "$1.lock" 2>/dev/null || return 0
+  tail -n "$((max - max / 4))" "$1" >"$1.tmp" 2>/dev/null && mv "$1.tmp" "$1"
+  rmdir "$1.lock" 2>/dev/null
+  return 0
 }
 
 # Per-session state (#61): what a session compares with at the end of each turn (the code,
@@ -305,7 +322,9 @@ sh_docs_fingerprint() {
 }
 # The output of a project check as keys: line numbers removed, sorted, so a problem that only
 # moved is not new.
-sh_adapter_keys() { sed -E 's/:[0-9]+(:[0-9]+)?(:|$)/\2/g' | grep -v '^[[:space:]]*$' | sort -u; }
+# Sorted in the C locale, as the comm that compares two such lists reads them (#139): in a UTF-8
+# locale a plain sort orders case and punctuation another way, and old problems came out as new.
+sh_adapter_keys() { sed -E 's/:[0-9]+(:[0-9]+)?(:|$)/\2/g' | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u; }
 sh_docs_keys() {
   grep '^- ' | sed -E 's/^- ([^:]+):[0-9]+: /\1: /; s/: the files read into every session are .*/: the files read into every session are over the budget/' | LC_ALL=C sort -u
 }
@@ -346,7 +365,7 @@ sh_dirty_list() {
   (
     cd "$SH_ROOT" || exit 0
     git ls-files -m -o --exclude-standard -z 2>/dev/null | xargs -0 shasum -a 256 2>/dev/null | sed 's/  / /'
-    git ls-files -d 2>/dev/null | sed 's/^/deleted /'
+    git -c core.quotepath=off ls-files -d 2>/dev/null | sed 's/^/deleted /'
   ) | LC_ALL=C sort -u
 }
 
@@ -654,7 +673,7 @@ sh_platforms() { # $1 project root
       found="$found$p	$file
 "
     done
-  done <<<"$(git -C "$1" ls-files -co --exclude-standard '*.xcodeproj/project.pbxproj' 2>/dev/null)"
+  done <<<"$(git -C "$1" -c core.quotepath=off ls-files -co --exclude-standard '*.xcodeproj/project.pbxproj' 2>/dev/null)"
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     for p in $(grep -oE '\.(macOS|iOS|tvOS|watchOS|visionOS|macCatalyst)\(' "$1/$file" | tr -d '.('); do
@@ -662,7 +681,7 @@ sh_platforms() { # $1 project root
       found="$found$p	$file
 "
     done
-  done <<<"$(git -C "$1" ls-files -co --exclude-standard 'Package.swift' '*/Package.swift' 2>/dev/null)"
+  done <<<"$(git -C "$1" -c core.quotepath=off ls-files -co --exclude-standard 'Package.swift' '*/Package.swift' 2>/dev/null)"
   printf '%s' "$found" | awk -F'\t' '
     BEGIN { n = split("macOS,iOS,Mac Catalyst,visionOS,tvOS,watchOS", order, ",") }
     NF && !($1 in line) { line[$1] = $0 }

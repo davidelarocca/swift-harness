@@ -86,7 +86,14 @@ record="$(cat "$state/evidence.json" 2>/dev/null)"
 command_line="$(jq -r '.verify.command // "scripts/verify.sh fast"' "$root/.claude/swift-harness.json" 2>/dev/null)"
 verified=false
 printf '%s' "$record" | jq -e --arg c "$command_line" 'any(.checks[]?; .name == $c and (.result == "passed" or .result == "partial"))' >/dev/null 2>&1 && verified=true
-if [ "$code" -eq 2 ]; then result=1
+# A failed check in the record fails the run, however often it ran before (#140): the hook blocks
+# once on the same problems so that an agent can stop and explain, and a command run again must
+# not pass for that. The docs check in observation (docs.blocking false) is named, never failing.
+observed=false
+[ "$(jq -r '.docs.blocking' "$root/.claude/swift-harness.json" 2>/dev/null)" != false ] || observed=true
+failing=false
+printf '%s' "$record" | jq -e --argjson observed "$observed" 'any(.checks[]?; .result == "failed" and (($observed and (.name | startswith("docs: "))) | not))' >/dev/null 2>&1 && failing=true
+if [ "$code" -eq 2 ] || [ "$failing" = true ]; then result=1
 elif [ "$verified" = true ]; then result=0
 elif printf '%s' "$record" | jq -e '.outcome == "failed"' >/dev/null 2>&1; then result=1
 else result=3; fi

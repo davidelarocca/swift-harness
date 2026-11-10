@@ -514,8 +514,10 @@ if [ "$in_git" = true ] && [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
     row WARN "Last verification" "only $(sed -n 2p "$state/checked") passed on the current code; build and tests were not run, because the verify command is disabled or not approved"
   elif [ "$fp" = "$(cat "$state/failed" 2>/dev/null)" ]; then
     row WARN "Last verification" "failed on the current code and has not passed since. Fix: ask Claude to fix it, or run $command_line"
+  elif [ "$(jq -r 'select(.outcome == "not-finished") | .code // empty' "$state/evidence.json" 2>/dev/null)" = "$fp" ]; then
+    row WARN "Last verification" "the end-of-turn check started on the current code and did not finish: the hook was stopped before its result, usually by its timeout (900 s). Fix: make $command_line shorter, or run it yourself"
   else
-    row INFO "Last verification" "no result for the current code: the check runs at the end of the next turn that changes build inputs"
+    row INFO "Last verification" "no result for the current code: the check runs at the end of a turn, once the code differs from what it was when the session started"
   fi
   # The last end-of-turn record (#81), when it is about the current code.
   if [ "$(jq -r '.code // empty' "$state/evidence.json" 2>/dev/null)" = "$fp" ]; then

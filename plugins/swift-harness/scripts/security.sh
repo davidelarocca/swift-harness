@@ -46,7 +46,7 @@ SH_INPUT="$(jq -nc --arg cwd "$dir" '{cwd: $cwd}' 2>/dev/null)"
 sh_init || { echo "swift-harness: no .claude/swift-harness.json in $dir (or jq is missing)." >&2; exit 2; }
 
 EXCLUDE=(':!.build/*' ':!*/.build/*' ':!*DerivedData/*' ':!Pods/*' ':!Carthage/*' ':!*/checkouts/*')
-files() { git -C "$SH_ROOT" ls-files -co --exclude-standard -- "$@" "${EXCLUDE[@]}" 2>/dev/null; }
+files() { git -C "$SH_ROOT" -c core.quotepath=off ls-files -co --exclude-standard -- "$@" "${EXCLUDE[@]}" 2>/dev/null; }
 SETTINGS='CODE_SIGN_IDENTITY|CODE_SIGNING_ALLOWED|CODE_SIGNING_REQUIRED|ENABLE_HARDENED_RUNTIME|ENABLE_APP_SANDBOX|CODE_SIGN_ENTITLEMENTS|CODE_SIGN_INJECT_BASE_ENTITLEMENTS|OTHER_CODE_SIGN_FLAGS|ENABLE_USER_SELECTED_FILES|ENABLE_INCOMING_NETWORK_CONNECTIONS|ENABLE_OUTGOING_NETWORK_CONNECTIONS|ENABLE_FILE_ACCESS_[A-Z_]+|ENABLE_RESOURCE_ACCESS_[A-Z_]+|RUNTIME_EXCEPTION_[A-Z_]+|AUTOMATION_APPLE_EVENTS|ENABLE_LIBRARY_VALIDATION|DISABLE_LIBRARY_VALIDATION'
 
 # One line per setting: "<file>: <key> = <value>", sorted.
@@ -147,6 +147,9 @@ case "$action" in
       exit 1
     fi
     mkdir -p "$state_dir" && current_state >"$approved" && rm -f "$unreviewed"
+    # The approved state is outside the repository, so approving does not change the code
+    # identity: drop the failure recorded for this code, and the next Stop checks it again (#141).
+    rm -f "$state_dir/failed"
     printf 'Approved: %s setting(s) recorded as the security baseline.\n' "$(grep -c . "$approved")"
     sh_catch "security settings" approved "$(grep -c . "$approved") setting(s)"
     ;;

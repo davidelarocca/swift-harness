@@ -19,7 +19,7 @@ mode="${1:-}"
 root="$(cd "${2:-$PWD}" 2>/dev/null && pwd -P)" || { printf 'porting: no such folder: %s\n' "${2:-}"; exit 2; }
 case "$mode" in scan | summary) ;; *) printf 'usage: porting.sh scan|summary [project-dir]\n'; exit 2 ;; esac
 
-list() { git -C "$root" ls-files -co --exclude-standard "$@" 2>/dev/null; }
+list() { git -C "$root" -c core.quotepath=off ls-files -co --exclude-standard "$@" 2>/dev/null; }
 packages="$(list 'Package.swift' '*/Package.swift' | sed -e 's|/\{0,1\}Package\.swift$||' -e 's|^$|.|' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
 
 scan() {

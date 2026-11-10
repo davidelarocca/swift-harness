@@ -27,7 +27,7 @@ config="$root/.claude/swift-harness.json"
 args="$(jq -r '.uiTests.isolation[]? | strings' "$config" 2>/dev/null | grep -v '^$')"
 
 if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
-  swift="$(git -C "$root" ls-files -co --exclude-standard -- '*.swift' 2>/dev/null)"
+  swift="$(git -C "$root" -c core.quotepath=off ls-files -co --exclude-standard -- '*.swift' 2>/dev/null)"
 else
   swift="$(cd "$root" && find . -name '*.swift' -not -path '*/.build/*' | sed 's#^\./##')"
 fi

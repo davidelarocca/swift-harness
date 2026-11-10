@@ -37,6 +37,20 @@ docs_cmd="$(sh_docs_command)"
 
 command_line="$(sh_cfg '.verify.command' 'scripts/verify.sh fast')"
 max_attempts="$(sh_cfg '.verify.maxAttempts' '3')"
+# A run of this session that never ended (#144): its marker is still there, and its process is
+# gone or it is older than any hook timeout. It goes in the catch log, and protected-watch.sh
+# tells the user from the file it is moved to.
+if [ -f "$sess/running" ]; then
+  r_pid="$(sed -n 3p "$sess/running")"
+  r_start="$(sed -n 2p "$sess/running")"
+  case "$r_pid" in '' | *[!0-9]*) r_pid=0 ;; esac
+  case "$r_start" in '' | *[!0-9]*) r_start="$(date +%s)" ;; esac
+  r_age=$(($(date +%s) - r_start))
+  if [ "$r_pid" -eq 0 ] || [ "$r_age" -gt 1000 ] || ! kill -0 "$r_pid" 2>/dev/null; then
+    sh_catch "$command_line" not-finished "the checks started $((r_age / 60)) min ago and never ended: the hook was stopped before its result (its timeout is 900 s), or the session closed"
+    mv -f "$sess/running" "$sess/unfinished"
+  fi
+fi
 # The verify command comes from the repository: run it only once the user approved it (#6).
 run_verify=false
 if [ "$verify_enabled" = "true" ]; then
@@ -67,7 +81,7 @@ ev() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${3:-}" "${4:-}" >>"$ev_lines"; }
 ev_ran() { ev "$1" "$2" "${3:-}" "$((SECONDS - ev_t0))"; } # $1 name, $2 result, $3 detail
 # Catch log lines written from here carry the code they are about (#110).
 SH_CATCH_CODE="$fp"
-ev_write() { # $1 outcome, $2 note
+ev_write() { # $1 outcome, $2 note, $3 "now" for a record of a run in progress, kept out of the history
   local json
   json="$(jq -n --arg outcome "$1" --arg note "${2:-}" --arg code "$fp" --arg session "$(sh_session_id)" --arg agent "${SH_AGENT:-claude}" \
     --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile lines "$ev_lines" '
@@ -79,7 +93,7 @@ ev_write() { # $1 outcome, $2 note
     | if any(.checks[]; (.detail // "") | contains("failed once, passed on a rerun")) then . + {stability: "unstable"} else . end')" || return 0
   printf '%s\n' "$json" >"$sess/evidence.json.tmp" && mv "$sess/evidence.json.tmp" "$sess/evidence.json"
   printf '%s\n' "$json" >"$state/evidence.json.tmp" && mv "$state/evidence.json.tmp" "$state/evidence.json"
-  ev_history "$json"
+  [ "${3:-}" = now ] || ev_history "$json"
 }
 # History of the records (#110): one line each in evidence-history.jsonl, bounded by count
 # (SWIFT_HARNESS_HISTORY_MAX, 2000) and by age (the retention of session folders). A record that
@@ -233,6 +247,11 @@ fi
 failed_fp="$(cat "$state/failed" 2>/dev/null)"
 failures="$(cat "$sess/failures" 2>/dev/null)"
 failures="${failures:-0}"
+# Attempts add up within one turn (#143). A Stop that does not follow a block (stop_hook_active
+# false) starts a new count: after an interrupted turn the old one would make the first failure
+# of the next turn the last attempt, which the agent never sees. Hosts that do not send the
+# field keep one count, as before.
+[ "$(printf '%s' "$SH_INPUT" | jq -r 'if .stop_hook_active == false then "new" else "" end' 2>/dev/null)" != new ] || failures=0
 
 # The user is told what was not checked (#81) with any message they get; told is set once said.
 told=false
@@ -316,6 +335,13 @@ if [ "$fp" = "$failed_fp" ]; then
 fi
 
 out="$(mktemp -t swift-harness-verify.XXXXXX)"
+out2=""
+trap 'rm -f "$out" ${out2:+"$out2"}' EXIT
+# From here the checks run (#144). The marker and a "not-finished" record are written first, and
+# replaced by the result at the end: a hook stopped in between (its timeout) leaves both, so the
+# record does not keep saying what an earlier run found on other code.
+printf '%s\n%s\n%s\n' "$fp" "$(date +%s)" "$$" >"$sess/running"
+ev_write not-finished "the checks started and have not ended: if this stays, the hook was stopped before its result (its timeout is 900 s)" now
 status=0
 unstable=""
 result=""
@@ -416,6 +442,7 @@ if [ "$run_security" = "true" ]; then
   fi
 fi
 
+rm -f "$sess/running"
 if [ "$status" -eq 0 ]; then
   # "passed" means the verify command ran and passed (SH130-01). Lint, contracts or the
   # registry or the layout contract alone are recorded apart, with the checks that ran, so doctor can say so and an
