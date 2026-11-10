@@ -2,25 +2,9 @@
 
 Where swift-harness is going, and why. Live status is in the [milestones](https://github.com/davidelarocca/swift-harness/milestones) and [issues](https://github.com/davidelarocca/swift-harness/issues). This page is updated with every release.
 
-_Last updated: 10 November 2026: a patch release, v1.8.3, now comes first (see below). Before that: 8 November 2026, after v1.8.0 (adoption on real projects: adoption audit, an adapter for the project's own docs check with observation first, the same checks for Codex, git hooks and other agents, approval across worktrees, timed commands and unstable tests, guest mode that protects the project's own files and stays local, evidence over time)._
+_Last updated: 10 November 2026, after v1.8.3 (no silent skips: nine cases where a check did not run, or a result was wrong, and nothing said so)._
 
 **Guiding principle:** every check the harness claims to run must actually run, and must be backed by a test. New features come after the existing gates are reliable, and claims about impact come with measurements. A new method earns its place by beating a simple baseline on held-out data, not by being clever.
-
-## First: v1.8.3, no silent skips
-
-A review of the hook scripts found cases where a check did not run, or a result was wrong, and nothing said so. Each was reproduced on a fixture, and each gets a test that fails before its fix. They come before any new feature.
-
-| | What gets fixed | Issue |
-|---|---|---|
-| 🫥 | **Changes the fingerprint did not see.** Guest files kept out of git, a repository with no commit yet, nested repositories and submodules, C++ sources outside `Sources/`: the end-of-turn check ran nothing. | [#137](https://github.com/davidelarocca/swift-harness/issues/137) |
-| 📂 | **A working directory inside a nested repository** turned every hook off. | [#138](https://github.com/davidelarocca/swift-harness/issues/138) |
-| 🔤 | **Old docs problems reported as new** by the docs adapter in a UTF-8 locale, when a turn fixed one of them. | [#139](https://github.com/davidelarocca/swift-harness/issues/139) |
-| 🔁 | **`check.sh` passed on the second run** while a blocking check still failed. | [#140](https://github.com/davidelarocca/swift-harness/issues/140) |
-| ✅ | **An approved security change** left the code recorded as failed. | [#141](https://github.com/davidelarocca/swift-harness/issues/141) |
-| 🈶 | **Paths with non-ASCII characters** were skipped: the security contract did not see them. | [#142](https://github.com/davidelarocca/swift-harness/issues/142) |
-| ⏸️ | **Interrupted turns.** A resumed session took its own unverified edits as the starting code. | [#143](https://github.com/davidelarocca/swift-harness/issues/143) |
-| ⏱️ | **A Stop hook that timed out** left no record. | [#144](https://github.com/davidelarocca/swift-harness/issues/144) |
-| 🧾 | **The catch log** had no bound, and one broken line emptied the report. | [#145](https://github.com/davidelarocca/swift-harness/issues/145) |
 
 ## Now: v1.9.0, perception in motion
 
@@ -80,6 +64,7 @@ Ideas parked until there is demand: a local, read-only view of the checks with e
 
 | Version | Highlights |
 |---|---|
+| [1.8.3](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.8.3) | No silent skips: the end-of-turn check sees changes git does not show (files kept out of git, no first commit, nested repositories, C++ outside `Sources/`), hooks stay on in a nested repository, the docs adapter no longer reports old problems as new, `check.sh` fails every run while a blocking check fails, non-ASCII paths are read, interrupted and timed-out turns leave a record, and the catch log is bounded. |
 | [1.8.2](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.8.2) | Hardening from a hook-script review by another agent: the edit guard fails closed on a config it cannot read and matches protected paths by filesystem identity, verify approval and the HTML report refuse paths that leave the project, the evidence history serialises its writers, and the doctor's coverage warning is a hint, not a fix to apply. |
 | [1.8.1](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.8.1) | Fixes from real use and an external review: partial and unstable results named by `check.sh` (`--strict`), observed checks counted by episode, scripts the approval does not cover named, and a one-time user permit for a Codex edit of a protected file. |
 | [1.8.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.8.0) | Adoption on real projects: a read-only adoption audit, the project's own docs check run instead of the harness's (observed first, then proposed as a block from what was fixed), the same checks for Codex, git hooks and other agents, approval shared across worktrees, timed fast commands and unstable tests named, guest mode that protects the project's own rules and can stay out of git, and evidence kept over time. |

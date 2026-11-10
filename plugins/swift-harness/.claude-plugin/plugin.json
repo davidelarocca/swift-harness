@@ -1,6 +1,6 @@
 {
   "name": "swift-harness",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "description": "Reuse-first design system workflow, project bootstrap, audits and automatic quality gates for Swift/SwiftUI macOS apps",
   "author": {
     "name": "Davide"
