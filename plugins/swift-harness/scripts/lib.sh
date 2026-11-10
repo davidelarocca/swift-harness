@@ -369,6 +369,55 @@ sh_dirty_list() {
   ) | LC_ALL=C sort -u
 }
 
+# What the checks stand on, for weaken-watch.sh (#146): "<kind>\t<path>\t<name>\t<count>" lines,
+# sorted. In test files (a folder or a file name ending in Test or Tests): tests (func test...,
+# @Test; always printed, so a file that goes is seen), assertions, skips (XCTSkip, .disabled(,
+# #if false). In any Swift file: swiftlint:disable. In .swiftlint.yml: each rule in
+# disabled_rules, opt_in_rules, only_rules, and each path in excluded. Text only: lines that
+# start as a comment are not counted, except for swiftlint:disable, which is one.
+sh_weaken_list() {
+  (
+    cd "$SH_ROOT" || exit 0
+    git -c core.quotepath=off ls-files -c -o --exclude-standard -z -- '*.swift' 2>/dev/null |
+      while IFS= read -r -d '' f; do [ -f "$f" ] && printf '%s\0' "$f"; done |
+      xargs -0 awk '
+        FNR == 1 { istest[FILENAME] = (FILENAME ~ /(^|\/)[^\/]*Tests?\// || FILENAME ~ /Tests?\.swift$/) }
+        /swiftlint:disable/ { l = $0; lint[FILENAME] += gsub(/swiftlint:disable/, "", l) }
+        !istest[FILENAME] { next }
+        { l = $0; sub(/^[ \t]+/, "", l) }
+        l ~ /^(\/\/|\/\*|\*)/ { next }
+        l ~ /^#if[ \t]+false([ \t]|$)/ { skips[FILENAME]++ }
+        l ~ /(^|[^A-Za-z0-9_])func[ \t]+test[A-Za-z0-9_]*[ \t]*\(/ || l ~ /^@Test([ \t(]|$)/ { tests[FILENAME]++ }
+        { a = l; asserts[FILENAME] += gsub(/XCTAssert[A-Za-z]*[ \t]*\(|XCTFail[ \t]*\(|XCTUnwrap[ \t]*\(|#expect[ \t]*\(|#require[ \t]*\(/, "", a)
+          a = l; skips[FILENAME] += gsub(/XCTSkip|\.disabled[ \t]*\(/, "", a) }
+        END {
+          for (f in lint) if (lint[f]) printf "lint-disable\t%s\t-\t%d\n", f, lint[f]
+          for (f in istest) if (istest[f]) {
+            printf "tests\t%s\t-\t%d\n", f, tests[f]
+            if (asserts[f]) printf "asserts\t%s\t-\t%d\n", f, asserts[f]
+            if (skips[f]) printf "skips\t%s\t-\t%d\n", f, skips[f]
+          }
+        }' 2>/dev/null
+    git -c core.quotepath=off ls-files -c -o --exclude-standard -z -- '.swiftlint.yml' '*/.swiftlint.yml' 2>/dev/null |
+      while IFS= read -r -d '' f; do [ -f "$f" ] && printf '%s\0' "$f"; done |
+      xargs -0 awk -v q="'" '
+        function out(k, v) {
+          gsub(q, "", v); gsub(/"/, "", v)
+          if (v == "") return
+          if (k == "disabled_rules") printf "lint-off\t%s\t%s\t1\n", FILENAME, v
+          else if (k == "opt_in_rules") printf "lint-optin\t%s\t%s\t1\n", FILENAME, v
+          else if (k == "only_rules") printf "lint-only\t%s\t%s\t1\n", FILENAME, v
+          else if (k == "excluded") printf "lint-excluded\t%s\t%s\t1\n", FILENAME, v
+        }
+        /^[A-Za-z_]+:/ {
+          key = $0; sub(/:.*/, "", key); rest = $0; sub(/^[^:]*:[ \t]*/, "", rest); sub(/[ \t]+#.*$/, "", rest)
+          if (rest ~ /^\[/) { gsub(/[][ \t]/, "", rest); n = split(rest, items, ","); for (i = 1; i <= n; i++) out(key, items[i]) }
+          next
+        }
+        /^[ \t]+-[ \t]*[^ \t]/ { v = $0; sub(/^[ \t]+-[ \t]*/, "", v); sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v); out(key, v) }' 2>/dev/null
+  ) | LC_ALL=C sort
+}
+
 # Plugin version, from the manifest next to these scripts.
 SH_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$(dirname "${BASH_SOURCE[0]}")/../.claude-plugin/plugin.json" 2>/dev/null | head -1)"
 
