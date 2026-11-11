@@ -358,7 +358,11 @@ if [ "$run_verify" = "true" ]; then
   # verify.retryFailed (#108): a failure is run once more; if that passes, the failure was
   # unstable (a flaky test): recorded with the tests that failed, not blocking the turn.
   if [ "$status" -ne 0 ] && [ "$(sh_cfg '.verify.retryFailed' 'false')" = "true" ]; then
-    flaky="$(grep -E '^Failing tests:|^[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*\(\)$|✘ Test |Test Case .* failed' "$out" | grep -v '^Failing tests:' |
+    # The result bundle's lines first (verify.sh, #147: "failed test: <id>: <message>"), else the
+    # text of xcodebuild, xcbeautify or XCTest.
+    flaky="$(awk 'n < 5 && /^[[:space:]]*failed test: /{ sub(/^[[:space:]]*failed test: /, ""); split($0, a, ": "); print a[1]; n++ }' "$out" |
+      paste -sd, - | sed 's/,/, /g')"
+    [ -n "$flaky" ] || flaky="$(grep -E '^Failing tests:|^[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*\(\)$|✘ Test |Test Case .* failed' "$out" | grep -v '^Failing tests:' |
       sed -E 's/^[[:space:]]+//; s/^✘ Test ([^ ]+).*/\1/; s/^Test Case .-\[([^]]+)\]. failed.*/\1/' | head -5 | paste -sd, - | sed 's/,/, /g')"
     out2="$(mktemp -t swift-harness-verify.XXXXXX)"
     (cd "$SH_ROOT" && bash -c "$command_line") >"$out2" 2>&1

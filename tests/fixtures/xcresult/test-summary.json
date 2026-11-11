@@ -1,0 +1,54 @@
+{
+  "devicesAndConfigurations": [
+    {
+      "device": {
+        "architecture": "arm64",
+        "deviceId": "00000000-0000000000000000",
+        "deviceName": "My Mac",
+        "modelName": "MacBook Air",
+        "osBuildNumber": "26B131",
+        "osVersion": "27.2.1",
+        "platform": "macOS"
+      },
+      "expectedFailures": 0,
+      "failedTests": 2,
+      "passedTests": 4,
+      "skippedTests": 0,
+      "testPlanConfiguration": {
+        "configurationId": "1",
+        "configurationName": "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription": "KeyboardFixture-Package · Built with macOS 27.2.1",
+  "expectedFailures": 0,
+  "failedTests": 2,
+  "finishTime": 1794404603.185,
+  "passedTests": 4,
+  "result": "Failed",
+  "runtimeWarnings": [],
+  "skippedTests": 0,
+  "startTime": 1794404592.245,
+  "statistics": [],
+  "testFailures": [
+    {
+      "failureText": "Expectation failed: \"Hello, Ada!\" == \"Hi, Ada!\"",
+      "targetName": "ComponentsTests",
+      "testIdentifier": 6,
+      "testIdentifierString": "greetsByName()",
+      "testIdentifierURL": "test://com.apple.xcode/KeyboardFixture/ComponentsTests/greetsByName()",
+      "testName": "greetsByName()"
+    },
+    {
+      "failureText": "XCTAssertEqual failed: (\"2\") is not equal to (\"3\") - sum is wrong",
+      "targetName": "ComponentsTests",
+      "testIdentifier": 1,
+      "testIdentifierString": "LegacyTests/testSum()",
+      "testIdentifierURL": "test://com.apple.xcode/KeyboardFixture/ComponentsTests/LegacyTests/testSum",
+      "testName": "testSum()"
+    }
+  ],
+  "title": "Test - KeyboardFixture-Package",
+  "topInsights": [],
+  "totalTestCount": 6
+}
