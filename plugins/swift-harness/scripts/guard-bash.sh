@@ -42,11 +42,11 @@ writes() {
   re=">>?[|]?[[:space:]]*[\"']?($WORD/)?$t$R"; [[ "$cmd" =~ $re ]] && return 0
   re="${B}tee$ARGS$p$R"; [[ "$cmd" =~ $re ]] && return 0
   # an in-place edit
-  re="${B}(g?sed|perl)$ARGS[[:space:]](-[[:alnum:]]*i|--in-place)$ARGS$p$R"; [[ "$cmd" =~ $re ]] && return 0
+  re="${B}(g?sed|perl)${ARGS}[[:space:]](-[[:alnum:]]*i|--in-place)$ARGS$p$R"; [[ "$cmd" =~ $re ]] && return 0
   # a command that removes, moves, creates or links it
   re="${B}(rm|rmdir|mv|unlink|truncate|shred|touch|ln)$ARGS$p$R"; [[ "$cmd" =~ $re ]] && return 0
   # a copy onto it: the path is the last argument
-  re="${B}(cp|install|rsync|ditto)$ARGS$p$WORD[\"']?[[:space:]]*(\$|[|;&)])"; [[ "$cmd" =~ $re ]] && return 0
+  re="${B}(cp|install|rsync|ditto)$ARGS$p${WORD}[\"']?[[:space:]]*(\$|[|;&)])"; [[ "$cmd" =~ $re ]] && return 0
   # git putting it back, removing or moving it
   re="${B}git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(checkout|restore|rm|mv|reset|clean|stash)$ARGS$p$R"; [[ "$cmd" =~ $re ]] && return 0
   # an inline script that writes files and holds the path as a string of its own ('docs/X.md',
@@ -71,7 +71,7 @@ done < <(
   sh_performance; echo
 )
 if [ -z "$hit" ] && [ "$(sh_cfg '.guardPbxproj' 'true')" = "true" ] &&
-  writes "$WORD[.]pbxproj"; then
+  writes "${WORD}[.]pbxproj"; then
   hit="project.pbxproj"
 fi
 [ -n "$hit" ] || exit 0
