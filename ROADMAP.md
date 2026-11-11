@@ -2,13 +2,24 @@
 
 Where swift-harness is going, and why. Live status is in the [milestones](https://github.com/davidelarocca/swift-harness/milestones) and [issues](https://github.com/davidelarocca/swift-harness/issues). This page is updated with every release.
 
-_Last updated: 10 November 2026, after v1.8.3 (no silent skips: nine cases where a check did not run, or a result was wrong, and nothing said so)._
+_Last updated: 11 November 2026: v1.9.0 now holds the work that can be built and tested today; perception in motion moves to v1.10.0, since it needs a real app with UI tests and paid evaluation sessions._
 
 **Guiding principle:** every check the harness claims to run must actually run, and must be backed by a test. New features come after the existing gates are reliable, and claims about impact come with measurements. A new method earns its place by beating a simple baseline on held-out data, not by being clever.
 
-## Now: v1.9.0, perception in motion
+## Now: v1.9.0, checks you can rely on
 
-Today every check on the running app looks at one state at one size. These look at flows, time and a hostile environment. Test isolation, which they need, shipped in 1.7.0. Two items move here from 1.8.0: adapters for a project's own lint and formatter, and the demo.
+What a check reports must be true and complete. A turn that weakens a check is named; a shell command that writes to a protected file can be asked about first, as an edit is; test results come from Xcode's result bundle instead of its text output; and a project's own lint and formatter can stand in for the harness's.
+
+| | What you get | Issue |
+|---|---|---|
+| 🪫 | **Weakened checks.** At the end of a turn you are told when it removed tests, added skips or `swiftlint:disable`, raised a tolerance or loosened a contract; and a measured list of the ways an agent told to "make it pass" gets round the checks, misses included. | [#146](https://github.com/davidelarocca/swift-harness/issues/146) |
+| 🐚 | **Protected files and the shell.** An opt-in check asks before a shell command writes to a protected path, as the guard already does for Edit and Write. Until now a shell edit was only reported at the end of the turn; on a real project that happened several times a day. | [#135](https://github.com/davidelarocca/swift-harness/issues/135) |
+| 📦 | **Results from the result bundle.** `verify.sh` reads failed tests, messages and UI test screenshots from `xcodebuild`'s result bundle instead of filtering its text, which changes between Xcode versions. | [#147](https://github.com/davidelarocca/swift-harness/issues/147) |
+| 🔌 | **Adapters for the project's own lint and formatter.** As for docs in 1.8.0: the project's command runs instead of the harness's, starts in observation if you want, and the report proposes when it should block. | [#125](https://github.com/davidelarocca/swift-harness/issues/125) |
+
+## Next: v1.10.0, perception in motion
+
+Today every check on the running app looks at one state at one size. These look at flows, time and a hostile environment. Test isolation, which they need, shipped in 1.7.0. They need a real app with UI tests to be worth anything, and the evals need paid sessions, so they start when both are available.
 
 | | What you get | Issue |
 |---|---|---|
@@ -17,10 +28,7 @@ Today every check on the running app looks at one state at one size. These look 
 | 🌩️ | **Faults and lifecycle.** Network, disk and permission failures injected in UI tests; save, relaunch and unsaved changes. | [#84](https://github.com/davidelarocca/swift-harness/issues/84) |
 | 🦮 | **Accessibility task check.** An agent finishes a task through the accessibility tree only. | [#85](https://github.com/davidelarocca/swift-harness/issues/85) |
 | 📊 | **Evals with and without swift-harness**, over a series of sessions on the same app rather than single tasks: drift, duplicates, regressions and unbacked claims at the end, read from the catch log and the evidence records. Published with method and raw data. | [#8](https://github.com/davidelarocca/swift-harness/issues/8) |
-| 🔌 | **Adapters for the project's own lint and formatter.** As for docs in 1.8.0: the project's command runs instead of the harness's, starts in observation if you want, and the report proposes when it should block. | [#125](https://github.com/davidelarocca/swift-harness/issues/125) |
 | ⏱️ | **Try it in minutes.** A demo app where the plugin catches something in the first session, and a README organised by problem. | [#88](https://github.com/davidelarocca/swift-harness/issues/88) |
-| 🪫 | **Weakened checks.** At the end of a turn you are told when it removed tests, added skips or `swiftlint:disable`, raised a tolerance or loosened a contract; and a measured list of the ways an agent told to "make it pass" gets round the checks, misses included. | [#146](https://github.com/davidelarocca/swift-harness/issues/146) |
-| 📦 | **Results from the result bundle.** `verify.sh` reads failed tests, messages and UI test screenshots from `xcodebuild`'s result bundle instead of filtering its text, which changes between Xcode versions. | [#147](https://github.com/davidelarocca/swift-harness/issues/147) |
 
 ## Research track
 

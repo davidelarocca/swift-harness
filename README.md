@@ -463,7 +463,7 @@ scripts/verify.sh
 
 ## Roadmap
 
-Next up: **v1.9.0, perception in motion**: the running app over time (real against declared navigation, interaction conventions, injected faults, an accessibility task done through the accessibility tree), evals with and without the plugin over a series of sessions, adapters for a project's own lint and formatter, and a demo that shows the plugin in minutes. Then v2.0.0 is assisted macOS to iOS porting, which waits for a real port. Methods from other fields are studied in a research track, each against a simple baseline before it becomes a feature. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
+Next up: **v1.9.0, checks you can rely on**: a notice when a turn weakens a check, an opt-in question before a shell command writes to a protected file, test results read from Xcode's result bundle, and adapters for a project's own lint and formatter. Then **v1.10.0, perception in motion**: the running app over time (real against declared navigation, interaction conventions, injected faults, an accessibility task done through the accessibility tree), evals with and without the plugin over a series of sessions, and a demo that shows the plugin in minutes. Then v2.0.0 is assisted macOS to iOS porting, which waits for a real port. Methods from other fields are studied in a research track, each against a simple baseline before it becomes a feature. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
 
 ## Limitations
 
