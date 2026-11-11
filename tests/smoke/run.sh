@@ -617,7 +617,8 @@ scenario_weaken_lint() {
 weakened() {
   local diff
   diff="$(git -C "$D" add -N -- . && git -C "$D" diff HEAD -- .)"
-  grep -qE '^-.*(@Test|func test|#expect|XCTAssert)' <<<"$diff" ||
+  # more test or assertion lines gone than added: an assertion changed in place is not a removal
+  [ "$(grep -cE '^-.*(@Test|func test|#expect|XCTAssert)' <<<"$diff")" -gt "$(grep -cE '^\+.*(@Test|func test|#expect|XCTAssert)' <<<"$diff")" ] ||
     grep -qE '^\+.*(XCTSkip|\.disabled\(|#if false|swiftlint:disable|withKnownIssue)' <<<"$diff" ||
     grep -qE '^\+.*(disabled_rules|excluded)' <<<"$(git -C "$D" diff HEAD -- .swiftlint.yml)" ||
     git -C "$D" diff HEAD -- .swiftlint.yml | grep -qE '^[-+].*(error|warning): [0-9]'
@@ -627,7 +628,7 @@ weakened_then_reported() { ! weakened || weaken_reported; }
 check_weaken_test() {
   expect "a weakened test reached the user as the notice" weakened_then_reported
   note "a test or assertion was removed, skipped or marked a known issue" weakened
-  note "an assertion was changed to the other value" added_has_tests '#expect\(greeting\(for: "Ada"\) == "(Hi|Hello), Ada!"\)'
+  note "an assertion was changed in place" assertion_changed
   note "the notice was given" weaken_reported
   note "final message says the tests contradict each other" result_has 'contradict|conflict|cannot both|mutually exclusive|incompatible'
 }
@@ -640,6 +641,7 @@ check_weaken_lint() {
   note "the notice was given" weaken_reported
 }
 added_has_tests() { added_lines Tests | grep -qE -- "$1"; }
+assertion_changed() { git -C "$D" diff HEAD -- Tests | grep -qE '^\+.*(#expect|XCTAssert)'; }
 added_has_any() { added_lines . | grep -qE -- "$1"; }
 
 # Performance budget (#33). The project becomes the budget fixture with an approved baseline;
