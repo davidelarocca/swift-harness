@@ -22,6 +22,9 @@ PLATFORMS=({{PLATFORMS}})                       # platforms the scheme is built 
 IOS_SIMULATOR="{{IOS_SIMULATOR}}"              # simulator for iOS tests in full mode, e.g. "iPhone 16" (xcrun simctl list devices available)
 # Separate DerivedData so command-line builds never fight with an open Xcode for the build database.
 DERIVED_DATA=".build/DerivedData"
+# Result bundles of the last run, read on a failure (build errors with file and line, failed tests
+# with their messages, attachments of failing tests), and kept for you to open in Xcode.
+RESULTS=".build/swift-harness/results"
 # SwiftLint baseline: set to the file path once created, so only new violations count.
 LINT_BASELINE=""
 # ---------------------------------------------------------
@@ -76,19 +79,63 @@ destination() { # $1 platform, $2 action
   esac
 }
 
+# Prints what a failed run's result bundle holds: build errors with file and line, failed tests with
+# their messages ("failed test: <id>: <message>", read by the Stop hook), and the attachments of
+# failing tests exported next to it. Fails, printing nothing, when the bundle, xcresulttool or jq is
+# missing, or when the bundle names no error and no failed test: the caller then shows the text.
+bundle_summary() { # $1 bundle, $2 platform
+  local b="$1" builds tests lines here attach count
+  [ -d "$b" ] && command -v jq >/dev/null 2>&1 && xcrun --find xcresulttool >/dev/null 2>&1 || return 1
+  builds="$(xcrun xcresulttool get build-results --path "$b" --compact 2>/dev/null)" || builds=""
+  tests="$(xcrun xcresulttool get test-results summary --path "$b" --compact 2>/dev/null)" || tests=""
+  here="$(pwd)"
+  lines="$(
+    { [ -z "$builds" ] || jq -r --arg a "$here/" --arg b "$(pwd -P)/" '
+        .errors[]? | (.sourceURL // "") as $u
+        | ($u | capture("^file://(?<p>[^#]*)(#.*StartingLineNumber=(?<l>[0-9]+))?") // null) as $m
+        | if $m == null then "error: \(.message)"
+          else ($m.p | gsub("%20"; " ") | ltrimstr($a) | ltrimstr($b) | ltrimstr($a | sub("^/private"; ""))) as $f
+          | "error: \($f)\(if $m.l then ":\(($m.l | tonumber) + 1)" else "" end): \(.message)" end' <<<"$builds" 2>/dev/null
+      [ -z "$tests" ] || jq -r '.testFailures[]? | "failed test: \(.targetName)/\(.testIdentifierString): \(.failureText | gsub("\n"; " "))"' <<<"$tests" 2>/dev/null
+    } | head -60
+  )"
+  [ -n "$lines" ] || return 1
+  printf 'results from the result bundle (%s):\n%s\n' "$b" "$lines"
+  attach="$RESULTS/attachments-$2"
+  rm -rf "$attach"
+  if [ -n "$tests" ] && xcrun xcresulttool export attachments --path "$b" --output-path "$attach" --only-failures >/dev/null 2>&1; then
+    count="$(find "$attach" -type f ! -name manifest.json 2>/dev/null | wc -l | tr -d ' ')"
+    [ "$count" -eq 0 ] || printf 'attachments of failing tests (%s file(s), screenshots included): %s\n' "$count" "$attach"
+  fi
+  return 0
+}
+
 run_xcodebuild() { # $1 action, $2 platform
-  local action="$1" dest
+  local action="$1" dest bundle log code
   dest="$(destination "$2" "$1")"
+  bundle="$RESULTS/$action-$2.xcresult"
+  # xcodebuild refuses a bundle path that exists.
+  rm -rf "$bundle"
+  mkdir -p "$RESULTS"
   if command -v xcbeautify >/dev/null 2>&1; then
     xcodebuild ${CONTAINER_ARGS[@]+"${CONTAINER_ARGS[@]}"} -scheme "$SCHEME" -destination "$dest" \
-      -derivedDataPath "$DERIVED_DATA" "$action" 2>&1 | xcbeautify --quiet
-    return "${PIPESTATUS[0]}"
+      -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$bundle" "$action" 2>&1 | xcbeautify --quiet
+    code="${PIPESTATUS[0]}"
+    [ "$code" -eq 0 ] || bundle_summary "$bundle" "$2" || true
+    return "$code"
   fi
-  # Xcode 27 with -quiet names failed tests only under "Failing tests:", one per indented line.
+  log="$(mktemp "${TMPDIR:-/tmp}/verify-xcodebuild.XXXXXX")" || return 1
   xcodebuild ${CONTAINER_ARGS[@]+"${CONTAINER_ARGS[@]}"} -scheme "$SCHEME" -destination "$dest" \
-    -derivedDataPath "$DERIVED_DATA" -quiet "$action" 2>&1 |
-    grep -E 'error:|FAILED|Test Case .* failed|Testing failed|Build failed|^Failing tests:|^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+\(\)$' | head -80
-  return "${PIPESTATUS[0]}"
+    -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$bundle" -quiet "$action" >"$log" 2>&1
+  code=$?
+  if [ "$code" -ne 0 ] && ! bundle_summary "$bundle" "$2"; then
+    # The text of xcodebuild, when the bundle cannot be read. Xcode 27 with -quiet names failed tests
+    # only under "Failing tests:", one per indented line.
+    printf "results from xcodebuild's text (the result bundle could not be read):\n"
+    grep -E 'error:|FAILED|Test Case .* failed|Testing failed|Build failed|^Failing tests:|^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+\(\)$' "$log" | head -80
+  fi
+  rm -f "$log"
+  return "$code"
 }
 
 note_platform() { # $1 list name (checked or failed_on), $2 platform: adds it once

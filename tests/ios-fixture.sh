@@ -60,6 +60,9 @@ expect "fast: the scheme builds for macOS and for iOS" 0 'verify fast: PASS \(2 
 printf '#if os(iOS)\nlet broken: Int = "only on iOS"\n#endif\n' >"$APP/Sources/Kit/IOSOnly.swift"
 verify fast
 expect "fast: an error only in the iOS build fails on iOS" 1 'verify fast: FAIL \(failed on: iOS\)' "$code" "$out"
+# The real result bundle (#147), on this machine's Xcode: the error with its file and line.
+expect "fast: the error is read from the iOS result bundle" 1 'results from the result bundle \(\.build/swift-harness/results/build-iOS\.xcresult\)' "$code" "$out"
+expect "fast: ... with its file and line" 1 'error: Sources/Kit/IOSOnly\.swift:2: ' "$code" "$out"
 rm "$APP/Sources/Kit/IOSOnly.swift"
 
 generate '' '"."' '"macOS" "iOS"'
@@ -82,6 +85,8 @@ if [ "$FULL" = true ]; then
     verify full env TEST_RUNNER_SH_FAIL_ON_IOS=1
     expect "full: the negative control fails on iOS only" 1 'verify full: FAIL \(failed on: iOS\)' "$code" "$out"
     expect "full: the failure is the negative control test" 1 'negative control' "$code" "$out"
+    expect "full: the failed test and its message come from the iOS result bundle" 1 'results from the result bundle \(\.build/swift-harness/results/test-iOS\.xcresult\)' "$code" "$out"
+    expect "full: ... one line for the failed test, with its message" 1 'failed test: .*negative control' "$code" "$out"
   fi
 fi
 

@@ -1154,6 +1154,58 @@ $out"
 expect_result "verify.sh: ... with each test on its line" 1 'AppUITests\.testTheFixedScreenPassesTheAudit\(\)' "exit=1
 $out"
 
+# The result bundle (#147): on a failure verify.sh reads build errors with file and line and failed
+# tests with their messages from xcresulttool; the text of xcodebuild is the fallback. The fakes
+# answer with the JSON of a real bundle (tests/fixtures/xcresult, Xcode 27.2).
+XR="$HERE/fixtures/xcresult"
+FB="$TMP/fakes-bundle"
+mkdir -p "$FB"
+cp "$FAKES/swift" "$FAKES/swiftlint" "$FB/"
+ln -s "$(command -v jq)" "$FB/jq"
+cat >"$FB/xcodebuild" <<'EOF'
+#!/bin/bash
+b=""
+while [ $# -gt 0 ]; do [ "$1" = -resultBundlePath ] && b="$2"; shift; done
+[ -n "$b" ] || { echo "no -resultBundlePath"; exit 64; }
+[ ! -e "$b" ] || { echo "Existing file at -resultBundlePath $b"; exit 70; }
+mkdir -p "$b"
+[ "${FAKE_XCODEBUILD_EXIT:-65}" = 0 ] && exit 0
+printf 'Failing tests:\n\tLegacyTests.testSum()\n\n** TEST FAILED **\n'
+exit "${FAKE_XCODEBUILD_EXIT:-65}"
+EOF
+cat >"$FB/xcrun" <<EOF
+#!/bin/bash
+[ "\${FAKE_XCRESULT:-}" != none ] || exit 1
+case "\$*" in
+  "--find xcresulttool") echo /usr/bin/xcresulttool ;;
+  *"get build-results"*) sed "s|file://PROJECT/|file://\$PWD/|" "$XR/build-results.json" ;;
+  *"get test-results summary"*) cat "$XR/test-summary.json" ;;
+  *"export attachments"*)
+    o=""; while [ \$# -gt 0 ]; do [ "\$1" = --output-path ] && o="\$2"; shift; done
+    mkdir -p "\$o" && echo png >"\$o/Failure-1.png" && echo '[]' >"\$o/manifest.json" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$FB/xcodebuild" "$FB/xcrun"
+V="$(verify_project bundle '-project App.xcodeproj' App '')"
+out="$(PATH="$FB:/usr/bin:/bin" "$V/scripts/verify.sh" full 2>&1)"
+expect_result "verify.sh: a failure is read from the result bundle, and says so" 1 'results from the result bundle \(\.build/swift-harness/results/test-macOS\.xcresult\)' "exit=1
+$out" "results from xcodebuild's text"
+expect_result "verify.sh: ... each failed test with its message" 1 'failed test: ComponentsTests/LegacyTests/testSum\(\): XCTAssertEqual failed: \("2"\) is not equal to \("3"\) - sum is wrong' "exit=1
+$out"
+expect_result "verify.sh: ... each build error with its file and line, relative to the project" 1 "error: Tests/ComponentsTests/KeyboardTests.swift:31: Cannot find 'KeyboardCheck' in scope" "exit=1
+$out"
+expect_result "verify.sh: ... and the attachments of failing tests, exported next to the bundle" 1 'attachments of failing tests \(1 file\(s\), screenshots included\): \.build/swift-harness/results/attachments-macOS' "exit=1
+$out"
+out="$(FAKE_XCRESULT=none PATH="$FB:/usr/bin:/bin" "$V/scripts/verify.sh" full 2>&1)"
+expect_result "verify.sh: without xcresulttool the text of xcodebuild is the fallback, and says so" 1 "results from xcodebuild's text .*
+Failing tests:" "exit=1
+$out" 'results from the result bundle'
+mkdir -p "$V/.build/swift-harness/results/build-macOS.xcresult"
+out="$(FAKE_XCODEBUILD_EXIT=0 PATH="$FB:/usr/bin:/bin" "$V/scripts/verify.sh" fast 2>&1)"
+expect_result "verify.sh: the bundle of the last run is replaced, not refused" 0 'verify fast: PASS' "exit=$?
+$out"
+
 # SH120-05: a project name with spaces must reach xcodebuild as one argument.
 V="$(verify_project spaced '-project My App.xcodeproj' App '')"
 : >"$TMP/xcodebuild-args"
@@ -3883,6 +3935,25 @@ set_config "$RF" '{"verify":{"command":"scripts/verify.sh fast"}}'
 approve "$RF" >/dev/null
 echo 'let app = 4' >"$RF/Sources/App.swift"
 expect_result "retry: without retryFailed a failure blocks at once" 2 'Verification failed' "$(RETRY_COUNT="$TMP/retry3" ev_stop "$RF")"
+# The names of unstable tests come from the result bundle's lines when verify.sh prints them (#147).
+RB="$(new_project retry-bundle)"
+cat >"$RB/scripts/verify.sh" <<'EOF'
+#!/bin/bash
+n="$(cat "${RETRY_COUNT:?}" 2>/dev/null || echo 0)"; echo $((n + 1)) >"$RETRY_COUNT"
+if [ "$n" -lt 1 ]; then
+  printf 'results from the result bundle (.build/swift-harness/results/test-macOS.xcresult):\n'
+  printf 'failed test: AppTests/greetsByName(): Expectation failed: "Hello, Ada!" == "Hi, Ada!"\n'
+  exit 1
+fi
+echo ok
+EOF
+set_config "$RB" '{"verify":{"command":"scripts/verify.sh fast","retryFailed":true}}'
+git -C "$RB" add -A && git -C "$RB" commit -qm retry && approve "$RB" >/dev/null
+hook session-start.sh "$RB" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$RB/Sources/App.swift"
+RETRY_COUNT="$TMP/retry-bundle-count" ev_stop "$RB" >/dev/null
+if tail -n 1 "$(state_of "$RB")/catches.jsonl" | jq -e '.kind == "unstable" and .what == "AppTests/greetsByName()"' >/dev/null; then ok "retry: an unstable test is named from the result bundle's lines"
+else nok "retry: an unstable test is named from the result bundle's lines" "$(tail -n 1 "$(state_of "$RB")/catches.jsonl")"; fi
 G5="$TMP/guest-retry"; mkdir -p "$G5"
 "$SCRIPTS/setup-guest.sh" --project "$G5" --fast 'swift build' --retry-failed >/dev/null
 if [ "$(jq -c '.verify.retryFailed' "$G5/.claude/swift-harness.json")" = true ]; then ok "retry: setup-guest --retry-failed sets verify.retryFailed"
