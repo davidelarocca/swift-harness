@@ -99,7 +99,7 @@ summary="$(
           | map(if .observed == 0 then . else . + {promotion: (
               "\(.observed) episode(s) in \(.observed_sessions) session(s), \(.observed_fixed) fixed in their session" as $seen
               | if .observed < 10 or .observed_sessions < 3 then {proposal: "wait", why: "\($seen): too few to decide (10 episodes over 3 sessions needed)"}
-                elif .observed_fixed * 10 > .observed * 9 then {proposal: "block", why: "\($seen). If those findings were right, not just obeyed, set docs.blocking to true"}
+                elif .observed_fixed * 10 > .observed * 9 then {proposal: "block", why: "\($seen). If those findings were right, not just obeyed, set \(.check | split(":")[0]).blocking to true"}
                 else {proposal: "observe", why: "\($seen): look at the others before it blocks"} end)} end)),
         skipped: (map(select(.kind == "skipped")) | group_by(.check) | map({
           check: .[0].check, times: length, why: (map(.what) | unique)

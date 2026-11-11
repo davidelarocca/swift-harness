@@ -72,6 +72,7 @@ unknown="$(jq -r '
   (if (.snapshots | type) == "object" then (.snapshots | keys - ["path"])[] | "snapshots." + . else empty end),
   (if (.security | type) == "object" then (.security | keys - ["enabled"])[] | "security." + . else empty end),
   (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget", "command", "blocking"])[] | "docs." + . else empty end),
+  (("lint", "format") as $k | if (.[$k] | type) == "object" then (.[$k] | keys - ["command", "blocking"])[] | "\($k)." + . else empty end),
   (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end)
 ' "$SH_CONFIG" | paste -sd, - | sed 's/,/, /g')"
 if [ -n "$unknown" ]; then
@@ -86,8 +87,13 @@ problems="$(jq -r '
   check(["scope"]; type == "array" and all(.[]; type == "object" and (.branch | type) == "string" and (.paths | type) == "array"); "scope must be a list of {branch, paths, base}"),
   check(["uiTests", "isolation"]; type == "array" and all(.[]; type == "string"); "uiTests.isolation must be a list of launch arguments or environment keys"),
   check(["uiTests", "launchHelpers"]; type == "array" and all(.[]; type == "string"); "uiTests.launchHelpers must be a list of function names"),
-  check(["format"]; . == "swiftformat" or . == "swift-format" or . == "none"; "format must be swiftformat, swift-format or none"),
-  check(["lint"]; . == "swiftlint" or . == "none"; "lint must be swiftlint or none"),
+  check(["format"]; . == "swiftformat" or . == "swift-format" or . == "none" or type == "object"; "format must be swiftformat, swift-format, none or {\"command\": ...}"),
+  check(["lint"]; . == "swiftlint" or . == "none" or type == "object"; "lint must be swiftlint, none or {\"command\": ...}"),
+  (("lint", "format") as $k | if (.[$k] | type) == "object" then
+    check([$k, "command"]; type == "string" and length > 0; "\($k).command must be a command line"),
+    check([$k, "blocking"]; type == "boolean"; "\($k).blocking must be true or false"),
+    (if .[$k].command == null then "\($k).command is missing: set the command line of the \($k) check" else empty end)
+  else empty end),
   check(["lintBlocking"]; type == "boolean"; "lintBlocking must be true or false"),
   check(["guardPbxproj"]; type == "boolean"; "guardPbxproj must be true or false"),
   check(["protectedPaths"]; type == "array" and all(.[]; type == "string"); "protectedPaths must be a list of paths"),
@@ -154,6 +160,15 @@ command_line="$(sh_cfg '.verify.command' 'scripts/verify.sh fast')"
 
 # ---------- formatter and linter ----------
 
+# The project's own lint or format check (#125), run at the end of a turn instead of the harness's.
+adapter_row() { # $1 lint | format, $2 row name, $3 what it replaces, $4 what to call it
+  local cmd mode
+  cmd="$(sh_adapter_command "$1")"
+  [ -n "$cmd" ] || return 1
+  mode="new problems block the end of a turn"; sh_adapter_blocking "$1" || mode="observed: recorded, never blocking ($1.blocking is false)"
+  if sh_verify_approved "$command_line" "$(sh_state_path)" 2>/dev/null; then row PASS "$2" "the project's own $4 '$cmd' runs instead of $3, at the end of a turn after a change; $mode"
+  else row WARN "$2" "the project's own $4 '$cmd' is set, but not approved: it does not run. Fix: /swift-harness:approve-verify"; fi
+}
 case "$format" in
   swiftformat)
     if command -v swiftformat >/dev/null 2>&1; then
@@ -175,6 +190,7 @@ case "$format" in
     fi
     ;;
   none) row INFO Formatter "off (format is none)" ;;
+  *) adapter_row format Formatter "the harness's formatter" "format check" || row INFO Formatter "off (format has no command)" ;;
 esac
 
 if [ "$lint" = swiftlint ]; then
@@ -185,7 +201,7 @@ if [ "$lint" = swiftlint ]; then
   else
     row WARN SwiftLint "not installed: edits are not linted. Fix: brew install swiftlint"
   fi
-else
+elif ! adapter_row lint SwiftLint SwiftLint lint; then
   row INFO SwiftLint "off (lint is none)"
 fi
 

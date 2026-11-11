@@ -397,8 +397,10 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 
 | Key | Values | Default |
 |---|---|---|
-| `format` | `swiftformat`, `swift-format` (needs a `.swift-format` file, see below), `none` | `swiftformat` |
-| `lint` | `swiftlint`, `none` | `swiftlint` |
+| `format` | `swiftformat`, `swift-format` (needs a `.swift-format` file, see below), `none`, or the project's own format check as `{"command": "..."}` (an adapter, below) | `swiftformat` |
+| `lint` | `swiftlint`, `none`, or the project's own lint as `{"command": "..."}` (an adapter, below) | `swiftlint` |
+| `lint.command`, `format.command` | the project's own lint or format check (a wrapper script, a pinned version, `make lint`, `swiftformat --lint .`), run instead of the harness's: not after each edit, but at the end of a turn when the code changed, and part of the verify approval. Exit 1 means problems: problems already there at session start never block, new ones block once with the command's output. Another non-zero exit means it could not run | none |
+| `lint.blocking`, `format.blocking` | `false` records the project's check (evidence, catch log) without ever blocking; `/swift-harness:report` proposes blocking once its findings get fixed, with the thresholds of `docs.blocking` | `true` |
 | `lintBlocking` | `true` blocks Claude on SwiftLint errors and on SwiftLint failing to run or reporting an invalid configuration, and re-checks those files at the end of the turn. If SwiftLint is not installed, the end-of-turn check fails after code changes instead of counting unlinted code as passing. `false` only reports | `false` |
 | `verify.enabled` | run the Stop check | `true` |
 | `verify.command` | any shell command, exit 0 means pass | `scripts/verify.sh fast` |

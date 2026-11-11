@@ -62,6 +62,19 @@ if git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
       # What the checks stand on (tests, assertions, skips, lint), for weaken-watch.sh (#146).
       rm -f "$sess/weaken-warned"
       sh_weaken_list >"$sess/weaken-start"
+      # The project's own lint and format checks (#125): their problems at session start, when
+      # approved, and the code they stand on, so the end of a turn runs them only after a change.
+      for kind in lint format; do
+        rm -f "$sess/$kind-start" "$sess/$kind-adapter" "$sess/$kind-adapter-blocked" "$sess/$kind-adapter-observed"
+        a_cmd="$(sh_adapter_command "$kind")"
+        [ -n "$a_cmd" ] || continue
+        if sh_verify_approved "$verify_cmd" "$state"; then
+          (cd "$SH_ROOT" && bash -c "$a_cmd" 2>&1 </dev/null) | sh_adapter_keys >"$sess/$kind-start"
+        else
+          : >"$sess/$kind-start"
+        fi
+        printf '%s\n%s: %s\tnot run\tno build input changed in this session\n' "$fp" "$kind" "$a_cmd" >"$sess/$kind-adapter"
+      done
     fi
     # The docs problems already there at session start, for docs-watch.sh (#70).
     rm -f "$sess/docs-start" "$sess/docs-blocked" "$sess/docs-warned"
