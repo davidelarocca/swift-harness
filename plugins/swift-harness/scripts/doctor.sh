@@ -64,7 +64,7 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
+  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
   (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
@@ -91,6 +91,7 @@ problems="$(jq -r '
   check(["lintBlocking"]; type == "boolean"; "lintBlocking must be true or false"),
   check(["guardPbxproj"]; type == "boolean"; "guardPbxproj must be true or false"),
   check(["protectedPaths"]; type == "array" and all(.[]; type == "string"); "protectedPaths must be a list of paths"),
+  check(["guardBash"]; type == "boolean"; "guardBash must be true or false"),
   check(["verify"]; type == "object"; "verify must be an object"),
   (if (.verify | type) == "object" then
     check(["verify", "enabled"]; type == "boolean"; "verify.enabled must be true or false"),

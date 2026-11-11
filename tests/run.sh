@@ -156,6 +156,76 @@ mkdir -p "$TMP/plain/Sources/Audio"
 git -C "$TMP/plain" init -q
 expect_no_ask "$TMP/plain" "$TMP/plain/Sources/Audio/x.swift" "guard: project without swift-harness.json is untouched"
 
+# ---------- guard-bash.sh: shell commands that write to a protected path (#135) ----------
+
+bash_input() { jq -nc --arg c "$1" '{tool_name: "Bash", tool_input: {command: $c}}'; }
+bash_asks() { hook guard-bash.sh "$1" "$(bash_input "$2")" | grep -q '"permissionDecision": "ask"'; }
+expect_bash_ask() {
+  if bash_asks "$1" "$2"; then ok "$3"; else nok "$3" "no approval request for: $2"; fi
+}
+expect_bash_no_ask() {
+  if bash_asks "$1" "$2"; then nok "$3" "unexpected approval request for: $2"; else ok "$3"; fi
+}
+
+P="$(new_project guard-bash)"
+# Off by default: the after-the-fact notice of protected-watch.sh stays the only control.
+expect_bash_no_ask "$P" "echo x > Sources/Audio/Engine.swift" "guard-bash: off unless guardBash is true"
+jq '.guardBash = true | .snapshots = {path: "snapshots"}' "$P/.claude/swift-harness.json" >"$TMP/gb.json" && mv "$TMP/gb.json" "$P/.claude/swift-harness.json"
+mkdir -p "$P/snapshots" && echo png >"$P/snapshots/Library.png"
+expect_bash_ask "$P" "echo x > Sources/Audio/Engine.swift" "guard-bash: a redirect into a protected file asks"
+expect_bash_ask "$P" "printf 'x\n' >> Sources/Audio/Engine.swift" "guard-bash: an appending redirect asks"
+expect_bash_ask "$P" "cat > ./Sources/Audio/New.swift <<'EOF'
+let n = 1
+EOF" "guard-bash: a heredoc into a new file under a protected folder asks"
+expect_bash_ask "$P" "echo x > \"$P/Sources/Audio/Engine.swift\"" "guard-bash: an absolute path asks"
+expect_bash_ask "$P" "printf x | tee -a Sources/Audio/Engine.swift" "guard-bash: tee asks"
+expect_bash_ask "$P" "sed -i '' 's/1/2/' Sources/Audio/Engine.swift" "guard-bash: sed -i asks"
+expect_bash_ask "$P" "perl -pi -e 's/1/2/' Sources/Audio/Engine.swift" "guard-bash: perl -pi asks"
+expect_bash_ask "$P" "mv Sources/Audio/Engine.swift /tmp/engine.swift" "guard-bash: mv out of a protected path asks"
+expect_bash_ask "$P" "cp /tmp/engine.swift Sources/Audio/Engine.swift" "guard-bash: cp onto a protected file asks"
+expect_bash_ask "$P" "rm -rf Sources/Audio" "guard-bash: rm of a protected folder asks"
+expect_bash_ask "$P" "git checkout -- Sources/Audio/Engine.swift" "guard-bash: git checkout of a protected file asks"
+expect_bash_ask "$P" "python3 -c \"open('Sources/Audio/Engine.swift', 'w').write('x')\"" "guard-bash: python open(..., 'w') asks"
+expect_bash_ask "$P" "python3 - <<'EOF'
+from pathlib import Path
+Path('Sources/Audio/Engine.swift').write_text('x')
+EOF" "guard-bash: python write_text asks"
+expect_bash_ask "$P" "sed -i '' 's/a/b/' App.xcodeproj/project.pbxproj" "guard-bash: a write to project.pbxproj asks"
+expect_bash_ask "$P" "rm snapshots/Library.png" "guard-bash: a write to a snapshot baseline asks"
+# Reading a protected path, or writing elsewhere, never asks.
+expect_bash_no_ask "$P" "cat Sources/Audio/Engine.swift" "guard-bash: cat does not ask"
+expect_bash_no_ask "$P" "grep -n engine Sources/Audio/Engine.swift" "guard-bash: grep does not ask"
+expect_bash_no_ask "$P" "git diff -- Sources/Audio/" "guard-bash: git diff does not ask"
+expect_bash_no_ask "$P" "git log --oneline -- Sources/Audio" "guard-bash: git log does not ask"
+expect_bash_no_ask "$P" "cp Sources/Audio/Engine.swift /tmp/engine-copy.swift" "guard-bash: cp from a protected file does not ask"
+expect_bash_no_ask "$P" "ls Sources/Audio > /tmp/list.txt 2>/dev/null" "guard-bash: a redirect elsewhere does not ask"
+expect_bash_no_ask "$P" "echo x > Sources/AudioTools/Tool.swift" "guard-bash: a sibling folder sharing the prefix does not ask"
+expect_bash_no_ask "$P" "python3 -c \"print(open('Sources/Audio/Engine.swift').read())\"" "guard-bash: python reading a protected file does not ask"
+expect_bash_no_ask "$P" "python3 - <<'EOF'
+p='docs/NOTES.md'
+s=open(p).read() + 'See Sources/Audio/Engine.swift for the engine.'
+open(p, 'w').write(s)
+EOF" "guard-bash: a script that only mentions a protected path in the text it writes elsewhere does not ask"
+expect_bash_no_ask "$P" "swift build" "guard-bash: a command that names no protected path does not ask"
+expect_bash_no_ask "$P" "rm -rf .build
+cat Sources/Audio/Engine.swift" "guard-bash: a write on one line and a read of a protected path on the next does not ask"
+out="$(hook guard-bash.sh "$P" "$(bash_input 'echo x > Sources/Audio/Engine.swift')")"
+expect_result "guard-bash: the reason names the path and the setting" 0 'Sources/Audio.*protected.*guardBash' "exit=0
+$out"
+CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$P" >"$TMP/gb-report.txt" 2>&1
+expect_result "guard-bash: the question is in the catch log" 0 'shell' "exit=0
+$(cat "$TMP/gb-report.txt")"
+# The doctor knows the key and checks its type.
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)"
+expect_result "guard-bash: doctor knows guardBash" 0 'Config keys.*all known' "exit=0
+$out"
+jq '.guardBash = "yes"' "$P/.claude/swift-harness.json" >"$TMP/gb.json" && mv "$TMP/gb.json" "$P/.claude/swift-harness.json"
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)"
+expect_result "guard-bash: doctor rejects a guardBash that is not true or false" 0 'guardBash must be' "exit=0
+$out"
+grep -q '"matcher": "Bash"' "$PLUGIN/hooks/hooks.json" 2>/dev/null && grep -q 'guard-bash.sh' "$PLUGIN/hooks/hooks.json" &&
+  ok "guard-bash: registered for Bash in hooks.json" || nok "guard-bash: registered for Bash in hooks.json" "missing"
+
 # ---------- fingerprint ----------
 
 P="$(new_project fp)"
