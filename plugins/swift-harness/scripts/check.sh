@@ -88,11 +88,12 @@ verified=false
 printf '%s' "$record" | jq -e --arg c "$command_line" 'any(.checks[]?; .name == $c and (.result == "passed" or .result == "partial"))' >/dev/null 2>&1 && verified=true
 # A failed check in the record fails the run, however often it ran before (#140): the hook blocks
 # once on the same problems so that an agent can stop and explain, and a command run again must
-# not pass for that. The docs check in observation (docs.blocking false) is named, never failing.
-observed=false
-[ "$(jq -r '.docs.blocking' "$root/.claude/swift-harness.json" 2>/dev/null)" != false ] || observed=true
+# not pass for that. An adapter in observation (docs, lint or format with blocking false, #105,
+# #125) is named, never failing.
+observed="$(jq -c '[("docs", "lint", "format") as $k | select((.[$k] | objects | .blocking) == false) | $k + ": "]' "$root/.claude/swift-harness.json" 2>/dev/null)"
+[ -n "$observed" ] || observed='[]'
 failing=false
-printf '%s' "$record" | jq -e --argjson observed "$observed" 'any(.checks[]?; .result == "failed" and (($observed and (.name | startswith("docs: "))) | not))' >/dev/null 2>&1 && failing=true
+printf '%s' "$record" | jq -e --argjson observed "$observed" 'any(.checks[]?; .result == "failed" and (.name as $n | any($observed[]; . as $p | $n | startswith($p)) | not))' >/dev/null 2>&1 && failing=true
 if [ "$code" -eq 2 ] || [ "$failing" = true ]; then result=1
 elif [ "$verified" = true ]; then result=0
 elif printf '%s' "$record" | jq -e '.outcome == "failed"' >/dev/null 2>&1; then result=1

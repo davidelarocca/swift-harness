@@ -3850,6 +3850,105 @@ G3="$TMP/guest-docs"; mkdir -p "$G3"
 if [ "$(jq -c '.docs' "$G3/.claude/swift-harness.json")" = '{"command":"scripts/check-docs.sh"}' ]; then ok "adapter: setup-guest --docs-command sets docs.command"
 else nok "adapter: setup-guest --docs-command sets docs.command" "$(cat "$G3/.claude/swift-harness.json")"; fi
 
+# ---------- adapters: the project's own lint and formatter (#125) ----------
+
+LA="$(new_project lint-adapter)"
+cat >"$LA/scripts/lint.sh" <<'EOF'
+#!/bin/bash
+echo run >>"${LINT_LOG:-/dev/null}"
+cd "$(dirname "$0")/.." || exit 2
+found=0
+for f in Sources/*.swift; do grep -n 'TODO' "$f" | sed "s#^#$f:#" && found=1; done
+exit "$found"
+EOF
+chmod +x "$LA/scripts/lint.sh"
+echo 'let old = 1 // TODO old' >"$LA/Sources/Old.swift"
+set_config "$LA" '{"verify":{"command":"scripts/verify.sh fast"},"lint":{"command":"scripts/lint.sh"}}'
+git -C "$LA" add -A && git -C "$LA" commit -qm lint
+expect_result "lint adapter: the verify approval covers the lint command and its script" 0 'scripts/lint\.sh' "exit=0
+$(approval "$LA" --status)"
+approve "$LA" >/dev/null
+LLOG="$TMP/lint-adapter.log"; : >"$LLOG"
+LINT_LOG="$LLOG" hook session-start.sh "$LA" '{"source":"startup"}' >/dev/null 2>&1
+SLOG="$TMP/lint-adapter-tools.log"; : >"$SLOG"
+mkdir -p "$TMP/fake-tools"
+for t in swiftlint swiftformat; do printf '#!/bin/bash\necho "%s $*" >>"%s"\n' "$t" "$SLOG" >"$TMP/fake-tools/$t"; chmod +x "$TMP/fake-tools/$t"; done
+echo 'let app = 2' >"$LA/Sources/App.swift"
+PATH="$TMP/fake-tools:$PATH" hook post-edit.sh "$LA" "$(edit_input "$LA/Sources/App.swift")" >/dev/null 2>&1
+if ! grep -q '^swiftlint' "$SLOG"; then ok "lint adapter: the harness's SwiftLint does not run"
+else nok "lint adapter: the harness's SwiftLint does not run" "$(cat "$SLOG")"; fi
+out="$(LINT_LOG="$LLOG" ev_stop "$LA")"
+if [[ "$out" == exit=0* ]] && [ "$(ev_of "$LA" '.checks[] | select(.name == "lint: scripts/lint.sh") | [.result, .detail]')" = '["failed","exit 1, only problems already there at session start"]' ]; then
+  ok "lint adapter: violations already there at session start are recorded, and do not block"
+else nok "lint adapter: violations already there at session start are recorded, and do not block" "$out $(ev_of "$LA" .checks)"; fi
+echo 'let todo = 3 // TODO new' >>"$LA/Sources/App.swift"
+out="$(LINT_LOG="$LLOG" ev_stop "$LA")"
+expect_result "lint adapter: a new violation blocks, with the project's own output" 2 "The project's lint check \(scripts/lint\.sh\) found problems.*Sources/App\.swift:2:let todo" "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/^exit=2 /exit=2\n/')"
+if [ "$(ev_of "$LA" '.checks[] | select(.name == "lint: scripts/lint.sh") | .result')" = '"failed"' ] && tail -n 1 "$(state_of "$LA")/catches.jsonl" | jq -e '.kind == "blocked" and .check == "lint: scripts/lint.sh"' >/dev/null; then
+  ok "lint adapter: the evidence record and the catch log name the project's lint"
+else nok "lint adapter: the evidence record and the catch log name the project's lint" "$(tail -n 1 "$(state_of "$LA")/catches.jsonl")"; fi
+echo 'let more = 4' >>"$LA/Sources/App.swift"
+expect_result "lint adapter: the same new violations do not block twice" 0 '^exit=0' "$(LINT_LOG="$LLOG" ev_stop "$LA" '{"stop_hook_active":true}')"
+echo 'let app = 2' >"$LA/Sources/App.swift"
+LINT_LOG="$LLOG" ev_stop "$LA" >/dev/null
+if tail -n 1 "$(state_of "$LA")/catches.jsonl" | jq -e '.kind == "fixed" and .check == "lint: scripts/lint.sh"' >/dev/null; then ok "lint adapter: fixing the violation is recorded as fixed"
+else nok "lint adapter: fixing the violation is recorded as fixed" "$(tail -n 2 "$(state_of "$LA")/catches.jsonl")"; fi
+runs="$(wc -l <"$LLOG" | tr -d ' ')"
+LINT_LOG="$LLOG" ev_stop "$LA" >/dev/null
+if [ "$(wc -l <"$LLOG" | tr -d ' ')" = "$runs" ]; then ok "lint adapter: with the code unchanged it does not run again"
+else nok "lint adapter: with the code unchanged it does not run again" "runs $runs $(wc -l <"$LLOG")"; fi
+set_config "$LA" '{"verify":{"command":"scripts/verify.sh fast"},"lint":{"command":"scripts/lint.sh","blocking":false}}'
+approve "$LA" >/dev/null
+echo 'let todo = 5 // TODO observed' >>"$LA/Sources/App.swift"
+out="$(LINT_LOG="$LLOG" ev_stop "$LA")"
+if [[ "$out" == exit=0* ]] && tail -n 1 "$(state_of "$LA")/catches.jsonl" | jq -e '.kind == "observed" and (.what | contains("lint.blocking is false"))' >/dev/null; then
+  ok "lint adapter: with lint.blocking false a new violation is observed, never blocking"
+else nok "lint adapter: with lint.blocking false a new violation is observed, never blocking" "$out $(tail -n 1 "$(state_of "$LA")/catches.jsonl")"; fi
+printf '%s\n' "$(cat "$LA/scripts/lint.sh")" '# changed' >"$LA/scripts/lint.sh"
+echo 'let app = 6' >>"$LA/Sources/App.swift"
+: >"$LLOG"
+out="$(LINT_LOG="$LLOG" ev_stop "$LA")"
+if [ ! -s "$LLOG" ] && [ "$(ev_of "$LA" '.checks[] | select(.name == "lint: scripts/lint.sh") | .result')" = '"not run"' ]; then
+  ok "lint adapter: a changed lint script is not approved any more, and does not run"
+else nok "lint adapter: a changed lint script is not approved any more, and does not run" "$out $(cat "$LLOG")"; fi
+HL="$(new_project h2-lint)"; HLL="$(state_of "$HL")/catches.jsonl"; mkdir -p "$(dirname "$HLL")"
+for i in 1 2 3 4 5 6 7 8 9 10 11; do
+  printf '{"time":"2099-01-01T00:00:0%sZ","session":"s%s","check":"lint: l","kind":"observed","what":"1 new"}\n' "$((i % 10))" "$i" >>"$HLL"
+  printf '{"time":"2099-01-01T00:00:0%sZ","session":"s%s","check":"lint: l","kind":"fixed","what":"observed problems gone: passes again"}\n' "$((i % 10))" "$i" >>"$HLL"
+done
+expect_result "lint adapter: in observation the report proposes lint.blocking, with the docs thresholds" 0 'lint: l: 11 episode\(s\) in 11 session\(s\), 11 fixed in their session. If those findings were right, not just obeyed, set lint\.blocking to true' "exit=0
+$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$HL" 2>&1)"
+approve "$LA" >/dev/null
+expect_row "lint adapter: doctor names the project's lint" "$(doctor "$LA")" PASS SwiftLint "the project's own lint 'scripts/lint\.sh' runs instead of SwiftLint"
+set_config "$LA" '{"verify":{"command":"scripts/verify.sh fast"},"lint":{"command":3}}'
+expect_row "lint adapter: doctor rejects a lint command that is not a command line" "$(doctor "$LA")" FAIL Config "lint\.command must be a command line"
+
+FA="$(new_project format-adapter)"
+cat >"$FA/scripts/format-check.sh" <<'EOF'
+#!/bin/bash
+cd "$(dirname "$0")/.." || exit 2
+found=0
+for f in Sources/*.swift; do grep -n '	' "$f" | sed "s#^#$f:#" && found=1; done
+exit "$found"
+EOF
+chmod +x "$FA/scripts/format-check.sh"
+set_config "$FA" '{"verify":{"command":"scripts/verify.sh fast"},"format":{"command":"scripts/format-check.sh"}}'
+git -C "$FA" add -A && git -C "$FA" commit -qm format
+approve "$FA" >/dev/null
+hook session-start.sh "$FA" '{"source":"startup"}' >/dev/null 2>&1
+: >"$SLOG"
+printf 'let app = 1\n\tlet tab = 2\n' >"$FA/Sources/App.swift"
+PATH="$TMP/fake-tools:$PATH" hook post-edit.sh "$FA" "$(edit_input "$FA/Sources/App.swift")" >/dev/null 2>&1
+if ! grep -q '^swiftformat' "$SLOG"; then ok "format adapter: the harness's formatter does not run"
+else nok "format adapter: the harness's formatter does not run" "$(cat "$SLOG")"; fi
+out="$(ev_stop "$FA")"
+expect_result "format adapter: a new formatting problem blocks, with the project's own output" 2 "The project's format check \(scripts/format-check\.sh\) found problems.*Sources/App\.swift:2:" "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/^exit=2 /exit=2\n/')"
+expect_row "format adapter: doctor names the project's formatter" "$(doctor "$FA")" PASS Formatter "the project's own format check 'scripts/format-check\.sh' runs instead of the harness's formatter"
+G4="$TMP/guest-lint"; mkdir -p "$G4"
+"$SCRIPTS/setup-guest.sh" --project "$G4" --fast 'swift build' --lint-command 'make lint' --lint-observe --format-command 'scripts/format-check.sh' >/dev/null
+if [ "$(jq -c '[.lint, .format]' "$G4/.claude/swift-harness.json")" = '[{"command":"make lint","blocking":false},{"command":"scripts/format-check.sh"}]' ]; then ok "adapters: setup-guest --lint-command, --lint-observe and --format-command set lint and format"
+else nok "adapters: setup-guest --lint-command, --lint-observe and --format-command set lint and format" "$(cat "$G4/.claude/swift-harness.json")"; fi
+
 # ---------- one engine for every agent: check.sh (#106) ----------
 
 chk() { local o c; o="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
@@ -4526,6 +4625,13 @@ expect_result "check: and --strict --json says failed, exit 1" 1 '"result": "fai
 set_config "$CD" '{"verify":{"command":"scripts/verify.sh fast"},"docs":{"command":"scripts/check-docs.sh","blocking":false}}'
 expect_result "check: an observed docs check does not fail the run, and is named as failed" 0 'docs: scripts/check-docs\.sh: failed.*Result: passed' "$(flat "$(chk --project "$CD")")"
 expect_result "check: nor the run after it" 0 'docs: scripts/check-docs\.sh: failed.*Result: passed' "$(flat "$(chk --project "$CD")")"
+CL="$(new_project check-lint-observed)"
+printf '#!/bin/bash\necho "Sources/App.swift:1: TODO"\nexit 1\n' >"$CL/scripts/lint.sh"; chmod +x "$CL/scripts/lint.sh"
+set_config "$CL" '{"verify":{"command":"scripts/verify.sh fast"},"lint":{"command":"scripts/lint.sh","blocking":false}}'
+git -C "$CL" add -A && git -C "$CL" commit -qm lint
+approve "$CL" >/dev/null
+echo 'let app = 2' >"$CL/Sources/App.swift"
+expect_result "check: an observed lint check does not fail the run, and is named as failed" 0 'lint: scripts/lint\.sh: failed.*Result: passed' "$(flat "$(chk --project "$CL")")"
 
 # ---------- an approved security change (#141) ----------
 

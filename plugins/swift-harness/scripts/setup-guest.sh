@@ -5,6 +5,7 @@
 #
 #   setup-guest.sh --fast "<command>" [--full "<command>"] [--project DIR] [--no-docs | --docs-command "<command>"]
 #                  [--owned PATH]... [--retry-failed] [--docs-observe] [--local]
+#                  [--lint-command "<command>" [--lint-observe]] [--format-command "<command>" [--format-observe]]
 #   setup-guest.sh --from DIR [--project DIR] [--local]
 # --docs-observe runs the project's docs check without ever blocking (docs.blocking false).
 # --local keeps both files out of the repository: they go into .git/info/exclude, which every
@@ -25,6 +26,9 @@
 # The formatter and SwiftLint stay off unless the project already has their config, so its
 # code is never rewritten in another style. --docs-command runs the project's own docs check
 # instead of the harness's (docs.command, #105); --no-docs turns the docs check off.
+# --lint-command and --format-command run the project's own lint or format check at the end of a
+# turn, instead of SwiftLint and the formatter after each edit (#125); --lint-observe and
+# --format-observe record them without ever blocking.
 # The project's agent rules that exist (CLAUDE.md, .claude/CLAUDE.md, AGENTS.md, .claude/rules/)
 # and each --owned path (docs only some people may edit) become protectedPaths (#109): the guard
 # asks before Claude edits them, and a shell edit is reported at the end of the turn.
@@ -35,7 +39,7 @@
 set -uo pipefail
 
 usage() {
-  echo "usage: setup-guest.sh --fast \"<command>\" [--full \"<command>\"] [--project DIR] [--no-docs | --docs-command \"<command>\" [--docs-observe]] [--owned PATH]... [--retry-failed] [--ui-isolation ARG]... [--local]" >&2
+  echo "usage: setup-guest.sh --fast \"<command>\" [--full \"<command>\"] [--project DIR] [--no-docs | --docs-command \"<command>\" [--docs-observe]] [--owned PATH]... [--retry-failed] [--ui-isolation ARG]... [--local] [--lint-command \"<command>\" [--lint-observe]] [--format-command \"<command>\" [--format-observe]]" >&2
   echo "       setup-guest.sh --from DIR [--project DIR] [--local]" >&2
   exit 2
 }
@@ -45,6 +49,10 @@ fast=""
 full=""
 docs=true
 docs_command=""
+lint_command=""
+format_command=""
+lint_observe=false
+format_observe=false
 owned=""
 retry=false
 isolation=""
@@ -64,6 +72,10 @@ while [ $# -gt 0 ]; do
     --retry-failed) retry=true; shift ;;
     --ui-isolation) [ $# -ge 2 ] && [ -n "$2" ] || usage; isolation="$isolation$2"$'\n'; shift 2 ;;
     --docs-observe) observe=true; shift ;;
+    --lint-command) [ $# -ge 2 ] && [ -n "$2" ] || usage; lint_command="$2"; shift 2 ;;
+    --format-command) [ $# -ge 2 ] && [ -n "$2" ] || usage; format_command="$2"; shift 2 ;;
+    --lint-observe) lint_observe=true; shift ;;
+    --format-observe) format_observe=true; shift ;;
     --local) local_only=true; shift ;;
     --from) [ $# -ge 2 ] || usage; from="$2"; shift 2 ;;
     --codex) codex=true; shift ;;
@@ -164,11 +176,14 @@ protect="$(for p in CLAUDE.md .claude/CLAUDE.md AGENTS.md; do [ -f "$root/$p" ] 
   done)"
 mkdir -p "$root/.claude" "$root/$sdir" || exit 1
 jq -n --arg format "$format" --arg lint "$lint" --argjson docs "$docs" --arg cmd "$sdir/verify.sh fast" --arg dcmd "$docs_command" \
-  --arg protect "$protect" --argjson retry "$retry" --argjson observe "$observe" --arg isolation "$isolation" '
+  --arg protect "$protect" --argjson retry "$retry" --argjson observe "$observe" --arg isolation "$isolation" \
+  --arg lcmd "$lint_command" --arg fcmd "$format_command" --argjson lobs "$lint_observe" --argjson fobs "$format_observe" '
   {guest: true, format: $format, lint: $lint, verify: ({command: $cmd, maxAttempts: 3} + (if $retry then {retryFailed: true} else {} end))}
   + (($protect | split("\n") | map(select(length > 0))) as $p | if ($p | length) > 0 then {protectedPaths: $p} else {} end)
   + (($isolation | split("\n") | map(select(length > 0))) as $i | if ($i | length) > 0 then {uiTests: {isolation: $i}} else {} end)
-  + (if $docs then (if $dcmd == "" then {} else {docs: ({command: $dcmd} + (if $observe then {blocking: false} else {} end))} end) else {docs: {enabled: false}} end)' >"$config" || exit 1
+  + (if $docs then (if $dcmd == "" then {} else {docs: ({command: $dcmd} + (if $observe then {blocking: false} else {} end))} end) else {docs: {enabled: false}} end)
+  + (if $lcmd == "" then {} else {lint: ({command: $lcmd} + (if $lobs then {blocking: false} else {} end))} end)
+  + (if $fcmd == "" then {} else {format: ({command: $fcmd} + (if $fobs then {blocking: false} else {} end))} end)' >"$config" || exit 1
 
 # The commands go in as single-quoted shell words, so nothing in them is expanded here.
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }

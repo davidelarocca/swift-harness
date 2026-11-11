@@ -309,6 +309,18 @@ sh_docs_on() { [ "$(sh_cfg '.docs.enabled' 'true')" = "true" ]; }
 # part of the verify approval. docs.blocking false records it without ever blocking.
 sh_docs_command() { sh_docs_on && sh_cfg '.docs.command' ''; }
 sh_docs_blocking() { [ "$(sh_cfg '.docs.blocking' 'true')" != "false" ]; }
+# The same for the project's own lint and format checks (#125): "lint" or "format" as an object,
+# {"command": ..., "blocking": false}, runs that command at the end of a turn when the code changed,
+# instead of the harness's SwiftLint or formatter after each edit. $1 is docs, lint or format.
+sh_adapter_command() {
+  case "$1" in
+    docs) sh_docs_command ;;
+    lint | format) jq -r --arg k "$1" '.[$k] | objects | .command // empty | strings' "$SH_CONFIG" 2>/dev/null ;;
+  esac
+}
+sh_adapter_blocking() {
+  [ "$(jq -r --arg k "$1" '.[$k] | objects | .blocking | if . == false then "false" else "true" end' "$SH_CONFIG" 2>/dev/null)" != false ]
+}
 # The docs it reads (docs.paths: CLAUDE.md, AGENTS.md and docs/ by default), as one digest.
 sh_docs_fingerprint() {
   local p
@@ -575,11 +587,15 @@ sh_verify_manifest() {
   local word path input rel sha
   local -a words
   printf 'root %s\ncommand %s\n' "$SH_ROOT" "$1"
-  # The docs adapter (#105) runs the project's code too: its command and files are covered.
-  local docs_cmd
+  # The adapters (#105, #125) run the project's code too: their commands and files are covered.
+  local docs_cmd lint_cmd format_cmd
   docs_cmd="$(jq -r '.docs.command // empty | strings' "$SH_CONFIG" 2>/dev/null)"
+  lint_cmd="$(jq -r '.lint | objects | .command // empty | strings' "$SH_CONFIG" 2>/dev/null)"
+  format_cmd="$(jq -r '.format | objects | .command // empty | strings' "$SH_CONFIG" 2>/dev/null)"
   [ -z "$docs_cmd" ] || printf 'docs-command %s\n' "$docs_cmd"
-  read -ra words <<<"$1${docs_cmd:+ $docs_cmd}"
+  [ -z "$lint_cmd" ] || printf 'lint-command %s\n' "$lint_cmd"
+  [ -z "$format_cmd" ] || printf 'format-command %s\n' "$format_cmd"
+  read -ra words <<<"$1${docs_cmd:+ $docs_cmd}${lint_cmd:+ $lint_cmd}${format_cmd:+ $format_cmd}"
   for word in ${words[@]+"${words[@]}"}; do
     word="${word#[\"\']}"
     word="${word%[\"\']}"

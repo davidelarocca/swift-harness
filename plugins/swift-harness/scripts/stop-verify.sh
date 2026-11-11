@@ -33,7 +33,9 @@ run_security=false
 # Whenever a baseline exists: turning security.enabled off is itself a change to approve.
 [ -f "$state/security-approved" ] && run_security=true
 docs_cmd="$(sh_docs_command)"
-[ -n "$docs_cmd" ] || [ "$verify_enabled" = "true" ] || [ "$lint_gate" = "true" ] || [ "$lint_missing" = "true" ] || [ "$run_registry" = "true" ] || [ "$run_layout" = "true" ] || [ "$run_security" = "true" ] || exit 0
+lint_cmd="$(sh_adapter_command lint)"
+format_cmd="$(sh_adapter_command format)"
+[ -n "$docs_cmd$lint_cmd$format_cmd" ] || [ "$verify_enabled" = "true" ] || [ "$lint_gate" = "true" ] || [ "$lint_missing" = "true" ] || [ "$run_registry" = "true" ] || [ "$run_layout" = "true" ] || [ "$run_security" = "true" ] || exit 0
 
 command_line="$(sh_cfg '.verify.command' 'scripts/verify.sh fast')"
 max_attempts="$(sh_cfg '.verify.maxAttempts' '3')"
@@ -132,10 +134,10 @@ ev_history() { # $1 the record as JSON
 # The checks of the last record on this same code, when this turn ran nothing new.
 ev_keep() {
   if [ "$(jq -r '.code // empty' "$state/evidence.json" 2>/dev/null)" = "$fp" ]; then
-    jq -r '.checks[] | select(.name | startswith("docs: ") | not) | [.name, .result, (.detail // ""), (.seconds // "" | tostring)] | @tsv' "$state/evidence.json" 2>/dev/null >>"$ev_lines"
+    jq -r '.checks[] | select(.name | test("^(docs|lint|format): ") | not) | [.name, .result, (.detail // ""), (.seconds // "" | tostring)] | @tsv' "$state/evidence.json" 2>/dev/null >>"$ev_lines"
   fi
-  # The docs adapter's result of this turn, whatever the code (#105).
-  [ -z "${adapter_line:-}" ] || printf '%s\n' "$adapter_line" >>"$ev_lines"
+  # The adapters' results of this turn, whatever the code (#105, #125).
+  [ -z "${adapter_lines:-}" ] || printf '%s' "$adapter_lines" >>"$ev_lines"
 }
 # "name (detail), ..." of the checks that did not run this turn, or nothing.
 ev_missing() {
@@ -166,74 +168,86 @@ fi
 # Under lintBlocking a missing SwiftLint fails the check: the edits could not be linted (#17).
 [ "$lint_missing" = "true" ] && ev "SwiftLint (lintBlocking)" failed "swiftlint is not installed, so the edited files were not linted"
 
-# The project's own docs check, as an adapter (#105). It runs when the docs changed since its
-# last run, before the early exits below: editing docs does not change the build fingerprint.
-# Its problems already there at session start do not block; new ones block once per set,
-# unless docs.blocking is false, then they are recorded only.
-adapter_line=""
-if [ -n "$docs_cmd" ]; then
-  adapter_name="docs: $docs_cmd"
+# The project's own checks, as adapters: docs (#105), lint and format (#125). They run before the
+# early exits below: editing docs does not change the build fingerprint, and lint must run on code
+# that is the same as code that passed. Each runs when what it reads changed since its last run.
+# Its problems already there at session start do not block; new ones block once per set, unless
+# <kind>.blocking is false, then they are recorded only.
+run_adapter() { # $1 docs | lint | format, $2 command, $3 fingerprint of what it reads
+  local kind="$1" cmd="$2" afp="$3" name line out code secs new n key t0 start label fix
+  name="$kind: $cmd"
+  start="$sess/$kind-start"
+  case "$kind" in
+    docs) label="docs check"; fix="Fix the docs, or the reference, then finish." ;;
+    lint) label="lint check"; fix="Fix the code, then finish." ;;
+    format) label="format check"; fix="Format the code the way the project's check expects, then finish." ;;
+  esac
   if ! sh_verify_approved "$command_line" "$state"; then
-    adapter_line="$adapter_name	not run	the command is not approved: /swift-harness:approve-verify"
+    adapter_line "$name	not run	the command is not approved: /swift-harness:approve-verify"
+    return 0
+  fi
+  if [ "$afp" = "$(sed -n 1p "$sess/$kind-adapter" 2>/dev/null)" ]; then
+    adapter_line "$(sed -n 2p "$sess/$kind-adapter")"
+    return 0
+  fi
+  t0=$SECONDS
+  out="$(cd "$SH_ROOT" && bash -c "$cmd" 2>&1 </dev/null)"
+  code=$?
+  secs=$((SECONDS - t0))
+  new=""
+  [ -f "$start" ] || : >"$start"
+  if [ "$code" -gt 1 ]; then
+    # Exit 1 means problems; another code means the check could not run (a crash, a missing
+    # tool): not checked, and the user is told, never taken for problems already there.
+    line="$name	not checked	exit $code: $(printf '%s\n' "$out" | grep -m1 . | cut -c1-120)	$secs"
+  elif [ "$code" -eq 0 ]; then
+    line="$name	passed	exit 0	$secs"
+    if [ -s "$sess/$kind-adapter-blocked" ]; then sh_catch "$name" fixed "passes again" "$secs"; rm -f "$sess/$kind-adapter-blocked"; fi
+    if [ -s "$sess/$kind-adapter-observed" ]; then sh_catch "$name" fixed "observed problems gone: passes again" "$secs"; rm -f "$sess/$kind-adapter-observed"; fi
   else
-    dfp="$(sh_docs_fingerprint)"
-    if [ "$dfp" = "$(sed -n 1p "$sess/docs-adapter" 2>/dev/null)" ]; then
-      adapter_line="$(sed -n 2p "$sess/docs-adapter")"
+    new="$(printf '%s\n' "$out" | sh_adapter_keys | LC_ALL=C comm -23 - "$start")"
+    n="$(printf '%s\n' "$new" | grep -c .)"
+    if [ -z "$new" ]; then
+      line="$name	failed	exit $code, only problems already there at session start	$secs"
+      # The new problems that blocked are gone: fixed, even though old ones remain.
+      if [ -s "$sess/$kind-adapter-blocked" ]; then sh_catch "$name" fixed "no new problem left" "$secs"; rm -f "$sess/$kind-adapter-blocked"; fi
+      if [ -s "$sess/$kind-adapter-observed" ]; then sh_catch "$name" fixed "observed problems gone: no new problem left" "$secs"; rm -f "$sess/$kind-adapter-observed"; fi
+    else line="$name	failed	exit $code, $n new problem line(s)	$secs"; fi
+  fi
+  printf '%s\n%s\n' "$afp" "$line" >"$sess/$kind-adapter"
+  if [ -n "$new" ]; then
+    key="$(printf '%s' "$new" | shasum | cut -d' ' -f1)"
+    if ! sh_adapter_blocking "$kind"; then
+      # In observation (H2 of #105), each set of new problems is logged once, and its end
+      # ("fixed", when the new problems are gone) too, so the report can tell whether the
+      # check's findings get fixed and propose that it block.
+      if [ "$key" != "$(cat "$sess/$kind-adapter-observed" 2>/dev/null)" ]; then
+        printf '%s' "$key" >"$sess/$kind-adapter-observed"
+        sh_catch "$name" observed "$n new problem line(s); not blocking ($kind.blocking is false)" "$secs"
+      fi
+    elif [ "$key" = "$(cat "$sess/$kind-adapter-blocked" 2>/dev/null)" ]; then
+      sh_catch "$name" left-failing "the same new problems; $(sh_agent_name) stopped without fixing them" "$secs"
     else
-      a_t0=$SECONDS
-      a_out="$(cd "$SH_ROOT" && bash -c "$docs_cmd" 2>&1 </dev/null)"
-      a_code=$?
-      a_secs=$((SECONDS - a_t0))
-      a_new=""
-      [ -f "$sess/docs-start" ] || : >"$sess/docs-start"
-      if [ "$a_code" -gt 1 ]; then
-        # Exit 1 means problems; another code means the check could not run (a crash, a missing
-        # tool): not checked, and the user is told, never taken for problems already there.
-        adapter_line="$adapter_name	not checked	exit $a_code: $(printf '%s\n' "$a_out" | grep -m1 . | cut -c1-120)	$a_secs"
-      elif [ "$a_code" -eq 0 ]; then
-        adapter_line="$adapter_name	passed	exit 0	$a_secs"
-        if [ -s "$sess/docs-adapter-blocked" ]; then sh_catch "$adapter_name" fixed "passes again" "$a_secs"; rm -f "$sess/docs-adapter-blocked"; fi
-        if [ -s "$sess/docs-adapter-observed" ]; then sh_catch "$adapter_name" fixed "observed problems gone: passes again" "$a_secs"; rm -f "$sess/docs-adapter-observed"; fi
-      else
-        a_new="$(printf '%s\n' "$a_out" | sh_adapter_keys | LC_ALL=C comm -23 - "$sess/docs-start")"
-        a_n="$(printf '%s\n' "$a_new" | grep -c .)"
-        if [ -z "$a_new" ]; then
-          adapter_line="$adapter_name	failed	exit $a_code, only problems already there at session start	$a_secs"
-          # The new problems that blocked are gone: fixed, even though old ones remain.
-          if [ -s "$sess/docs-adapter-blocked" ]; then sh_catch "$adapter_name" fixed "no new problem left" "$a_secs"; rm -f "$sess/docs-adapter-blocked"; fi
-          if [ -s "$sess/docs-adapter-observed" ]; then sh_catch "$adapter_name" fixed "observed problems gone: no new problem left" "$a_secs"; rm -f "$sess/docs-adapter-observed"; fi
-        else adapter_line="$adapter_name	failed	exit $a_code, $a_n new problem line(s)	$a_secs"; fi
-      fi
-      printf '%s\n%s\n' "$dfp" "$adapter_line" >"$sess/docs-adapter"
-      if [ -n "$a_new" ]; then
-        a_key="$(printf '%s' "$a_new" | shasum | cut -d' ' -f1)"
-        if ! sh_docs_blocking; then
-          # In observation (H2 of #105), each set of new problems is logged once, and its end
-          # ("fixed", when the new problems are gone) too, so the report can tell whether the
-          # check's findings get fixed and propose that it block.
-          if [ "$a_key" != "$(cat "$sess/docs-adapter-observed" 2>/dev/null)" ]; then
-            printf '%s' "$a_key" >"$sess/docs-adapter-observed"
-            sh_catch "$adapter_name" observed "$a_n new problem line(s); not blocking (docs.blocking is false)" "$a_secs"
-          fi
-        elif [ "$a_key" = "$(cat "$sess/docs-adapter-blocked" 2>/dev/null)" ]; then
-          sh_catch "$adapter_name" left-failing "the same new problems; $(sh_agent_name) stopped without fixing them" "$a_secs"
-        else
-          printf '%s' "$a_key" >"$sess/docs-adapter-blocked"
-          sh_catch "$adapter_name" blocked "$a_n new problem line(s)" "$a_secs"
-          printf '%s\n' "$adapter_line" >>"$ev_lines"
-          ev_write failed "the project's docs check found new problems"
-          {
-            printf "The project's docs check (%s) found problems that were not there when the session started:\n\n" "$docs_cmd"
-            printf '%s\n' "$a_out" | tail -n 40
-            printf '\nFix the docs, or the reference, then finish. If it is intended, say so in one line and stop again without editing: the check does not block twice on the same problems.\n'
-          } >&2
-          exit 2
-        fi
-      fi
+      printf '%s' "$key" >"$sess/$kind-adapter-blocked"
+      sh_catch "$name" blocked "$n new problem line(s)" "$secs"
+      adapter_line "$line"
+      ev_write failed "the project's $label found new problems"
+      {
+        printf "The project's %s (%s) found problems that were not there when the session started:\n\n" "$label" "$cmd"
+        printf '%s\n' "$out" | tail -n 40
+        printf '\n%s If it is intended, say so in one line and stop again without editing: the check does not block twice on the same problems.\n' "$fix"
+      } >&2
+      exit 2
     fi
   fi
-  printf '%s\n' "$adapter_line" >>"$ev_lines"
-fi
+  adapter_line "$line"
+}
+# An adapter's line goes in the record, and is kept for ev_keep.
+adapter_lines=""
+adapter_line() { printf '%s\n' "$1" >>"$ev_lines"; adapter_lines="$adapter_lines$1"$'\n'; }
+[ -z "$docs_cmd" ] || run_adapter docs "$docs_cmd" "$(sh_docs_fingerprint)"
+[ -z "$lint_cmd" ] || run_adapter lint "$lint_cmd" "$fp"
+[ -z "$format_cmd" ] || run_adapter format "$format_cmd" "$fp"
 
 if [ "$fp" = "$(cat "$state/passed" 2>/dev/null)" ]; then
   : >"$ev_lines"; ev_keep; ev_write unchanged "the code is the one that passed before: nothing ran again"
