@@ -160,16 +160,16 @@ resolve() { # $1 marker text after "check:" -> status, why
 rules='[]'
 while IFS=$'\t' read -r file line text; do
   [ -n "$file" ] || continue
-  links='[]'
+  rule_links='[]'
   while IFS= read -r marker; do
     [ -n "$marker" ] || continue
     name="$(printf '%s' "$marker" | sed -E 's/^<!--[[:space:]]*check:[[:space:]]*//; s/[[:space:]]*-->$//; s/[[:space:]]+/ /g')"
     status=""; why=""
     resolve "$name"
-    links="$(jq -c --arg check "$name" --arg status "$status" --arg why "$why" '. + [{check: $check, status: $status, why: $why}]' <<<"$links")"
+    rule_links="$(jq -c --arg check "$name" --arg status "$status" --arg why "$why" '. + [{check: $check, status: $status, why: $why}]' <<<"$rule_links")"
   done < <(printf '%s\n' "$text" | grep -oE '<!--[[:space:]]*check:[^>]*-->')
   clean="$(printf '%s' "$text" | sed -E 's/[[:space:]]*<!--[[:space:]]*check:[^>]*-->//g' | cut -c1-110)"
-  rules="$(jq -c --arg file "$file" --argjson line "$line" --arg text "$clean" --argjson links "$links" '. + [{file: $file, line: $line, text: $text, links: $links}]' <<<"$rules")"
+  rules="$(jq -c --arg file "$file" --argjson line "$line" --arg text "$clean" --argjson links "$rule_links" '. + [{file: $file, line: $line, text: $text, links: $links}]' <<<"$rules")"
 done < <(rule_lines)
 
 result="$(jq -c '
