@@ -3,6 +3,18 @@
 #
 #   porting.sh scan    [project-dir]  one line per signal: level, module, file:line, signal
 #   porting.sh summary [project-dir]  platforms, then one line per module, then dependencies
+#   porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]
+#                                     builds each package target for the iOS Simulator, on a COPY
+#
+# build-check is the only mode that runs anything: it copies the project to a temporary folder
+# (no .git, .build, DerivedData, secrets), runs `swift build --target NAME --triple
+# arm64-apple-ios<V>-simulator` there, so the project's own manifest and compiler run on the copy
+# and nothing in the project changes. Package dependencies, if any, are fetched into the copy.
+# Targets are the folders of Sources/ of the root package (override with --target). Output, one
+# line per target: PASS, or FAIL with the first errors and the module each came from, because a
+# target that depends on a failing one reports the same errors. V defaults to the SDK's major
+# version. It proves a build, nothing else: no test ran, no UI was looked at, the Mac app was not
+# built. A static scan misses what only the compiler sees (C APIs such as fenv.h).
 #
 # Levels: blocks (macOS-only API compiled on iOS: the module does not build for iOS as is),
 # adapt (available on iOS but behaves differently: hover, keyboard, menus, drag and drop),
@@ -16,8 +28,12 @@ here="$(cd "$(dirname "$0")" && pwd -P)"
 . "$here/lib.sh" </dev/null
 
 mode="${1:-}"
-root="$(cd "${2:-$PWD}" 2>/dev/null && pwd -P)" || { printf 'porting: no such folder: %s\n' "${2:-}"; exit 2; }
-case "$mode" in scan | summary) ;; *) printf 'usage: porting.sh scan|summary [project-dir]\n'; exit 2 ;; esac
+[ $# -eq 0 ] || shift
+dir_arg=""
+case "${1:-}" in --* | "") ;; *) dir_arg="$1"; shift ;; esac
+root="$(cd "${dir_arg:-$PWD}" 2>/dev/null && pwd -P)" || { printf 'porting: no such folder: %s\n' "$dir_arg"; exit 2; }
+usage() { printf 'usage: porting.sh scan|summary [project-dir]\n       porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]\n'; exit 2; }
+case "$mode" in scan | summary) [ $# -eq 0 ] || usage ;; build-check) ;; *) usage ;; esac
 
 list() { git -C "$root" -c core.quotepath=off ls-files -co --exclude-standard "$@" 2>/dev/null; }
 packages="$(list 'Package.swift' '*/Package.swift' | sed -e 's|/\{0,1\}Package\.swift$||' -e 's|^$|.|' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
@@ -118,6 +134,7 @@ scan() {
       if (line ~ /\.(windowStyle|windowToolbarStyle|windowResizability|defaultPosition|onExitCommand|presentedWindowStyle)[ \t]*\(/) {
         m = line; sub(/.*\./, "", m); sub(/[ \t]*\(.*/, "", m); hit("blocks", "." m " (macOS only)")
       }
+      if (line ~ /(^|[^A-Za-z0-9_])(fenv_t|fegetenv|fesetenv|feholdexcept|feupdateenv)([^A-Za-z0-9_]|$)/) hit("blocks", "floating-point environment, fenv (not visible to Swift on iOS)")
       if (line ~ /\.(withSecurityScope|securityScopeAllowOnlyReadAccess)([^A-Za-z0-9_]|$)/) hit("blocks", "security-scoped bookmark option (macOS only)")
 
       if (line ~ /\.onHover[ \t]*[({]/ || line ~ /\.onContinuousHover/) hit("adapt", "hover (needs a touch alternative)")
@@ -131,6 +148,77 @@ scan() {
     }'
   )
 }
+
+build_check() {
+  local targets=() ios="" keep=false t
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --target) [ $# -ge 2 ] || usage; targets+=("$2"); shift 2 ;;
+      --ios) [ $# -ge 2 ] || usage; ios="$2"; shift 2 ;;
+      --keep) keep=true; shift ;;
+      *) usage ;;
+    esac
+  done
+  [[ -z "$ios" || "$ios" =~ ^[0-9]+(\.[0-9]+)?$ ]] || usage
+  for t in ${targets[@]+"${targets[@]}"}; do [[ "$t" =~ ^[A-Za-z0-9_.-]+$ ]] || usage; done
+  if ! command -v swift >/dev/null 2>&1 || ! command -v xcrun >/dev/null 2>&1; then
+    printf 'porting: swift and xcrun are needed to build for the iOS Simulator.\n'; exit 1
+  fi
+  local sdk sdk_version
+  sdk="$(xcrun --sdk iphonesimulator --show-sdk-path 2>/dev/null)"
+  [ -n "$sdk" ] && [ -d "$sdk" ] || { printf 'porting: no iOS Simulator SDK (install the iOS platform in Xcode).\n'; exit 1; }
+  sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version 2>/dev/null)"
+  [ -n "$ios" ] || ios="${sdk_version%%.*}.0"
+  [ -f "$root/Package.swift" ] || { printf 'porting: no Package.swift at %s: build-check builds the targets of a root package.\n' "$root"; exit 1; }
+  if [ ${#targets[@]} -eq 0 ]; then
+    for t in "$root"/Sources/*/; do [ -d "$t" ] && targets+=("$(basename "$t")"); done
+  fi
+  [ ${#targets[@]} -gt 0 ] || { printf 'porting: no target found under Sources/. Name them with --target.\n'; exit 1; }
+
+  local work copy arch out status n
+  work="$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-port.XXXXXX")" || exit 1
+  work="$(cd "$work" && pwd -P)" # the physical path: the compiler prints it, not a link
+  copy="$work/copy"
+  if [ "$keep" != true ]; then trap 'rm -rf "$work"' EXIT; fi
+  mkdir -p "$copy"
+  rsync -a --exclude .git --exclude .build --exclude DerivedData --exclude Pods --exclude Carthage \
+    --exclude '.env*' --exclude 'Secrets*' --exclude '*.p12' --exclude '*.pem' --exclude '*.mobileprovision' \
+    "$root/" "$copy/" || { printf 'porting: could not copy the project.\n'; exit 1; }
+  arch="$(uname -m)"; [ "$arch" = arm64 ] || arch=x86_64
+  printf 'Build for the iOS Simulator (%s, iOS %s, SDK %s) on a copy of %s:\n' "$arch" "$ios" "${sdk_version:-?}" "$root"
+  local failed=0 passed=0 dep_errors=false
+  for t in "${targets[@]}"; do
+    out="$(cd "$copy" && swift build --scratch-path "$work/build" --target "$t" --triple "$arch-apple-ios$ios-simulator" --sdk "$sdk" </dev/null 2>&1)"; status=$?
+    if [ "$status" -eq 0 ]; then printf -- '- PASS %s\n' "$t"; passed=$((passed + 1)); continue; fi
+    failed=$((failed + 1))
+    # error lines "path:line:col: error: message", the path read as the module that holds the file.
+    errs="$(printf '%s\n' "$out" | sed $'s/\x1b\\[[0-9;]*m//g' | awk -v copy="$copy/" '
+      /^\/.*:[0-9]+:[0-9]+: error: / {
+        f = $0; sub(/:[0-9]+:[0-9]+: error: .*/, "", f); line = $0; sub(/^[^:]*:/, "", line)
+        loc = line; sub(/: error: .*/, "", loc); msg = line; sub(/^[0-9]+:[0-9]+: error: /, "", msg)
+        rel = f; if (index(rel, copy) == 1) rel = substr(rel, length(copy) + 1)
+        k = rel ":" loc ": " msg
+        if (!(k in seen)) { seen[k] = 1; n++; if (n <= 3) { mod = "-"; if (match(rel, /^Sources\/[^\/]+\//)) mod = substr(rel, 9, RLENGTH - 9); printf "%s\t%s\n", mod, k } }
+      }
+      END { print "count\t" n + 0 }')"
+    n="$(printf '%s\n' "$errs" | awk -F'\t' '$1 == "count" { print $2 }')"
+    if [ "${n:-0}" -eq 0 ]; then
+      printf -- '- FAIL %s: the build failed with no error line the scan could read: %s\n' "$t" "$(printf '%s\n' "$out" | tail -n 1 | cut -c1-160)"
+      continue
+    fi
+    printf -- '- FAIL %s: %s error(s)\n' "$t" "$n"
+    printf '%s\n' "$errs" | awk -F'\t' -v t="$t" '$1 != "count" && $1 != "-" && $1 != t { f = 1 } END { exit !f }' && dep_errors=true
+    printf '%s\n' "$errs" | awk -F'\t' -v t="$t" '$1 != "count" { printf "    %s%s\n", $2, ($1 != "-" && $1 != t ? "  (in " $1 ", a dependency)" : "") }'
+  done
+  if [ "$dep_errors" = true ]; then printf 'A target behind a failing dependency shows the dependency'"'"'s errors; its own come once the dependency builds.\n'; fi
+  printf '%d built, %d failed. This is a build only: nothing was tested, no UI was looked at, the Mac app was not built.\n' "$passed" "$failed"
+  [ "$keep" != true ] || printf 'Copy kept at %s\n' "$copy"
+  exit 0
+}
+
+if [ "$mode" = build-check ]; then
+  build_check "$@"
+fi
 
 if [ "$mode" = scan ]; then
   scan
