@@ -63,6 +63,12 @@ code { font: 12px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
     + ([$recent[] | "<tr><td class=\"mute\">\((.time // "") | esc)</td><td><code>\((.check // "") | esc)</code></td><td>\((.kind // "") | esc)</td><td>\((.what // "") | esc)</td></tr>"] | join(""))
     + "</table>"
   end)
++ (if $summary.rules then
+    "<h2>Rules that name a check</h2><p class=\"mute\">\($summary.rules.linked | esc) of \($summary.rules.total | esc) rule(s) name a check; \($summary.rules.unlinked | esc) name none.</p>"
+    + "<table><tr><th>Rule</th><th>Check</th><th>Catches in the period</th></tr>"
+    + ([$summary.rules.items | sort_by(-.caught, .file, .line)[] | "<tr><td>\(.text | esc) <span class=\"mute\">\(.file | esc):\(.line | esc)</span></td><td>\([.checks[].check | esc] | join(", "))</td><td>\(.caught)</td></tr>"] | join(""))
+    + "</table><div class=\"src\">Source: the <code>&lt;!-- check: ... --&gt;</code> comments in the rule files, counted against the catch log. A list for you: nothing is rewritten.</div>"
+  else "" end)
 + "<div class=\"src\">Source: <code>\($log | esc)</code>, kept on this machine by the hooks; it counts what they saw, not what they prevented.</div>
 <p class=\"src\">Read-only: this page changes no setting and no approval.</p>
 </body></html>"

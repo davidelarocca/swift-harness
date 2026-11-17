@@ -4763,6 +4763,139 @@ SWIFT_HARNESS_CATCH_MAX=8 hook guard.sh "$CB" "$(edit_input "$CB/Sources/Audio/E
 if [ "$(wc -l <"$CBL" | tr -d ' ')" -le 8 ] && tail -n 1 "$CBL" | jq -e '.check == "guard"' >/dev/null && ! grep -q '"what":"1"' "$CBL"; then ok "catch log: trimmed to its bound, keeping the newest lines"
 else nok "catch log: trimmed to its bound, keeping the newest lines" "$(wc -l <"$CBL") line(s): $(tail -n 2 "$CBL")"; fi
 
+# ---------- rules and the checks that enforce them (#148) ----------
+
+RF="$TMP/rules-fakes"; mkdir -p "$RF"
+cat >"$RF/swiftlint" <<'EOF'
+#!/bin/bash
+[ "$1" = rules ] || exit 0
+[ -z "${FAKE_SWIFTLINT_NONE:-}" ] || exit 1
+cat <<'TABLE'
++----------------+--------+-------------+
+| identifier     | opt-in | correctable | enabled in your config |
++----------------+--------+-------------+
+| line_length    | no     | no          | yes |
+| sorted_imports | yes    | yes         | no  |
+TABLE
+EOF
+chmod +x "$RF/swiftlint"
+rules() { # rules.sh arguments; prints "exit=<code>" then the output
+  local out code
+  out="$(PATH="$RF:$PATH" "$SCRIPTS/rules.sh" "$@" 2>&1)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$out"
+}
+R="$(new_project rules)"
+mkdir -p "$R/.claude/rules"
+cat >"$R/CLAUDE.md" <<'EOF'
+# App
+## Commands
+- Lint: `swiftlint lint`
+## Non-negotiable rules
+- Core is protected. <!-- check: guard -->
+- Views hold no logic.
+- No raw padding. <!-- check: lint ds_padding --> <!-- check: lint nope_rule -->
+- Shell changes are asked about. <!-- check: shell guard -->
+- A typo in the name. <!-- check: gaurd -->
+```
+- a bullet inside a fence is not a rule
+```
+## Definition of done
+- Tests pass.
+EOF
+cat >"$R/.claude/rules/arch.md" <<'EOF'
+---
+paths:
+  - "**/*.swift"
+---
+- Contracts hold. <!-- check: architecture contracts -->
+- A line nothing checks.
+EOF
+printf 'disabled_rules:\n  - trailing_whitespace\ncustom_rules:\n  ds_padding:\n    regex: x\n' >"$R/.swiftlint.yml"
+out="$(rules --project "$R" --all)"
+expect_result "rules: counts the rule lines, not the bullets of other sections or fences" 0 '^7 rule\(s\): 5 name a check, 2 name none\.' "$out"
+expect_result "rules: a check that is turned off is named, with why" 0 'shell guard: off, guardBash is not turned on' "$out"
+expect_result "rules: a name that is no check is called unknown" 0 'gaurd: unknown, no check called "gaurd"' "$out"
+expect_result "rules: a lint rule that exists nowhere is unknown" 0 'lint nope_rule: unknown' "$out"
+expect_result "rules: a custom lint rule of .swiftlint.yml holds" 0 '^7 rule' "$out" 'lint ds_padding: (off|unknown)'
+expect_result "rules: --all lists the rules nothing checks, with file and line" 0 'CLAUDE\.md:6: Views hold no logic\.' "$out"
+expect_result "rules: a bullet of Commands or Definition of done is not a rule" 0 '^7 rule' "$out" 'Tests pass|swiftlint lint'
+expect_result "rules: without --all it says how to list them" 0 'Run with --all' "$(rules --project "$R")"
+expect_result "rules: architecture contracts is off without the contract file" 0 'architecture contracts: off, no docs/architecture-contracts\.json' "$out"
+mkdir -p "$R/docs"; echo '{}' >"$R/docs/architecture-contracts.json"
+expect_result "rules: ... and holds with it" 0 '^7 rule' "$(rules --project "$R")" 'architecture contracts: off'
+jq '.guardBash = true' "$R/.claude/swift-harness.json" >"$R/cfg.tmp" && mv "$R/cfg.tmp" "$R/.claude/swift-harness.json"
+expect_result "rules: shell guard holds once guardBash is on" 0 '^7 rule' "$(rules --project "$R")" 'shell guard: off'
+if [ "$(rules --project "$R" --json | sed 1d | jq -c '[.total, .linked, .unlinked, (.broken | length)]')" = '[7,5,2,2]' ]; then ok "rules --json: the same counts, and the broken links"
+else nok "rules --json: the same counts, and the broken links" "$(rules --project "$R" --json)"; fi
+# Lint rules the yml does not name: default and opt-in rules come from swiftlint itself.
+printf '%s\n' '- Lines are short. <!-- check: lint line_length -->' '- Imports are sorted. <!-- check: lint sorted_imports -->' >>"$R/.claude/rules/arch.md"
+printf 'disabled_rules:\n  - line_length\n' >"$R/.swiftlint.yml"
+out="$(rules --project "$R")"
+expect_result "rules: a default rule listed in disabled_rules is off" 0 'lint line_length: off, line_length is in disabled_rules' "$out"
+expect_result "rules: an opt-in rule that opt_in_rules does not turn on is off" 0 'lint sorted_imports: off, sorted_imports is an opt-in rule' "$out"
+printf 'opt_in_rules:\n  - sorted_imports\n' >"$R/.swiftlint.yml"
+out="$(rules --project "$R")"
+expect_result "rules: a default rule holds, and so does an opt-in rule that is turned on" 0 '^[0-9]+ rule' "$out" 'lint (line_length|sorted_imports): '
+printf 'only_rules:\n  - sorted_imports\n' >"$R/.swiftlint.yml"
+expect_result "rules: with only_rules, a rule not listed does not run" 0 'lint line_length: off, only_rules does not list' "$(rules --project "$R")"
+printf 'opt_in_rules: []\n' >"$R/.swiftlint.yml"
+out="$(FAKE_SWIFTLINT_NONE=1 rules --project "$R")"
+expect_result "rules: with no way to list SwiftLint's rules, it says unchecked, not wrong" 0 'could not be checked here' "$out" 'lint line_length: (off|unknown)'
+# The doctor row.
+expect_row "doctor: broken rule links are a warning" "$(doctor "$R")" WARN Rules 'do not hold'
+RN="$(new_project rules-none)"
+printf '# App\n## Rules\n- A rule.\n- Another.\n' >"$RN/CLAUDE.md"
+expect_row "doctor: rules that name no check are only information" "$(doctor "$RN")" INFO Rules '2 rule\(s\), none names'
+RO="$(new_project rules-ok)"
+printf '# App\n## Rules\n- Core. <!-- check: guard -->\n- Another.\n' >"$RO/CLAUDE.md"
+expect_row "doctor: links that hold are a pass" "$(doctor "$RO")" PASS Rules '1 of 2 rule\(s\) name a check'
+RE="$(new_project rules-empty)"
+if ! doctor "$RE" | grep -q '| Rules |'; then ok "doctor: a project with no rule lines gets no Rules row"; else nok "doctor: a project with no rule lines gets no Rules row"; fi
+# The report counts the catches of each linked rule.
+RC="$(new_project rules-report)"
+printf '# App\n## Rules\n- Core. <!-- check: guard -->\n- Padding. <!-- check: lint ds_hardcoded_padding -->\n- Other lint. <!-- check: lint line_length -->\n- Quiet. <!-- check: security settings -->\n- Free.\n' >"$RC/CLAUDE.md"
+printf 'disabled_rules: []\ncustom_rules:\n  ds_hardcoded_padding:\n    regex: x\n' >"$RC/.swiftlint.yml"
+hook session-start.sh "$RC" '{"source":"startup"}' >/dev/null
+RCL="$(state_of "$RC")/catches.jsonl"
+now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+{
+  printf '{"time":"%s","session":"s","agent":"claude","check":"guard","kind":"asked","what":"a"}\n' "$now"
+  printf '{"time":"%s","session":"s","agent":"claude","check":"guard","kind":"blocked","what":"b"}\n' "$now"
+  printf '{"time":"%s","session":"s","agent":"claude","check":"guard","kind":"approved","what":"not a catch"}\n' "$now"
+  printf '{"time":"%s","session":"s","agent":"claude","check":"SwiftLint","kind":"reported","what":"2 issue(s) in A.swift: ds_hardcoded_padding, vertical_whitespace"}\n' "$now"
+  printf '{"time":"%s","session":"s","agent":"claude","check":"SwiftLint","kind":"reported","what":"1 issue(s) in B.swift: ds_hardcoded_padding_extra"}\n' "$now"
+} >"$RCL"
+out="$(report --project "$RC")"
+expect_result "report: a linked rule shows how often its check caught something" 0 '^- Core\. -> guard: 2 catch\(es\)$' "$out"
+expect_result "report: a lint rule is counted from the rule ids the catch names, whole ids only" 0 '^- Padding\. -> lint ds_hardcoded_padding: 1 catch\(es\)$' "$out"
+expect_result "report: a rule whose check caught nothing says so, and the list is for the user" 0 '^- Quiet\. -> security settings: no catch in the period$' "$out"
+expect_result "report: the heading counts linked and unlinked rules" 0 'Rules that name a check \(4 of 5; 1 name none\)' "$out"
+expect_result "report: --json carries the rules part" 0 '"caught": 2' "$(report --project "$RC" --json)"
+RH="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/report.sh" --project "$RC" --html 2>&1)"
+if grep -q 'Rules that name a check' "$RH" 2>/dev/null && grep -q '<td>guard</td><td>2</td>' "$RH"; then ok "report --html: a table of the rules and their catches"
+else nok "report --html: a table of the rules and their catches" "$RH"; fi
+RZ="$(new_project rules-report-none)"
+printf '# App\n## Rules\n- Free.\n' >"$RZ/CLAUDE.md"
+hook session-start.sh "$RZ" '{"source":"startup"}' >/dev/null
+expect_result "report: with no rule naming a check, the part is left out" 0 '^swift-harness report for ' "$(report --project "$RZ")" 'Rules that name'
+# The setup templates: every link they ship holds in a project set up from them.
+RT="$(new_project rules-templates)"
+mkdir -p "$RT/.claude/rules" "$RT/docs"
+cp "$PLUGIN/skills/setup/templates/CLAUDE.md" "$RT/CLAUDE.md"
+cp "$PLUGIN/skills/setup/templates/rules/"*.md "$RT/.claude/rules/"
+cp "$PLUGIN/skills/setup/templates/swiftlint.yml" "$RT/.swiftlint.yml"
+echo '{}' >"$RT/docs/architecture-contracts.json"
+jq '.lint = "swiftlint"' "$RT/.claude/swift-harness.json" >"$RT/cfg.tmp" && mv "$RT/cfg.tmp" "$RT/.claude/swift-harness.json"
+out="$(FAKE_SWIFTLINT_NONE=1 rules --project "$RT" --json)"
+if [ "$(sed 1d <<<"$out" | jq -c '[(.linked > 8), (.broken | length), (.unchecked | length)]')" = '[true,0,0]' ]; then ok "rules: every link the setup templates ship holds"
+else nok "rules: every link the setup templates ship holds" "$(sed 1d <<<"$out" | jq -c '[.broken, .unchecked]')"; fi
+if [ "$(grep -c 'check:' "$PLUGIN/skills/setup/templates/CLAUDE.md")" -ge 6 ]; then ok "templates: the main rules name their checks"; else nok "templates: the main rules name their checks"; fi
+RNum="$(new_project rules-numbered)"
+printf '# App\n## Architecture rules\n1. Layers hold. <!-- check: guard -->\n2) Views have no logic.\n* Star item.\n' >"$RNum/CLAUDE.md"
+expect_result "rules: numbered and starred items are rules too" 0 '^3 rule\(s\): 1 name a check, 2 name none\.' "$(rules --project "$RNum")"
+expect_result "rules: usage error" 2 'usage' "$(rules --bogus)"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
