@@ -117,6 +117,25 @@ turns="$(lines_of "$hist" | jq -sc --arg since "$since" '
 [ -n "$turns" ] || turns='{"records":0,"outcomes":{},"seconds":0}'
 summary="$(printf '%s' "$summary" | jq -c --argjson turns "$turns" --argjson unread "$unread" '. + {turns: $turns} + (if $unread > 0 then {unread_lines: $unread} else {} end)')"
 
+# The rules that name a check (#148), with how often that check caught something in the period.
+# Only blocked, reported and asked count as a catch. A SwiftLint rule is counted from the rule
+# ids the catch line names. No rule names a check: the part is left out.
+rules_part="$("$(dirname "$0")/rules.sh" --project "$SH_ROOT" --json 2>/dev/null)" || rules_part=""
+if [ -n "$rules_part" ] && [ "$(jq -r '.linked // 0' <<<"$rules_part")" -gt 0 ]; then
+  events="$(lines_of "$log" | jq -sc --arg since "$since" 'map(select(type == "object" and (.time // "") >= $since and (.kind == "blocked" or .kind == "reported" or .kind == "asked")))' 2>/dev/null)"
+  [ -n "$events" ] || events='[]'
+  rules_part="$(jq -c --argjson events "$events" '
+    def caught($c): [$events[] | select(
+        if ($c | startswith("lint ")) then .check == "SwiftLint" and ((.what // "") | split(": ") | .[1:] | join(": ") | split(", ") | index($c | sub("^lint "; "")) != null)
+        elif ($c | startswith("verify")) then false
+        else .check == $c end)];
+    {total, linked, unlinked,
+     items: [.rules[] | select(.links | length > 0) | . as $r
+       | {file, line, text, checks: [.links[] | {check, status, caught: (caught(.check) | length)}]}
+       | . + {caught: ([.checks[].caught] | add)}]}' <<<"$rules_part")"
+  summary="$(printf '%s' "$summary" | jq -c --argjson rules "$rules_part" '. + {rules: $rules}')"
+fi
+
 if [ "$json" = true ]; then
   printf '%s\n' "$summary" | jq --arg since "$since" '{since: $since} + .'
   exit 0
@@ -168,4 +187,10 @@ printf '%s\n' "$summary" | jq -r --arg label "$label" --arg root "$SH_ROOT" '
      ,
      (if (.skipped | length) > 0 then "Not checked:" else empty end),
      (.skipped[] | "- \(.check): \(.times) time(s), \(.why | join("; "))")
-   end)'
+   end),
+  (if .rules then
+     "Rules that name a check (\(.rules.linked) of \(.rules.total); \(.rules.unlinked) name none):",
+     (.rules.items | sort_by(-.caught, .file, .line)[] | "- \(.text | .[0:80]) -> \([.checks[].check] | join(", ")): "
+        + (if .caught == 0 then "no catch in the period" else "\(.caught) catch(es)" end)),
+     (if any(.rules.items[]; .caught == 0) then "A rule whose check caught nothing may belong outside the files read into every session (the check still teaches when it fails); a rule caught often may need a better explanation. Nothing is rewritten: this is a list for you." else empty end)
+   else empty end)'

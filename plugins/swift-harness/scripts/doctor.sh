@@ -516,6 +516,21 @@ else
   fi
 fi
 
+# ---------- rules and their checks (#148) ----------
+
+rules_json="$("$here/rules.sh" --project "$SH_ROOT" --json 2>/dev/null)" || rules_json=""
+if [ -n "$rules_json" ] && [ "$(jq -r '.total // 0' <<<"$rules_json")" -gt 0 ]; then
+  r_total="$(jq -r .total <<<"$rules_json")"; r_linked="$(jq -r .linked <<<"$rules_json")"
+  r_broken="$(jq -r '[.broken[] | "\(.file):\(.line) \(.check) (\(.status): \(.why))"] | join("; ")' <<<"$rules_json")"
+  if [ -n "$r_broken" ]; then
+    row WARN Rules "$r_linked of $r_total rule(s) name a check; these links do not hold: $r_broken. Fix: turn the check on, or correct the name in the rule's <!-- check: ... --> comment"
+  elif [ "$r_linked" -eq 0 ]; then
+    row INFO Rules "$r_total rule(s), none names the check that enforces it. Add <!-- check: NAME --> at the end of a rule's line to link it (rules.sh --all lists the ones nothing checks)"
+  else
+    row PASS Rules "$r_linked of $r_total rule(s) name a check, and each check exists and is on; the others are rules nothing checks (rules.sh --all lists them)"
+  fi
+fi
+
 # ---------- last verification ----------
 
 if [ "$in_git" = true ] && [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then

@@ -22,13 +22,13 @@
 - UI: reuse before creating. Check `docs/COMPONENT_REGISTRY.md` and search the code before adding any view, style or modifier.
 - Product coherence: before showing an entity in a new place, read `docs/PRODUCT_MAP.md`. From there the user can open it, reach the related entities shown with it, and use its usual actions.
 - Layout: a screen in `docs/LAYOUT_CONTRACT.md` must fit at every size of its row. Change its layout only with its sizes in mind, and keep the contract and its layout tests in the same change.
-- No raw visual values outside the design system: colors, font sizes, spacing, radii and animation durations come from tokens.
+- No raw visual values outside the design system: colors, font sizes, spacing, radii and animation durations come from tokens. <!-- check: lint ds_hardcoded_color --> <!-- check: lint ds_hardcoded_font_size --> <!-- check: lint ds_hardcoded_padding --> <!-- check: lint ds_hardcoded_spacing --> <!-- check: lint ds_hardcoded_radius --> <!-- check: lint ds_hardcoded_animation -->
 - Views do not own business logic and never talk to {{PROTECTED_AREA_NAME}} directly.
-- {{PROTECTED_PATHS}} are protected. Changes there need an explicit request and a plan first.
-- Snapshot baselines (`snapshots/`) change only when the user approves new images with `/swift-harness:approve-snapshots`. A failing snapshot is either a defect to fix or a change to show the user.
-- Security settings (entitlements, App Transport Security, sandbox and hardened runtime build settings) are never relaxed to make something work. A change fails the end-of-turn check until the user approves it with `/swift-harness:approve-security`; propose the narrowest option and ask.
-- Protected paths are changed only through Edit or Write, where the user is asked. Do not change them with shell commands (`sed`, `cp`, `mv`, `rm`); such changes are reported to the user.
-- Concurrency escape hatches (`@unchecked Sendable`, `nonisolated(unsafe)`, `@preconcurrency`, `assumeIsolated`) are not a way to make code compile. When one is needed, give the reason on the same line: `// concurrency: <why it is safe>`.
+- {{PROTECTED_PATHS}} are protected. Changes there need an explicit request and a plan first. <!-- check: guard -->
+- Snapshot baselines (`snapshots/`) change only when the user approves new images with `/swift-harness:approve-snapshots`. A failing snapshot is either a defect to fix or a change to show the user. <!-- check: snapshot baselines -->
+- Security settings (entitlements, App Transport Security, sandbox and hardened runtime build settings) are never relaxed to make something work. A change fails the end-of-turn check until the user approves it with `/swift-harness:approve-security`; propose the narrowest option and ask. <!-- check: security settings -->
+- Protected paths are changed only through Edit or Write, where the user is asked. Do not change them with shell commands (`sed`, `cp`, `mv`, `rm`); such changes are reported to the user. <!-- check: protected paths -->
+- Concurrency escape hatches (`@unchecked Sendable`, `nonisolated(unsafe)`, `@preconcurrency`, `assumeIsolated`) are not a way to make code compile. When one is needed, give the reason on the same line: `// concurrency: <why it is safe>`. <!-- check: lint concurrency_unchecked_sendable --> <!-- check: lint concurrency_nonisolated_unsafe --> <!-- check: lint concurrency_preconcurrency --> <!-- check: lint concurrency_assume_isolated -->
 - Do not edit `project.pbxproj` by hand. Add files through the file system{{PBXPROJ_NOTE}}.
 - One feature per branch. Do not rewrite unrelated code while implementing a feature.
 
