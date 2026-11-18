@@ -5,8 +5,10 @@
 #   porting.sh summary [project-dir]  platforms, then one line per module, then dependencies
 #   porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]
 #                                     builds each package target for the iOS Simulator, on a COPY
+#   porting.sh test-check [project-dir] [--target NAME]... [--device NAME] [--keep]
+#                                     runs package test targets on an iPhone simulator, on a COPY
 #
-# build-check is the only mode that runs anything: it copies the project to a temporary folder
+# build-check and test-check are the only modes that run anything. build-check copies the project to a temporary folder
 # (no .git, .build, DerivedData, secrets), runs `swift build --target NAME --triple
 # arm64-apple-ios<V>-simulator` there, so the project's own manifest and compiler run on the copy
 # and nothing in the project changes. Package dependencies, if any, are fetched into the copy.
@@ -15,6 +17,15 @@
 # target that depends on a failing one reports the same errors. V defaults to the SDK's major
 # version. It proves a build, nothing else: no test ran, no UI was looked at, the Mac app was not
 # built. A static scan misses what only the compiler sees (C APIs such as fenv.h).
+#
+# test-check makes the same kind of copy (also without a root .xcodeproj or .xcworkspace, so
+# xcodebuild opens the package), writes a temporary scheme into it that builds and runs only the
+# test targets (the folders of Tests/, or --target), and runs `xcodebuild test` on the first iPhone
+# simulator of the newest iOS runtime (or --device NAME). -only-testing is not enough: it still
+# builds every target, macOS-only ones too. The counts and the first failures come from the
+# result bundle; tests that do not build show the compiler's first errors. A simulator it found
+# shut down is shut down again. No UI is looked at, the Mac app is not built, a skipped test
+# proves nothing.
 #
 # Levels: blocks (macOS-only API compiled on iOS: the module does not build for iOS as is),
 # adapt (available on iOS but behaves differently: hover, keyboard, menus, drag and drop),
@@ -32,8 +43,8 @@ mode="${1:-}"
 dir_arg=""
 case "${1:-}" in --* | "") ;; *) dir_arg="$1"; shift ;; esac
 root="$(cd "${dir_arg:-$PWD}" 2>/dev/null && pwd -P)" || { printf 'porting: no such folder: %s\n' "$dir_arg"; exit 2; }
-usage() { printf 'usage: porting.sh scan|summary [project-dir]\n       porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]\n'; exit 2; }
-case "$mode" in scan | summary) [ $# -eq 0 ] || usage ;; build-check) ;; *) usage ;; esac
+usage() { printf 'usage: porting.sh scan|summary [project-dir]\n       porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]\n       porting.sh test-check [project-dir] [--target NAME]... [--device NAME] [--keep]\n'; exit 2; }
+case "$mode" in scan | summary) [ $# -eq 0 ] || usage ;; build-check | test-check) ;; *) usage ;; esac
 
 list() { git -C "$root" -c core.quotepath=off ls-files -co --exclude-standard "$@" 2>/dev/null; }
 packages="$(list 'Package.swift' '*/Package.swift' | sed -e 's|/\{0,1\}Package\.swift$||' -e 's|^$|.|' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
@@ -149,6 +160,118 @@ scan() {
   )
 }
 
+make_copy() { # sets work and copy: a copy of the project with no .git, build output or secrets
+  work="$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-port.XXXXXX")" || exit 1
+  work="$(cd "$work" && pwd -P)" # the physical path: the compiler prints it, not a link
+  copy="$work/copy"
+  if [ "$keep" != true ]; then trap 'rm -rf "$work"' EXIT; fi
+  mkdir -p "$copy"
+  rsync -a --exclude .git --exclude .build --exclude DerivedData --exclude Pods --exclude Carthage \
+    --exclude '.env*' --exclude 'Secrets*' --exclude '*.p12' --exclude '*.pem' --exclude '*.mobileprovision' \
+    "$@" "$root/" "$copy/" || { printf 'porting: could not copy the project.\n'; exit 1; }
+}
+
+first_errors() { # $1 compiler output -> "module<TAB>file:line:col: message" for the first 3, then "count<TAB>N"
+  # error lines "path:line:col: error: message", the path read as the module that holds the file.
+  # Also "path:line:col: fatal error: message" (a missing C header) and the new build system's
+  # "error: path:line:col message".
+  printf '%s\n' "$1" | sed $'s/\x1b\\[[0-9;]*m//g' | awk -v copy="$copy/" '
+    /^\/.*:[0-9]+:[0-9]+: fatal error: / { sub(/: fatal error: /, ": error: ") }
+    /^error: \/.*:[0-9]+:[0-9]+ / { l = substr($0, 8); if (match(l, /:[0-9]+:[0-9]+ /)) $0 = substr(l, 1, RSTART + RLENGTH - 2) ": error: " substr(l, RSTART + RLENGTH) }
+    /^\/.*:[0-9]+:[0-9]+: error: / {
+      f = $0; sub(/:[0-9]+:[0-9]+: error: .*/, "", f); line = $0; sub(/^[^:]*:/, "", line)
+      loc = line; sub(/: error: .*/, "", loc); msg = line; sub(/^[0-9]+:[0-9]+: error: /, "", msg)
+      rel = f; if (index(rel, copy) == 1) rel = substr(rel, length(copy) + 1)
+      k = rel ":" loc ": " msg
+      if (!(k in seen)) { seen[k] = 1; n++; if (n <= 3) { mod = "-"; if (match(rel, /^Sources\/[^\/]+\//)) mod = substr(rel, 9, RLENGTH - 9); printf "%s\t%s\n", mod, k } }
+    }
+    END { print "count\t" n + 0 }'
+}
+
+test_check() {
+  local targets=() device="" keep=false t
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --target) [ $# -ge 2 ] || usage; targets+=("$2"); shift 2 ;;
+      --device) [ $# -ge 2 ] || usage; device="$2"; shift 2 ;;
+      --keep) keep=true; shift ;;
+      *) usage ;;
+    esac
+  done
+  for t in ${targets[@]+"${targets[@]}"}; do [[ "$t" =~ ^[A-Za-z0-9_.-]+$ ]] || usage; done
+  local tool
+  for tool in xcodebuild xcrun jq; do
+    command -v "$tool" >/dev/null 2>&1 || { printf 'porting: %s is needed to run tests on the iOS Simulator.\n' "$tool"; exit 1; }
+  done
+  [ -f "$root/Package.swift" ] || { printf 'porting: no Package.swift at %s: test-check runs the test targets of a root package.\n' "$root"; exit 1; }
+  if [ ${#targets[@]} -eq 0 ]; then
+    for t in "$root"/Tests/*/; do [ -d "$t" ] && targets+=("$(basename "$t")"); done
+  fi
+  [ ${#targets[@]} -gt 0 ] || { printf 'porting: no test target found under Tests/. Name them with --target.\n'; exit 1; }
+
+  # The simulator: the first iPhone of the newest iOS runtime, or the one --device names.
+  local sim udid name version state
+  sim="$(xcrun simctl list devices available --json 2>/dev/null | jq -r --arg want "$device" '
+    [.devices // {} | to_entries[]
+      | select(.key | test("SimRuntime\\.iOS-[0-9]+-[0-9]+$"))
+      | (.key | capture("iOS-(?<a>[0-9]+)-(?<b>[0-9]+)$")) as $v
+      | {v: [($v.a | tonumber), ($v.b | tonumber)], ver: "\($v.a).\($v.b)", d: .value[]}
+      | select(.d.isAvailable != false)
+      | select(if $want == "" then (.d.name | startswith("iPhone")) else .d.name == $want end)]
+    | sort_by(.v | map(-.)) | .[0] // empty | [.d.udid, .d.name, .ver, .d.state] | @tsv' 2>/dev/null)"
+  if [ -z "$sim" ]; then
+    if [ -n "$device" ]; then printf 'porting: no available iOS simulator called "%s" (xcrun simctl list devices available).\n' "$device"
+    else printf 'porting: no iPhone simulator available (Xcode > Settings > Components installs an iOS runtime).\n'; fi
+    exit 1
+  fi
+  IFS=$'\t' read -r udid name version state <<<"$sim"
+
+  # A copy without the root Xcode project or workspace, so xcodebuild opens the package, and a
+  # temporary scheme in it that builds and runs only these test targets (-only-testing would still
+  # build every target of the package, macOS-only ones too).
+  make_copy --exclude '/*.xcodeproj' --exclude '/*.xcworkspace'
+  local scheme_dir="$copy/.swiftpm/xcode/xcshareddata/xcschemes" refs entries="" testables=""
+  mkdir -p "$scheme_dir"
+  for t in "${targets[@]}"; do
+    refs="<BuildableReference BuildableIdentifier=\"primary\" BlueprintIdentifier=\"$t\" BuildableName=\"$t\" BlueprintName=\"$t\" ReferencedContainer=\"container:\"></BuildableReference>"
+    entries="$entries<BuildActionEntry buildForTesting=\"YES\" buildForRunning=\"NO\" buildForProfiling=\"NO\" buildForArchiving=\"NO\" buildForAnalyzing=\"NO\">$refs</BuildActionEntry>"
+    testables="$testables<TestableReference skipped=\"NO\">$refs</TestableReference>"
+  done
+  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<Scheme LastUpgradeVersion="2600" version="1.7">' \
+    "<BuildAction parallelizeBuildables=\"YES\" buildImplicitDependencies=\"YES\"><BuildActionEntries>$entries</BuildActionEntries></BuildAction>" \
+    "<TestAction buildConfiguration=\"Debug\" selectedDebuggerIdentifier=\"\" selectedLauncherIdentifier=\"Xcode.IDEFoundation.Launcher.PosixSpawn\" shouldUseLaunchSchemeArgsEnv=\"YES\"><Testables>$testables</Testables></TestAction>" \
+    '</Scheme>' >"$scheme_dir/swift-harness-port-tests.xcscheme"
+
+  printf 'Tests on the iOS Simulator (%s, iOS %s) on a copy of %s:\n' "$name" "$version" "$root"
+  printf 'Test targets: %s\n' "$(printf '%s\n' "${targets[@]}" | paste -sd, - | sed 's/,/, /g')"
+  local out summary errs n
+  out="$(cd "$copy" && xcodebuild test -scheme swift-harness-port-tests -destination "platform=iOS Simulator,id=$udid" \
+    -derivedDataPath "$work/dd" -resultBundlePath "$work/run.xcresult" </dev/null 2>&1)"
+  summary=""
+  [ -d "$work/run.xcresult" ] && summary="$(xcrun xcresulttool get test-results summary --path "$work/run.xcresult" 2>/dev/null)"
+  if [ "$(jq -r '.totalTestCount // 0' <<<"${summary:-{\}}" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+    jq -r '"- \(.totalTestCount) test(s): \(.passedTests // 0) passed, \(.failedTests // 0) failed, \(.skippedTests // 0) skipped" + (if (.expectedFailures // 0) > 0 then ", \(.expectedFailures) expected failure(s)" else "" end) + ".",
+      (if ((.testFailures // []) | length) > 0 then "Failures\(if (.testFailures | length) > 5 then " (first 5)" else "" end):" else empty end),
+      ((.testFailures // [])[:5][] | "    \(.targetName // "?")/\(.testName // "?"): \((.failureText // "") | gsub("\\s+"; " ") | .[:200])")' <<<"$summary"
+  elif [ -d "$work/run.xcresult" ] && [ -z "$summary" ]; then
+    printf -- '- the result bundle could not be read (xcresulttool get test-results needs Xcode 16 or later); xcodebuild said: %s\n' \
+      "$(printf '%s\n' "$out" | grep -m1 -E '\*\* TEST (SUCCEEDED|FAILED) \*\*' || printf 'nothing about the tests')"
+  else
+    errs="$(first_errors "$out")"
+    n="$(printf '%s\n' "$errs" | awk -F'\t' '$1 == "count" { print $2 }')"
+    if [ "${n:-0}" -gt 0 ]; then
+      printf -- '- the tests did not build: %s error(s)\n' "$n"
+      printf '%s\n' "$errs" | awk -F'\t' '$1 != "count" { printf "    %s\n", $2 }'
+    else
+      printf -- '- the tests did not run: %s\n' "$(printf '%s\n' "$out" | sed $'s/\x1b\\[[0-9;]*m//g' | grep -m1 'error:' || printf '%s\n' "$out" | tail -n 1)" | cut -c1-240
+    fi
+  fi
+  [ "$state" != Shutdown ] || xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+  printf 'This ran the package'"'"'s test targets on one simulator: no UI was looked at, the Mac app was not built, and a skipped test proves nothing.\n'
+  [ "$keep" != true ] || printf 'Copy kept at %s\n' "$copy"
+  exit 0
+}
+
 build_check() {
   local targets=() ios="" keep=false t
   while [ $# -gt 0 ]; do
@@ -175,15 +298,8 @@ build_check() {
   fi
   [ ${#targets[@]} -gt 0 ] || { printf 'porting: no target found under Sources/. Name them with --target.\n'; exit 1; }
 
-  local work copy arch out status n
-  work="$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-port.XXXXXX")" || exit 1
-  work="$(cd "$work" && pwd -P)" # the physical path: the compiler prints it, not a link
-  copy="$work/copy"
-  if [ "$keep" != true ]; then trap 'rm -rf "$work"' EXIT; fi
-  mkdir -p "$copy"
-  rsync -a --exclude .git --exclude .build --exclude DerivedData --exclude Pods --exclude Carthage \
-    --exclude '.env*' --exclude 'Secrets*' --exclude '*.p12' --exclude '*.pem' --exclude '*.mobileprovision' \
-    "$root/" "$copy/" || { printf 'porting: could not copy the project.\n'; exit 1; }
+  local arch out status n
+  make_copy
   arch="$(uname -m)"; [ "$arch" = arm64 ] || arch=x86_64
   printf 'Build for the iOS Simulator (%s, iOS %s, SDK %s) on a copy of %s:\n' "$arch" "$ios" "${sdk_version:-?}" "$root"
   local failed=0 passed=0 dep_errors=false
@@ -191,16 +307,7 @@ build_check() {
     out="$(cd "$copy" && swift build --scratch-path "$work/build" --target "$t" --triple "$arch-apple-ios$ios-simulator" --sdk "$sdk" </dev/null 2>&1)"; status=$?
     if [ "$status" -eq 0 ]; then printf -- '- PASS %s\n' "$t"; passed=$((passed + 1)); continue; fi
     failed=$((failed + 1))
-    # error lines "path:line:col: error: message", the path read as the module that holds the file.
-    errs="$(printf '%s\n' "$out" | sed $'s/\x1b\\[[0-9;]*m//g' | awk -v copy="$copy/" '
-      /^\/.*:[0-9]+:[0-9]+: error: / {
-        f = $0; sub(/:[0-9]+:[0-9]+: error: .*/, "", f); line = $0; sub(/^[^:]*:/, "", line)
-        loc = line; sub(/: error: .*/, "", loc); msg = line; sub(/^[0-9]+:[0-9]+: error: /, "", msg)
-        rel = f; if (index(rel, copy) == 1) rel = substr(rel, length(copy) + 1)
-        k = rel ":" loc ": " msg
-        if (!(k in seen)) { seen[k] = 1; n++; if (n <= 3) { mod = "-"; if (match(rel, /^Sources\/[^\/]+\//)) mod = substr(rel, 9, RLENGTH - 9); printf "%s\t%s\n", mod, k } }
-      }
-      END { print "count\t" n + 0 }')"
+    errs="$(first_errors "$out")"
     n="$(printf '%s\n' "$errs" | awk -F'\t' '$1 == "count" { print $2 }')"
     if [ "${n:-0}" -eq 0 ]; then
       printf -- '- FAIL %s: the build failed with no error line the scan could read: %s\n' "$t" "$(printf '%s\n' "$out" | tail -n 1 | cut -c1-160)"
@@ -218,6 +325,9 @@ build_check() {
 
 if [ "$mode" = build-check ]; then
   build_check "$@"
+fi
+if [ "$mode" = test-check ]; then
+  test_check "$@"
 fi
 
 if [ "$mode" = scan ]; then
