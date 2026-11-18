@@ -92,7 +92,7 @@ scan() {
       else if (!active()) return
       printf "%s\t%s\t%s:%d\t%s\n", level, mod, FILENAME, FNR, signal
     }
-    FNR == 1 { depth = 0; incomment = 0; inmls = 0; mod = module(FILENAME) }
+    FNR == 1 { depth = 0; incomment = 0; inmls = 0; coreaudio = 0; mod = module(FILENAME) }
     {
       line = $0
       # Block comments, then line comments and string contents, so text never counts as code.
@@ -147,6 +147,11 @@ scan() {
       }
       if (line ~ /(^|[^A-Za-z0-9_])(fenv_t|fegetenv|fesetenv|feholdexcept|feupdateenv)([^A-Za-z0-9_]|$)/) hit("blocks", "floating-point environment, fenv (not visible to Swift on iOS)")
       if (line ~ /\.(withSecurityScope|securityScopeAllowOnlyReadAccess)([^A-Za-z0-9_]|$)/) hit("blocks", "security-scoped bookmark option (macOS only)")
+      if (line ~ /\.loadInProcess([^A-Za-z0-9_]|$)/) hit("blocks", ".loadInProcess (audio unit option, macOS only)")
+      # On macOS AudioToolbox brings CoreAudio with it; on iOS it does not, and the buffer list
+      # pointer lives there. An import inside a branch iOS does not compile does not count.
+      if (active() && line ~ /^[ \t]*(@[A-Za-z_]+[ \t]+)*import[ \t]+(CoreAudio|AVFAudio|AVFoundation)([ \t.;]|$)/) coreaudio = 1
+      if (!coreaudio && line ~ /(^|[^A-Za-z0-9_])UnsafeMutableAudioBufferListPointer([^A-Za-z0-9_]|$)/) hit("blocks", "UnsafeMutableAudioBufferListPointer without import CoreAudio (AudioToolbox does not bring it on iOS)")
 
       if (line ~ /\.onHover[ \t]*[({]/ || line ~ /\.onContinuousHover/) hit("adapt", "hover (needs a touch alternative)")
       if (line ~ /\.(keyboardShortcut|onKeyPress)[ \t]*\(/) hit("adapt", "keyboard (no keyboard on most iPhones)")

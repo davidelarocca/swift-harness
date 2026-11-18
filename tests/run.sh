@@ -5089,6 +5089,27 @@ expect_result "test-check: no iPhone simulator says how to get one" 1 'no iPhone
 expect_result "test-check: without a root Package.swift it says so" 1 'no Package\.swift' "$(tcrun "$BN")"
 expect_result "test-check: a bad target name is a usage error" 2 'usage' "$(tcrun "$TC" --target 'a b')"
 
+# ---------- porting: audio APIs only the compiler showed ----------
+
+AU="$TMP/au-project"
+mkdir -p "$AU/Sources/Effects"
+printf '// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "X", targets: [])\n' >"$AU/Package.swift"
+printf 'import AudioToolbox\nimport AVFoundation\nfunc make() async throws -> AVAudioUnit {\n  try await AVAudioUnit.instantiate(with: d, options: .loadInProcess)\n}\n' >"$AU/Sources/Effects/Unit.swift"
+printf 'import AudioToolbox\nfunc f(_ p: UnsafeMutablePointer<AudioBufferList>) {\n  let b = UnsafeMutableAudioBufferListPointer(p)\n}\n' >"$AU/Sources/Effects/Kernel.swift"
+printf 'import AudioToolbox\nimport CoreAudio\nfunc g(_ p: UnsafeMutablePointer<AudioBufferList>) {\n  let b = UnsafeMutableAudioBufferListPointer(p)\n}\n' >"$AU/Sources/Effects/Fixed.swift"
+printf 'import AVFAudio\nfunc h(_ p: UnsafeMutablePointer<AudioBufferList>) {\n  let b = UnsafeMutableAudioBufferListPointer(p)\n}\n' >"$AU/Sources/Effects/ViaAVFAudio.swift"
+printf '#if os(macOS)\nimport AudioToolbox\nlet o: AudioComponentInstantiationOptions = .loadInProcess\n#endif\n' >"$AU/Sources/Effects/Guarded.swift"
+git -C "$AU" init -q
+auscan="$("$SCRIPTS/porting.sh" scan "$AU" 2>&1)"
+expect_result "porting: .loadInProcess blocks iOS, with its line" 0 'blocks	Sources/Effects	Sources/Effects/Unit\.swift:4	\.loadInProcess' "exit=0
+$auscan"
+expect_result "porting: the buffer list pointer without import CoreAudio blocks iOS" 0 'blocks	Sources/Effects	Sources/Effects/Kernel\.swift:3	UnsafeMutableAudioBufferListPointer without import CoreAudio' "exit=0
+$auscan"
+expect_result "porting: ... not when the file imports CoreAudio or AVFAudio" 0 '' "exit=0
+$auscan" 'Fixed\.swift|ViaAVFAudio\.swift'
+expect_result "porting: .loadInProcess inside #if os(macOS) is guarded" 0 'guarded	Sources/Effects	Sources/Effects/Guarded\.swift:3	\.loadInProcess' "exit=0
+$auscan"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
