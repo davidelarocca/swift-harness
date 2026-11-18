@@ -173,7 +173,11 @@ make_copy() { # sets work and copy: a copy of the project with no .git, build ou
 
 first_errors() { # $1 compiler output -> "module<TAB>file:line:col: message" for the first 3, then "count<TAB>N"
   # error lines "path:line:col: error: message", the path read as the module that holds the file.
+  # Also "path:line:col: fatal error: message" (a missing C header) and the new build system's
+  # "error: path:line:col message".
   printf '%s\n' "$1" | sed $'s/\x1b\\[[0-9;]*m//g' | awk -v copy="$copy/" '
+    /^\/.*:[0-9]+:[0-9]+: fatal error: / { sub(/: fatal error: /, ": error: ") }
+    /^error: \/.*:[0-9]+:[0-9]+ / { l = substr($0, 8); if (match(l, /:[0-9]+:[0-9]+ /)) $0 = substr(l, 1, RSTART + RLENGTH - 2) ": error: " substr(l, RSTART + RLENGTH) }
     /^\/.*:[0-9]+:[0-9]+: error: / {
       f = $0; sub(/:[0-9]+:[0-9]+: error: .*/, "", f); line = $0; sub(/^[^:]*:/, "", line)
       loc = line; sub(/: error: .*/, "", loc); msg = line; sub(/^[0-9]+:[0-9]+: error: /, "", msg)

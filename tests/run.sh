@@ -4934,6 +4934,12 @@ case " ${FAKE_SWIFT_FAIL:-} " in
     printf '%s/Sources/DSP/Denormals.swift:4:3: error: cannot find '"'"'fegetenv'"'"' in scope\n' "$PWD"
     echo "error: Build failed"; exit 1 ;;
 esac
+case " ${FAKE_SWIFT_C:-} " in
+  *" $target "*) # the new build system writes a C error as "error: path:line:col message"
+    printf 'error: %s/Sources/IO/io.c:3:10 '"'"'IOKit/a.h'"'"' file not found\n' "$PWD"
+    printf '%s/Sources/IO/io.c:4:10: fatal error: '"'"'IOKit/b.h'"'"' file not found\n' "$PWD"
+    echo "error: Build failed"; exit 1 ;;
+esac
 echo "Build complete!"
 EOF
 chmod +x "$BF/xcrun" "$BF/swift"
@@ -4969,6 +4975,9 @@ out="$(bc "$BC" --target Core --ios 17.0 --keep)"
 expect_result "build-check: --target limits it, --ios sets the version, --keep says where the copy is" 0 'iOS 17\.0.*- PASS Core.*Copy kept at ' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
 if [ "$(grep -c -- '--target' "$TMP/bc-swift.log")" = 1 ] && grep -q 'ios17.0-simulator' "$TMP/bc-swift.log"; then ok "build-check: only the named target was built"; else nok "build-check: only the named target was built" "$(cat "$TMP/bc-swift.log")"; fi
+out="$(FAKE_SWIFT_C="IO" bc "$BC" --target IO)"
+expect_result "build-check: reads C errors in the new build system's form and fatal errors" 0 'FAIL IO: 2 error\(s\) +Sources/IO/io\.c:3:10: .IOKit/a\.h. file not found +Sources/IO/io\.c:4:10: .IOKit/b\.h. file not found' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
 rm -rf "$TMP/bc-tmp"; mkdir -p "$TMP/bc-tmp"
 expect_result "build-check: a bad --ios is a usage error" 2 'usage' "$(bc "$BC" --ios latest)"
 expect_result "build-check: an unknown option is a usage error" 2 'usage' "$(bc "$BC" --bogus)"
