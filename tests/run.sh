@@ -4978,6 +4978,106 @@ expect_result "build-check: without a simulator SDK it says so" 1 'no iOS Simula
 expect_result "porting: scan still takes no build options" 2 'usage' "exit=$("$SCRIPTS/porting.sh" scan "$BC" --keep >/dev/null 2>&1; echo $?)
 usage"
 
+# ---------- porting: test-check ----------
+
+TC="$TMP/tc-project"
+mkdir -p "$TC/Sources/Core" "$TC/Sources/MacOnly" "$TC/Tests/CoreTests" "$TC/Tests/MacOnlyTests" "$TC/App.xcodeproj" "$TC/.build"
+printf '// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "X", targets: [])\n' >"$TC/Package.swift"
+echo 'let c = 1' >"$TC/Sources/Core/C.swift"
+echo 'import AppKit' >"$TC/Sources/MacOnly/M.swift"
+echo 'import Testing' >"$TC/Tests/CoreTests/T.swift"
+echo 'import Testing' >"$TC/Tests/MacOnlyTests/T.swift"
+echo 'secret' >"$TC/Secrets.xcconfig"
+echo 'old build' >"$TC/.build/stale"
+TF="$TMP/tc-fakes"; mkdir -p "$TF" "$TMP/tc-tmp"
+cat >"$TF/xcrun" <<'EOF'
+#!/bin/bash
+# fake xcrun: simctl list and shutdown, xcresulttool summary
+echo "xcrun $*" >>"$FAKE_TC_LOG"
+case "$*" in
+  "simctl list devices available --json") cat "$FAKE_SIMS" ;;
+  "simctl shutdown "*) ;;
+  "xcresulttool get test-results summary --path "*) [ -n "${FAKE_SUMMARY:-}" ] && cat "$FAKE_SUMMARY" ;;
+esac
+EOF
+cat >"$TF/xcodebuild" <<'EOF'
+#!/bin/bash
+# fake xcodebuild test: logs its arguments, the copy and the scheme; writes a result bundle
+echo "xcodebuild $*" >>"$FAKE_TC_LOG"
+ls -a "$PWD" | tr '\n' ' ' >>"$FAKE_TC_LOG"; echo >>"$FAKE_TC_LOG"
+cat "$PWD"/.swiftpm/xcode/xcshareddata/xcschemes/*.xcscheme >>"$FAKE_TC_LOG" 2>/dev/null; echo >>"$FAKE_TC_LOG"
+bundle=""
+while [ $# -gt 0 ]; do [ "$1" = -resultBundlePath ] && bundle="$2"; shift; done
+case "${FAKE_XCB:-pass}" in
+  pass) mkdir -p "$bundle"; echo "** TEST SUCCEEDED **" ;;
+  fail) mkdir -p "$bundle"; echo "** TEST FAILED **"; exit 65 ;;
+  build)
+    printf '%s/Sources/MacOnly/M.swift:1:8: \033[1;31merror: \033[0mno such module '"'"'AppKit'"'"'\n' "$PWD"
+    printf '%s/Sources/MacOnly/M.swift:1:8: error: no such module '"'"'AppKit'"'"'\n' "$PWD"
+    echo "** TEST FAILED **"; exit 65 ;;
+  noscheme) echo "xcodebuild: error: The project does not contain a scheme."; exit 66 ;;
+esac
+EOF
+chmod +x "$TF/xcrun" "$TF/xcodebuild"
+cat >"$TMP/tc-sims.json" <<'EOF'
+{"devices": {
+  "com.apple.CoreSimulator.SimRuntime.watchOS-12-0": [{"name": "Apple Watch", "udid": "W-1", "state": "Shutdown", "isAvailable": true}],
+  "com.apple.CoreSimulator.SimRuntime.iOS-26-4": [{"name": "iPhone 17", "udid": "OLD-1", "state": "Shutdown", "isAvailable": true}],
+  "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [{"name": "iPad Pro", "udid": "PAD-1", "state": "Shutdown", "isAvailable": true},
+                                                  {"name": "iPhone 18 Pro", "udid": "NEW-1", "state": "Shutdown", "isAvailable": true},
+                                                  {"name": "iPhone 18", "udid": "NEW-2", "state": "Booted", "isAvailable": true}]
+}}
+EOF
+cat >"$TMP/tc-pass.json" <<'EOF'
+{"result": "Passed", "totalTestCount": 12, "passedTests": 10, "failedTests": 0, "skippedTests": 2, "expectedFailures": 0, "testFailures": []}
+EOF
+cat >"$TMP/tc-fail.json" <<'EOF'
+{"result": "Failed", "totalTestCount": 12, "passedTests": 9, "failedTests": 1, "skippedTests": 2, "expectedFailures": 0,
+ "testFailures": [{"testName": "parsesTheDate()", "targetName": "CoreTests", "failureText": "Expectation failed: (date → nil) != nil"}]}
+EOF
+tcrun() { # test-check arguments; prints "exit=<code>" then the output
+  local out code
+  out="$(PATH="$TF:$PATH" TMPDIR="$TMP/tc-tmp" FAKE_SIMS="${FAKE_SIMS:-$TMP/tc-sims.json}" FAKE_TC_LOG="$TMP/tc.log" "$SCRIPTS/porting.sh" test-check "$@" 2>&1 </dev/null)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$out"
+}
+tcbefore="$(snapshot "$TC")"
+: >"$TMP/tc.log"
+out="$(FAKE_SUMMARY="$TMP/tc-pass.json" tcrun "$TC" --target CoreTests)"
+expect_result "test-check: the counts come from the result bundle" 0 'iPhone 18 Pro, iOS 27\.2.*CoreTests.*12 test\(s\): 10 passed, 0 failed, 2 skipped' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+expect_result "test-check: it says what it did not prove" 0 'no UI was looked at, the Mac app was not built.*a skipped test proves nothing' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+if grep -q 'destination platform=iOS Simulator,id=NEW-1 ' "$TMP/tc.log"; then ok "test-check: picks the first iPhone of the newest iOS runtime"
+else nok "test-check: picks the first iPhone of the newest iOS runtime" "$(grep xcodebuild "$TMP/tc.log")"; fi
+if grep -q 'BlueprintName="CoreTests"' "$TMP/tc.log" && ! grep -q 'BlueprintName="MacOnlyTests"' "$TMP/tc.log"; then ok "test-check: the temporary scheme holds only the named test targets"
+else nok "test-check: the temporary scheme holds only the named test targets" "$(grep -o 'BlueprintName="[^"]*"' "$TMP/tc.log" | sort -u)"; fi
+if grep -q -- '-scheme swift-harness-port-tests' "$TMP/tc.log" && grep -q -- '-resultBundlePath ' "$TMP/tc.log"; then ok "test-check: runs xcodebuild test with that scheme and a result bundle"
+else nok "test-check: runs xcodebuild test with that scheme and a result bundle" "$(grep xcodebuild "$TMP/tc.log")"; fi
+if ! grep -qE '(^| )(\.git|\.build|Secrets\.xcconfig|App\.xcodeproj)( |$)' "$TMP/tc.log" && grep -q 'Package.swift' "$TMP/tc.log"; then ok "test-check: the copy has no .git, .build, secrets or root Xcode project"
+else nok "test-check: the copy has no .git, .build, secrets or root Xcode project" "$(grep 'Package.swift' "$TMP/tc.log")"; fi
+if grep -q 'simctl shutdown NEW-1' "$TMP/tc.log"; then ok "test-check: shuts down a simulator it found shut down"
+else nok "test-check: shuts down a simulator it found shut down" "$(grep simctl "$TMP/tc.log")"; fi
+if [ "$tcbefore" = "$(snapshot "$TC")" ]; then ok "test-check: the project is unchanged"; else nok "test-check: the project is unchanged"; fi
+if [ -z "$(ls -A "$TMP/tc-tmp")" ]; then ok "test-check: the copy is removed afterwards"; else nok "test-check: the copy is removed afterwards" "$(ls "$TMP/tc-tmp")"; fi
+: >"$TMP/tc.log"
+out="$(FAKE_XCB=fail FAKE_SUMMARY="$TMP/tc-fail.json" tcrun "$TC" --device "iPhone 18")"
+expect_result "test-check: a failing test is named with its message" 0 '12 test\(s\): 9 passed, 1 failed, 2 skipped.*CoreTests/parsesTheDate\(\): Expectation failed' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+if grep -q 'id=NEW-2 ' "$TMP/tc.log" && ! grep -q 'simctl shutdown' "$TMP/tc.log"; then ok "test-check: --device picks by name and leaves a booted simulator booted"
+else nok "test-check: --device picks by name and leaves a booted simulator booted" "$(grep -E 'xcodebuild|simctl' "$TMP/tc.log")"; fi
+if grep -q 'BlueprintName="CoreTests"' "$TMP/tc.log" && grep -q 'BlueprintName="MacOnlyTests"' "$TMP/tc.log"; then ok "test-check: without --target every folder of Tests/ is in the scheme"
+else nok "test-check: without --target every folder of Tests/ is in the scheme" "$(grep -o 'BlueprintName="[^"]*"' "$TMP/tc.log" | sort -u)"; fi
+out="$(FAKE_XCB=build tcrun "$TC")"
+expect_result "test-check: tests that do not build show the compiler's errors, once, without colour" 0 'the tests did not build: 1 error\(s\) +Sources/MacOnly/M\.swift:1:8: no such module .AppKit.' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')" $'\x1b'
+expect_result "test-check: a failure with no error line shows xcodebuild's own" 0 'did not run: xcodebuild: error: The project does not contain a scheme' "$(FAKE_XCB=noscheme tcrun "$TC")"
+expect_result "test-check: an unknown --device says so" 1 'no available iOS simulator called .iPad Mini.' "$(tcrun "$TC" --device "iPad Mini")"
+printf '{"devices": {}}\n' >"$TMP/tc-nosims.json"
+expect_result "test-check: no iPhone simulator says how to get one" 1 'no iPhone simulator' "$(FAKE_SIMS="$TMP/tc-nosims.json" tcrun "$TC")"
+expect_result "test-check: without a root Package.swift it says so" 1 'no Package\.swift' "$(tcrun "$BN")"
+expect_result "test-check: a bad target name is a usage error" 2 'usage' "$(tcrun "$TC" --target 'a b')"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
