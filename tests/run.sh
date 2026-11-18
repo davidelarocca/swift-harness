@@ -5071,6 +5071,8 @@ else nok "test-check: without --target every folder of Tests/ is in the scheme" 
 out="$(FAKE_XCB=build tcrun "$TC")"
 expect_result "test-check: tests that do not build show the compiler's errors, once, without colour" 0 'the tests did not build: 1 error\(s\) +Sources/MacOnly/M\.swift:1:8: no such module .AppKit.' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')" $'\x1b'
+expect_result "test-check: a result bundle it cannot read is not called a build failure" 0 'result bundle could not be read.*TEST SUCCEEDED' "exit=0
+$(printf '%s' "$(tcrun "$TC")" | tr '\n' ' ')" 'did not build'
 expect_result "test-check: a failure with no error line shows xcodebuild's own" 0 'did not run: xcodebuild: error: The project does not contain a scheme' "$(FAKE_XCB=noscheme tcrun "$TC")"
 expect_result "test-check: an unknown --device says so" 1 'no available iOS simulator called .iPad Mini.' "$(tcrun "$TC" --device "iPad Mini")"
 printf '{"devices": {}}\n' >"$TMP/tc-nosims.json"

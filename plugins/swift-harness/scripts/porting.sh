@@ -249,6 +249,9 @@ test_check() {
     jq -r '"- \(.totalTestCount) test(s): \(.passedTests // 0) passed, \(.failedTests // 0) failed, \(.skippedTests // 0) skipped" + (if (.expectedFailures // 0) > 0 then ", \(.expectedFailures) expected failure(s)" else "" end) + ".",
       (if ((.testFailures // []) | length) > 0 then "Failures\(if (.testFailures | length) > 5 then " (first 5)" else "" end):" else empty end),
       ((.testFailures // [])[:5][] | "    \(.targetName // "?")/\(.testName // "?"): \((.failureText // "") | gsub("\\s+"; " ") | .[:200])")' <<<"$summary"
+  elif [ -d "$work/run.xcresult" ] && [ -z "$summary" ]; then
+    printf -- '- the result bundle could not be read (xcresulttool get test-results needs Xcode 16 or later); xcodebuild said: %s\n' \
+      "$(printf '%s\n' "$out" | grep -m1 -E '\*\* TEST (SUCCEEDED|FAILED) \*\*' || printf 'nothing about the tests')"
   else
     errs="$(first_errors "$out")"
     n="$(printf '%s\n' "$errs" | awk -F'\t' '$1 == "count" { print $2 }')"
