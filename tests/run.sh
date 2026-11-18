@@ -2621,7 +2621,7 @@ else nok "motion: the shared presenter reads Reduce Motion through the overridab
 # ---------- layout audit from the accessibility tree (#69) ----------
 LA="$PLUGIN/skills/setup/templates/tests/LayoutAudit.swift"
 if link_ok "$HERE/fixtures/layout-audit/LayoutFixtureUITests/LayoutAudit.swift" "$LA" &&
-  grep -qF 'layout-audit-fixture:' "$HERE/../.github/workflows/ci.yml" &&
+  grep -qF 'working-directory: tests/fixtures/layout-audit' "$HERE/../.github/workflows/ci.yml" &&
   grep -qF 'platform=iOS Simulator' "$HERE/../.github/workflows/ci.yml"; then
   ok "layout audit: the CI fixture runs the template helper itself, on macOS and an iOS simulator"
 else nok "layout audit: the CI fixture runs the template helper itself, on macOS and an iOS simulator"; fi
