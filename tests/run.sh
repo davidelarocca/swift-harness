@@ -4895,6 +4895,88 @@ RNum="$(new_project rules-numbered)"
 printf '# App\n## Architecture rules\n1. Layers hold. <!-- check: guard -->\n2) Views have no logic.\n* Star item.\n' >"$RNum/CLAUDE.md"
 expect_result "rules: numbered and starred items are rules too" 0 '^3 rule\(s\): 1 name a check, 2 name none\.' "$(rules --project "$RNum")"
 expect_result "rules: usage error" 2 'usage' "$(rules --bogus)"
+# ---------- porting: the C floating-point environment and build-check ----------
+
+BC="$TMP/bc-project"
+mkdir -p "$BC/Sources/DSP" "$BC/Sources/Domain" "$BC/Sources/Core" "$BC/.build"
+printf '// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "X", targets: [])\n' >"$BC/Package.swift"
+printf 'import Foundation\nfunc f() {\n  var e = fenv_t()\n  fegetenv(&e)\n}\n// fesetenv in a comment\nlet s = "fegetenv in a string"\n' >"$BC/Sources/DSP/Denormals.swift"
+echo 'let d = 1' >"$BC/Sources/Domain/D.swift"
+echo 'let c = 1' >"$BC/Sources/Core/C.swift"
+echo 'secret' >"$BC/Secrets.xcconfig"
+echo 'old build' >"$BC/.build/stale"
+git -C "$BC" init -q
+bcscan="$("$SCRIPTS/porting.sh" scan "$BC" 2>&1)"
+expect_result "porting: fenv_t and fegetenv block iOS, with their lines" 0 'blocks	Sources/DSP	Sources/DSP/Denormals\.swift:3	floating-point environment.*Denormals\.swift:4	floating-point environment' "exit=0
+$(printf '%s' "$bcscan" | tr '\n' ' ')"
+if [ "$(printf '%s\n' "$bcscan" | grep -c 'floating-point environment')" = 2 ]; then ok "porting: fenv in a comment or a string is not code"
+else nok "porting: fenv in a comment or a string is not code" "$bcscan"; fi
+
+BF="$TMP/bc-fakes"; mkdir -p "$BF" "$TMP/bc-tmp" "$TMP/bc-sdk"
+cat >"$BF/xcrun" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *--show-sdk-path*) echo "${FAKE_SDK:-/nonexistent}" ;;
+  *--show-sdk-version*) echo 27.2 ;;
+esac
+EOF
+cat >"$BF/swift" <<'EOF'
+#!/bin/bash
+# fake swift build: logs its arguments and the files it sees; fails the targets in FAKE_SWIFT_FAIL
+echo "$*" >>"$FAKE_SWIFT_LOG"
+ls -a "$PWD" | tr '\n' ' ' >>"$FAKE_SWIFT_LOG"; echo >>"$FAKE_SWIFT_LOG"
+target=""
+while [ $# -gt 0 ]; do [ "$1" = --target ] && target="$2"; shift; done
+case " ${FAKE_SWIFT_FAIL:-} " in
+  *" $target "*)
+    printf '%s/Sources/DSP/Denormals.swift:3:11: \033[1;31merror: \033[0mcannot find '"'"'fenv_t'"'"' in scope\n' "$PWD"
+    printf '%s/Sources/DSP/Denormals.swift:4:3: error: cannot find '"'"'fegetenv'"'"' in scope\n' "$PWD"
+    printf '%s/Sources/DSP/Denormals.swift:4:3: error: cannot find '"'"'fegetenv'"'"' in scope\n' "$PWD"
+    echo "error: Build failed"; exit 1 ;;
+esac
+echo "Build complete!"
+EOF
+chmod +x "$BF/xcrun" "$BF/swift"
+bc() { # build-check arguments; prints "exit=<code>" then the output
+  local out code
+  out="$(PATH="$BF:$PATH" TMPDIR="$TMP/bc-tmp" FAKE_SDK="${FAKE_SDK:-$TMP/bc-sdk}" FAKE_SWIFT_LOG="$TMP/bc-swift.log" "$SCRIPTS/porting.sh" build-check "$@" 2>&1 </dev/null)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$out"
+}
+bcbefore="$(snapshot "$BC")"
+: >"$TMP/bc-swift.log"
+out="$(FAKE_SWIFT_FAIL="DSP Domain" bc "$BC")"
+expect_result "build-check: a target that builds is a PASS, a failing one a FAIL with its errors" 0 '- PASS Core.*- FAIL DSP: 2 error\(s\).*Sources/DSP/Denormals\.swift:3:11: cannot find .fenv_t. in scope' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+expect_result "build-check: the same error twice is counted once, colours are gone" 0 'FAIL DSP: 2 error' "$out" $'\x1b'
+expect_result "build-check: a target behind a failing one shows the other's errors, and says why" 0 'FAIL Domain: 2 error\(s\)' "$out"
+expect_result "build-check: names the module the error came from only for a dependency" 0 'Domain: 2 error.*\(in DSP, a dependency\)' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+expect_result "build-check: ... and the DSP's own errors carry no such note" 0 'FAIL DSP: 2 error\(s\) +Sources/DSP/Denormals\.swift:3:11: cannot find .fenv_t. in scope +Sources/DSP/Denormals\.swift:4:3: cannot find .fegetenv. in scope +(- |A target)' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+expect_result "build-check: it says a dependency's errors hide the target's own" 0 'behind a failing dependency' "$out"
+expect_result "build-check: it says it is a build only" 0 '1 built, 2 failed\. This is a build only: nothing was tested' "$out"
+expect_result "build-check: it names the SDK and the iOS version it used" 0 'iOS 27\.0, SDK 27\.2' "$out"
+if grep -q -- '--triple [a-z0-9_]*-apple-ios27.0-simulator' "$TMP/bc-swift.log" && grep -q -- "--sdk $TMP/bc-sdk" "$TMP/bc-swift.log"; then ok "build-check: builds each target for the simulator triple with the simulator SDK"
+else nok "build-check: builds each target for the simulator triple with the simulator SDK" "$(cat "$TMP/bc-swift.log")"; fi
+if [ "$(grep -c -- '--target' "$TMP/bc-swift.log")" = 3 ]; then ok "build-check: one build per folder of Sources/"; else nok "build-check: one build per folder of Sources/" "$(cat "$TMP/bc-swift.log")"; fi
+if ! grep -qE '(^| )(\.git|\.build|Secrets\.xcconfig)( |$)' "$TMP/bc-swift.log" && grep -q 'Package.swift' "$TMP/bc-swift.log"; then ok "build-check: the copy has no .git, .build or secrets"
+else nok "build-check: the copy has no .git, .build or secrets" "$(grep -v -- '--target' "$TMP/bc-swift.log" | head -3)"; fi
+if [ "$bcbefore" = "$(snapshot "$BC")" ]; then ok "build-check: the project is unchanged"; else nok "build-check: the project is unchanged"; fi
+if [ -z "$(ls -A "$TMP/bc-tmp")" ]; then ok "build-check: the copy is removed afterwards"; else nok "build-check: the copy is removed afterwards" "$(ls "$TMP/bc-tmp")"; fi
+: >"$TMP/bc-swift.log"
+out="$(bc "$BC" --target Core --ios 17.0 --keep)"
+expect_result "build-check: --target limits it, --ios sets the version, --keep says where the copy is" 0 'iOS 17\.0.*- PASS Core.*Copy kept at ' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+if [ "$(grep -c -- '--target' "$TMP/bc-swift.log")" = 1 ] && grep -q 'ios17.0-simulator' "$TMP/bc-swift.log"; then ok "build-check: only the named target was built"; else nok "build-check: only the named target was built" "$(cat "$TMP/bc-swift.log")"; fi
+rm -rf "$TMP/bc-tmp"; mkdir -p "$TMP/bc-tmp"
+expect_result "build-check: a bad --ios is a usage error" 2 'usage' "$(bc "$BC" --ios latest)"
+expect_result "build-check: an unknown option is a usage error" 2 'usage' "$(bc "$BC" --bogus)"
+BN="$TMP/bc-nopkg"; mkdir -p "$BN/Sources/A"; echo 'let a = 1' >"$BN/Sources/A/A.swift"
+expect_result "build-check: without a root Package.swift it says so" 1 'no Package\.swift' "$(bc "$BN")"
+expect_result "build-check: without a simulator SDK it says so" 1 'no iOS Simulator SDK' "$(FAKE_SDK=/nonexistent bc "$BC" --target Core | sed 's/^exit=0$/exit=0/')" 
+expect_result "porting: scan still takes no build options" 2 'usage' "exit=$("$SCRIPTS/porting.sh" scan "$BC" --keep >/dev/null 2>&1; echo $?)
+usage"
 
 # ---------- summary ----------
 
