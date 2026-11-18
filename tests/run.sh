@@ -2621,7 +2621,7 @@ else nok "motion: the shared presenter reads Reduce Motion through the overridab
 # ---------- layout audit from the accessibility tree (#69) ----------
 LA="$PLUGIN/skills/setup/templates/tests/LayoutAudit.swift"
 if link_ok "$HERE/fixtures/layout-audit/LayoutFixtureUITests/LayoutAudit.swift" "$LA" &&
-  grep -qF 'layout-audit-fixture:' "$HERE/../.github/workflows/ci.yml" &&
+  grep -qF 'working-directory: tests/fixtures/layout-audit' "$HERE/../.github/workflows/ci.yml" &&
   grep -qF 'platform=iOS Simulator' "$HERE/../.github/workflows/ci.yml"; then
   ok "layout audit: the CI fixture runs the template helper itself, on macOS and an iOS simulator"
 else nok "layout audit: the CI fixture runs the template helper itself, on macOS and an iOS simulator"; fi
@@ -3673,6 +3673,14 @@ expect_result "audit: the test targets are read across lines, the platforms from
 expect_result "audit: the proposal uses the project's own commands, cost not measured" 0 '^- fast: swift build \(the project.s own\)$' "$out"
 if [ "$(jq -c '[.writes, .project_code_run, .proposal.cost, .proposal.full]' <<<"${json#*$'\n'}")" = '[0,0,"not measured","swift test"]' ]; then ok "audit: --json says no writes, no project code run, cost not measured"
 else nok "audit: --json says no writes, no project code run, cost not measured" "${json#*$'\n'}"; fi
+# #167: the CI runner ignores SIGPIPE, so a writer whose reader has gone prints an error instead
+# of dying quietly. first_cmd's reader stopped at the first command while the next awk (the
+# scripts, then the CI files) still had to write. A slow awk for those makes the race certain.
+ASLOW="$TMP/audit-slow-awk"; mkdir -p "$ASLOW"
+printf '#!/bin/bash\ncase " $* " in *" src=scripts "* | *" src=ci "*) sleep 0.3 ;; esac\nexec %s "$@"\n' "$(command -v awk)" >"$ASLOW/awk"; chmod +x "$ASLOW/awk"
+json167="$(trap '' PIPE; PATH="$ASLOW:$PATH" audit --project "$AD" --json)"
+if [ "$(jq -c '.proposal.full' <<<"${json167#*$'\n'}" 2>/dev/null)" = '"swift test"' ] && ! grep -q 'awk:' <<<"$json167"; then ok "audit: a reader that stops at the first command leaves no writer behind (#167)"
+else nok "audit: a reader that stops at the first command leaves no writer behind (#167)" "$(printf '%s\n' "$json167" | head -4)"; fi
 # What a passing lint or formatter looks at, read from its config (#105, H1).
 AR="$TMP/adopt-rules"; mkdir -p "$AR"
 printf 'disabled_rules:\n  - force_cast\n  - line_length # long lines are fine here\nopt_in_rules:\n  - empty_count\nexcluded:\n  - Pods\n' >"$AR/.swiftlint.yml"
