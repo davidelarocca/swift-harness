@@ -2,11 +2,11 @@
 
 Where swift-harness is going, and why. Live status is in the [milestones](https://github.com/davidelarocca/swift-harness/milestones) and [issues](https://github.com/davidelarocca/swift-harness/issues). This page is updated with every release.
 
-_Last updated: 11 November 2026, after v1.9.0 (checks you can rely on: a notice when a turn weakens a check, an opt-in question before a shell command writes to a protected file, test results from Xcode's result bundle, adapters for the project's own lint and formatter)._
+_Last updated: 18 November 2026, after v1.10.0 (rules that name the check enforcing them, and the first porting checks on a real app: builds and tests for the iOS Simulator, on a copy). Perception in motion moves to v1.11.0._
 
 **Guiding principle:** every check the harness claims to run must actually run, and must be backed by a test. New features come after the existing gates are reliable, and claims about impact come with measurements. A new method earns its place by beating a simple baseline on held-out data, not by being clever.
 
-## Now: v1.10.0, perception in motion
+## Now: v1.11.0, perception in motion
 
 Today every check on the running app looks at one state at one size. These look at flows, time and a hostile environment. Test isolation, which they need, shipped in 1.7.0. They need a real app with UI tests to be worth anything, and the evals need paid sessions, so they start when both are available.
 
@@ -61,6 +61,7 @@ Ideas parked until there is demand: a local, read-only view of the checks with e
 
 | Version | Highlights |
 |---|---|
+| [1.10.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.10.0) | Rules and porting checks: a rule can name the check that enforces it, and `/swift-harness:rules`, the doctor and the report say which links hold and how often each check caught something; `porting.sh build-check` and `test-check` build a package's targets for the iOS Simulator and run its tests on an iPhone simulator, on a copy, and the porting scan learned three APIs only a real build had shown (first steps of v2.0.0, on a real app). |
 | [1.9.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.9.0) | Checks you can rely on: the end of a turn says when the session made a check weaker (tests or assertions removed, skips, lint rules off, a larger tolerance, a layout row or a registry entry gone), an opt-in question before a shell command writes to a protected file (`guardBash`), `verify.sh` reads a failed run from Xcode's result bundle (each failed test with its message, build errors with file and line, screenshots of failing tests), and adapters run the project's own lint and format checks instead of the harness's. |
 | [1.8.3](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.8.3) | No silent skips: the end-of-turn check sees changes git does not show (files kept out of git, no first commit, nested repositories, C++ outside `Sources/`), hooks stay on in a nested repository, the docs adapter no longer reports old problems as new, `check.sh` fails every run while a blocking check fails, non-ASCII paths are read, interrupted and timed-out turns leave a record, and the catch log is bounded. |
 | [1.8.2](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.8.2) | Hardening from a hook-script review by another agent: the edit guard fails closed on a config it cannot read and matches protected paths by filesystem identity, verify approval and the HTML report refuse paths that leave the project, the evidence history serialises its writers, and the doctor's coverage warning is a hint, not a fix to apply. |
