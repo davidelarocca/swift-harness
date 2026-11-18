@@ -359,8 +359,11 @@ fi
 
 # A shell command, preferring the project's own rules, then its scripts, then its CI.
 first_cmd() { # $1 capability
-  local src
-  for src in rules scripts ci; do
+  local src cmds cmd pp
+  # Every candidate first, then the first that fits: a reader that stopped at the first one
+  # while the next awk still wrote left that awk on a closed pipe, which prints an error where
+  # SIGPIPE is ignored, as on CI runners (#167).
+  cmds="$(for src in rules scripts ci; do
     # Lists go through the environment: awk -v cannot hold a newline.
     printf '%s' "$rows" | A_RULES="$rules_files" A_SCRIPTS="$script_files" A_CI="$ci_files" awk -F'\t' -v c="$1" -v src="$src" '
       BEGIN { split(ENVIRON["A_RULES"], r, "\n"); for (i in r) R[r[i]] = 1; split(ENVIRON["A_SCRIPTS"], s, "\n"); for (i in s) S[s[i]] = 1
@@ -369,13 +372,16 @@ first_cmd() { # $1 capability
         f = $3; sub(/:[0-9]+$/, "", f)
         if ((src == "rules" && (f in R)) || (src == "scripts" && (f in S)) || (src == "ci" && (f in K))) print $4
       }'
-  done | while IFS= read -r cmd; do
+  done)"
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
     # A command for another package (a tool the CI builds) is not the project's build.
     pp="$(printf '%s' "$cmd" | sed -nE 's/.*--package-path[ =]+([^ ]+).*/\1/p' | sed 's#^\./##; s#/$##')"
     if [ -n "$pp" ] && [[ ", $pkg_paths, " != *", $pp, "* ]]; then continue; fi
     printf '%s\n' "$cmd"
-    break
-  done | grep .
+    return 0
+  done <<<"$cmds"
+  return 1
 }
 fast="$(first_cmd build)" && fast_src="the project's own" || fast_src=""
 full="$(first_cmd tests)" && full_src="the project's own" || full_src=""
