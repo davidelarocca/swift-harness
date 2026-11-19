@@ -64,7 +64,7 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
+  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance", "porting"])[],
   (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
@@ -73,7 +73,8 @@ unknown="$(jq -r '
   (if (.security | type) == "object" then (.security | keys - ["enabled"])[] | "security." + . else empty end),
   (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget", "command", "blocking"])[] | "docs." + . else empty end),
   (("lint", "format") as $k | if (.[$k] | type) == "object" then (.[$k] | keys - ["command", "blocking"])[] | "\($k)." + . else empty end),
-  (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end)
+  (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end),
+  (if (.porting | type) == "object" then (.porting | keys - ["ratchet"])[] | "porting." + . else empty end)
 ' "$SH_CONFIG" | paste -sd, - | sed 's/,/, /g')"
 if [ -n "$unknown" ]; then
   row WARN "Config keys" "unknown, ignored by the hooks (typo?): $unknown"
@@ -116,6 +117,10 @@ problems="$(jq -r '
   (if (.layout | type) == "object" then
     check(["layout", "enabled"]; type == "boolean"; "layout.enabled must be true or false"),
     check(["layout", "path"]; type == "string" and length > 0; "layout.path must be a path")
+  else empty end),
+  check(["porting"]; type == "object"; "porting must be an object"),
+  (if (.porting | type) == "object" then
+    check(["porting", "ratchet"]; type == "string" and length > 0; "porting.ratchet must be a path")
   else empty end),
   check(["screenshots"]; type == "object"; "screenshots must be an object"),
   (if (.screenshots | type) == "object" then
@@ -458,6 +463,22 @@ else
     3) row WARN "Layout contract" "${layout_out#Layout contract ($layout): }" ;;
     *) row FAIL "Layout contract" "$(printf '%s\n' "$layout_out" | grep '^- ' | head -3 | sed 's/^- //' | paste -sd ';' - | sed 's/;/; /g'). Fix: update $layout" ;;
   esac
+fi
+
+# Porting ratchet (#73). Reads Swift and C as text; shown only once a module is recorded.
+ratchet="$(sh_ratchet)"
+if [ -f "$SH_ROOT/$ratchet" ]; then
+  ratchet_mods="$(awk -F'\t' '$1 == "module" && $2 != "" { n++ } END { print n + 0 }' "$SH_ROOT/$ratchet")"
+  ratchet_ok="$(awk -F'\t' '$1 == "accepted" { n += $5 } END { print n + 0 }' "$SH_ROOT/$ratchet")"
+  ratchet_gone="$(awk -F'\t' '$1 == "module" && $2 != "" { print $2 }' "$SH_ROOT/$ratchet" | while IFS= read -r m; do [ -d "$SH_ROOT/${m// › //}" ] || printf '%s\n' "$m"; done | paste -sd, - | sed 's/,/, /g')"
+  ratchet_out="$("$here/porting.sh" ratchet "$SH_ROOT" 2>&1)"
+  if [ $? -ne 0 ]; then
+    row FAIL "Porting ratchet" "$(printf '%s\n' "$ratchet_out" | grep '^- ' | head -3 | sed 's/^- //' | paste -sd ';' - | sed 's/;/; /g'). Fix: put it inside #if os(macOS) or behind an adapter; only the user accepts it (porting.sh ratchet --record)"
+  elif [ -n "$ratchet_gone" ]; then
+    row WARN "Porting ratchet" "$ratchet: no folder for $ratchet_gone (renamed or removed?): nothing there is checked. Fix: record the module under its new name with the user's yes"
+  else
+    row PASS "Porting ratchet" "$ratchet_mods ported module(s), $ratchet_ok macOS-only use(s) accepted, checked at the end of each turn (text only; porting.sh build-check proves the iOS build)"
+  fi
 fi
 
 # Docs references (#70). Reads Markdown only. With docs.command, the project's own check (#105).

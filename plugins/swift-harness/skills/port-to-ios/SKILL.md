@@ -10,7 +10,7 @@ Goal: a plan the user can decide on, built from evidence. Nothing is ported here
 
 ## Ground rules
 
-- Read only. The one file you write is `docs/PORTING_PLAN.md`, after the user has seen the summary. No other file, no project or package edit, no new target, no dependency change.
+- Read only. The one file you write is `docs/PORTING_PLAN.md`, after the user has seen the summary, and, only with the user's yes, the porting ratchet (see "After the plan"). No other file, no project or package edit, no new target, no dependency change.
 - Every claim cites `file:line`, or says what was not assessed and why. No evidence, no claim.
 - Static evidence is not a build. Never say a module, a screen or the app is ready for iOS: say what was built, what was tested and what was reviewed, per platform, and nothing more.
 - Decisions belong to the user. Compare options and recommend one; do not pick the target structure, cut a feature or change the product silently.
@@ -52,9 +52,9 @@ Compare at least: one multiplatform app target sharing everything, and separate 
 
 ## 5. Build probe (only with the user's yes)
 
-Ask: "Build each package for the iOS Simulator into a temporary DerivedData folder? This runs the project's build (manifests, build plugins, scripts), writes nothing in the project, and takes a few minutes." Only after a yes, per package with a scheme:
+Packages: the build of step 1.3 is the probe; do not run it twice. What it does not cover is an app or framework target of an Xcode project (`.xcodeproj` or `.xcworkspace`). For those, ask: "Build <scheme> for the iOS Simulator into a temporary DerivedData folder? This runs the project's build (build phases, plugins, scripts), and takes a few minutes." Only after a yes:
 
-`xcodebuild build -scheme <scheme> -destination 'generic/platform=iOS Simulator' -derivedDataPath "$(mktemp -d)" -quiet` from the package folder.
+`xcodebuild build -scheme <scheme> -destination 'generic/platform=iOS Simulator' -derivedDataPath "$(mktemp -d)" -quiet` from the folder of the project or workspace (add `-project` or `-workspace` when there are several).
 
 Record the result with the date: builds, or fails with the first errors and their `file:line`. A failure the scan did not predict is a finding. Without a yes, the status says "not built".
 
@@ -66,4 +66,5 @@ Show the user a short summary first: the share of modules per class, the decisio
 
 - The status per platform says "not started" for iOS until something was built and tested there. A build is not a test, and a test is not a UX review.
 - Suggest the first steps in the order that keeps the macOS app working: shared packages first (adapters, `platforms:`), each verified on macOS and built for iOS, then the iOS target, then screens. Each step is its own branch; `scripts/verify.sh` with `PLATFORMS=("macOS" "iOS")` checks both.
+- Once a module builds for iOS, offer to add it to the porting ratchet, and do it only with the user's yes: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/porting.sh" ratchet --record --module "<module>"` (the module as `summary` names it). From then on, new macOS-only code in that module fails the end-of-turn check with `file:line`, so daily work on the Mac app cannot undo the port unnoticed. Its current macOS-only uses are accepted as they are. The file (`docs/PORTING_RATCHET.tsv`) goes in the same commit as the change that made the module build. Recording again accepts new uses: that is the user's decision, never a way to make the check pass.
 - Porting itself is not done in this session.

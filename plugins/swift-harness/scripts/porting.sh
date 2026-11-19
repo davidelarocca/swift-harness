@@ -7,6 +7,17 @@
 #                                     builds each package target for the iOS Simulator, on a COPY
 #   porting.sh test-check [project-dir] [--target NAME]... [--device NAME] [--keep]
 #                                     runs package test targets on an iPhone simulator, on a COPY
+#   porting.sh ratchet [project-dir]  exit 1 when a ported module has new macOS-only code
+#   porting.sh ratchet [project-dir] --record [--module MODULE]...
+#                                     adds modules to the ratchet and accepts their current uses
+#
+# The ratchet (#73) keeps what is ported from going back: its file (porting.ratchet in
+# .claude/swift-harness.json, default docs/PORTING_RATCHET.tsv) lists the modules that build for
+# iOS, as summary names them, and the macOS-only uses accepted in each. The end-of-turn check
+# runs `ratchet` and fails on a "blocks" signal of the scan that is not accepted, with file:line.
+# Recording again accepts what is there now: that is the user's decision, and weaken-watch.sh
+# tells the user when a session did it. Text only, like scan; it works for packages and for
+# folders of an Xcode project alike.
 #
 # build-check and test-check are the only modes that run anything. build-check copies the project to a temporary folder
 # (no .git, .build, DerivedData, secrets), runs `swift build --target NAME --triple
@@ -43,14 +54,17 @@ mode="${1:-}"
 dir_arg=""
 case "${1:-}" in --* | "") ;; *) dir_arg="$1"; shift ;; esac
 root="$(cd "${dir_arg:-$PWD}" 2>/dev/null && pwd -P)" || { printf 'porting: no such folder: %s\n' "$dir_arg"; exit 2; }
-usage() { printf 'usage: porting.sh scan|summary [project-dir]\n       porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]\n       porting.sh test-check [project-dir] [--target NAME]... [--device NAME] [--keep]\n'; exit 2; }
-case "$mode" in scan | summary) [ $# -eq 0 ] || usage ;; build-check | test-check) ;; *) usage ;; esac
+usage() { printf 'usage: porting.sh scan|summary [project-dir]\n       porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]\n       porting.sh test-check [project-dir] [--target NAME]... [--device NAME] [--keep]\n       porting.sh ratchet [project-dir] [--record [--module MODULE]...]\n'; exit 2; }
+case "$mode" in scan | summary) [ $# -eq 0 ] || usage ;; build-check | test-check | ratchet) ;; *) usage ;; esac
 
 list() { git -C "$root" -c core.quotepath=off ls-files -co --exclude-standard "$@" 2>/dev/null; }
 packages="$(list 'Package.swift' '*/Package.swift' | sed -e 's|/\{0,1\}Package\.swift$||' -e 's|^$|.|' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
 
-scan() {
+scan() { # $1, optional: folders, one per line; only the files under them are read
   list '*.swift' '*.c' '*.h' '*.m' '*.mm' | grep -vE '(^|/)(\.build|Pods|Carthage|DerivedData)/|(^|/)Package\.swift$' |
+    SH_ONLY="${1:-}" awk 'BEGIN { n = split(ENVIRON["SH_ONLY"], P, "\n") }
+      n == 0 { print; next }
+      { for (i = 1; i <= n; i++) if (P[i] != "" && index($0, P[i] "/") == 1) { print; next } }' |
     (cd "$root" && tr '\n' '\0' | SH_PKGS="$packages" xargs -0 awk '
     BEGIN { pkgs = ENVIRON["SH_PKGS"] }
     function module(path,   n, i, p, rest, parts) {
@@ -163,6 +177,28 @@ scan() {
       if (line ~ /\.fileImporter[ \t]*\(|\.fileExporter[ \t]*\(/) hit("adapt", "file access (document picker on iOS)")
     }'
   )
+}
+
+modules() { # "<module><TAB><source files>" for every module, sorted
+  list '*.swift' '*.c' '*.h' '*.m' '*.mm' | grep -vE '(^|/)(\.build|Pods|Carthage|DerivedData)/|(^|/)Package\.swift$' |
+    SH_PKGS="$packages" awk '
+      BEGIN { pkgs = ENVIRON["SH_PKGS"] }
+      function module(path,   n, i, p, rest, parts) {
+        n = split(pkgs, P, "\n")
+        for (i = 1; i <= n; i++) {
+          p = P[i]
+          if (p == "") continue
+          if (p == ".") rest = path
+          else if (index(path, p "/") == 1) rest = substr(path, length(p) + 2)
+          else continue
+          if (match(rest, /^(Sources|Tests)\/[^\/]+\//)) { split(rest, parts, "/"); return (p == "." ? "" : p " › ") parts[1] "/" parts[2] }
+          if (p != ".") return p
+        }
+        split(path, parts, "/")
+        return (index(path, "/") ? parts[1] : ".")
+      }
+      { files[module($0)]++ }
+      END { for (m in files) printf "%s\t%d\n", m, files[m] }' | LC_ALL=C sort
 }
 
 make_copy() { # sets work and copy: a copy of the project with no .git, build output or secrets
@@ -328,6 +364,91 @@ build_check() {
   exit 0
 }
 
+# ---------- ratchet (#73) ----------
+# The ratchet file lists the modules already ported, as scan names them, and the macOS-only
+# uses accepted in them, counted per file and signal (lines move with every edit, counts do
+# not). Tab-separated, # starts a comment:
+#   module    <module>
+#   accepted  <module>  <file>  <signal>  <count>
+ratchet_file() {
+  local rel
+  rel="$(jq -r '.porting.ratchet // empty' "$root/.claude/swift-harness.json" 2>/dev/null)"
+  rel="${rel:-docs/PORTING_RATCHET.tsv}"
+  printf '%s' "${rel#./}"
+}
+module_dir() { printf '%s' "${1// › //}"; } # "pkg › Sources/T" -> pkg/Sources/T
+
+ratchet() {
+  local record=false mods=() m rel file
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --record) record=true; shift ;;
+      --module) [ $# -ge 2 ] && [ -n "$2" ] || usage; mods+=("$2"); shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ "$record" = true ] || [ ${#mods[@]} -eq 0 ] || usage
+  rel="$(ratchet_file)"
+  file="$root/$rel"
+  local listed
+  listed="$(awk -F'\t' '$1 == "module" && $2 != "" { print $2 }' "$file" 2>/dev/null)"
+
+  if [ "$record" = true ]; then
+    local known
+    known="$(modules)"
+    for m in ${mods[@]+"${mods[@]}"}; do
+      case "$m" in . | /* | *..*) printf 'porting: %s is not a module folder.\n' "$m"; exit 2 ;; esac
+      [ -n "$(SH_M="$m" awk -F'\t' '$1 == ENVIRON["SH_M"]' <<<"$known")" ] || { printf 'porting: no module %s. Name it as porting.sh summary does: %s\n' "$m" "$(cut -f1 <<<"$known" | grep -vxF . | paste -sd, - | sed 's/,/, /g')"; exit 2; }
+      listed="$(printf '%s\n%s' "$listed" "$m")"
+    done
+    listed="$(printf '%s\n' "$listed" | awk 'NF && !seen[$0]++')"
+    [ -n "$listed" ] || { printf 'porting: no module to record. Name one with --module, as porting.sh summary names it.\n'; exit 2; }
+    local dirs hits
+    dirs="$(printf '%s\n' "$listed" | while IFS= read -r m; do module_dir "$m"; printf '\n'; done)"
+    hits="$(scan "$dirs" | SH_MODS="$listed" awk -F'\t' 'BEGIN { n = split(ENVIRON["SH_MODS"], M, "\n"); for (i = 1; i <= n; i++) want[M[i]] = 1 }
+      $1 == "blocks" && ($2 in want) { f = $3; sub(/:[0-9]+$/, "", f); c[$2 "\t" f "\t" $4]++ }
+      END { for (k in c) print "accepted\t" k "\t" c[k] }' | LC_ALL=C sort)"
+    mkdir -p "$(dirname "$file")" || exit 1
+    {
+      printf '# swift-harness porting ratchet (#73): these modules build for iOS and must keep building.\n'
+      printf '# A new macOS-only use in one of them fails the end-of-turn check. Accepted uses are counted\n'
+      printf '# per file and signal. Written by porting.sh ratchet --record, with the user'"'"'s yes.\n'
+      printf '%s\n' "$listed" | sed 's/^/module\t/'
+      [ -z "$hits" ] || printf '%s\n' "$hits"
+    } >"$file.tmp" && mv "$file.tmp" "$file"
+    printf 'Porting ratchet (%s): %d module(s), %d macOS-only use(s) accepted.\n' "$rel" "$(printf '%s\n' "$listed" | grep -c .)" "$(printf '%s\n' "$hits" | awk -F'\t' 'NF { n += $5 } END { print n + 0 }')"
+    [ -z "$hits" ] || printf '%s\n' "$hits" | awk -F'\t' '{ printf "- accepted: %s: %s (%d)\n", $3, $4, $5 }'
+    exit 0
+  fi
+
+  # Check: exit 0 with no ratchet file or nothing new, 1 with a new macOS-only use.
+  [ -f "$file" ] || exit 0
+  [ -n "$listed" ] || exit 0
+  local dirs report
+  dirs="$(printf '%s\n' "$listed" | while IFS= read -r m; do module_dir "$m"; printf '\n'; done)"
+  report="$(scan "$dirs" | SH_MODS="$listed" SH_RF="$file" awk -F'\t' '
+    BEGIN {
+      n = split(ENVIRON["SH_MODS"], M, "\n"); for (i = 1; i <= n; i++) want[M[i]] = 1
+      rf = ENVIRON["SH_RF"]; while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] == "accepted") ok[a[2] "\t" a[3] "\t" a[4]] = a[5] + 0 }
+    }
+    $1 == "blocks" && ($2 in want) { f = $3; sub(/:[0-9]+$/, "", f); k = $2 "\t" f "\t" $4; c[k]++; at[k] = at[k] (at[k] == "" ? "" : ", ") $3 }
+    END {
+      for (k in c) {
+        has = (k in ok) # before ok[k] is read: reading an element creates it
+        if (c[k] <= ok[k] + 0) continue
+        split(k, p, "\t")
+        printf "- %s: %s (in %s, ported to iOS; %s)\n", at[k], p[3], p[1], (has ? ok[k] " accepted here, " c[k] " now" : "none accepted here")
+      }
+    }' | LC_ALL=C sort)"
+  [ -n "$report" ] || exit 0
+  printf 'Porting ratchet (%s): new macOS-only code in a module that builds for iOS:\n%s\n' "$rel" "$report"
+  printf 'Put it inside #if os(macOS), or behind a protocol with a macOS and an iOS implementation, so the module keeps building for iOS. If the user wants to keep it as it is, they accept it with porting.sh ratchet --record; do not record it yourself to make this check pass.\n'
+  exit 1
+}
+
+if [ "$mode" = ratchet ]; then
+  ratchet "$@"
+fi
 if [ "$mode" = build-check ]; then
   build_check "$@"
 fi
@@ -348,25 +469,7 @@ if [ -n "$platforms" ]; then printf '%s\n' "$platforms" | awk -F'\t' '{ printf "
 else printf -- '- none in project.pbxproj or Package.swift\n'; fi
 
 printf '\nModules:\n'
-list '*.swift' '*.c' '*.h' '*.m' '*.mm' | grep -vE '(^|/)(\.build|Pods|Carthage|DerivedData)/|(^|/)Package\.swift$' |
-  SH_PKGS="$packages" awk '
-    BEGIN { pkgs = ENVIRON["SH_PKGS"] }
-    function module(path,   n, i, p, rest, parts) {
-      n = split(pkgs, P, "\n")
-      for (i = 1; i <= n; i++) {
-        p = P[i]
-        if (p == "") continue
-        if (p == ".") rest = path
-        else if (index(path, p "/") == 1) rest = substr(path, length(p) + 2)
-        else continue
-        if (match(rest, /^(Sources|Tests)\/[^\/]+\//)) { split(rest, parts, "/"); return (p == "." ? "" : p " › ") parts[1] "/" parts[2] }
-        if (p != ".") return p
-      }
-      split(path, parts, "/")
-      return (index(path, "/") ? parts[1] : ".")
-    }
-    { files[module($0)]++ }
-    END { for (m in files) printf "%s\t%d\n", m, files[m] }' | sort |
+modules |
   while IFS=$'\t' read -r mod count; do
     of() { printf '%s\n' "$signals" | awk -F'\t' -v l="$1" -v m="$mod" '$1 == l && $2 == m'; }
     blocks="$(of blocks)"; adapt="$(of adapt)"; guarded="$(of guarded)"

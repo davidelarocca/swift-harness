@@ -264,6 +264,11 @@ sh_registry_on() { [ "$(sh_cfg '.registry.enabled' 'true')" = "true" ] && [ -f "
 sh_layout() { local p; p="$(sh_cfg '.layout.path' 'docs/LAYOUT_CONTRACT.md')"; printf '%s' "${p#./}"; }
 sh_layout_on() { [ "$(sh_cfg '.layout.enabled' 'true')" = "true" ] && [ -f "$SH_ROOT/$(sh_layout)" ]; }
 
+# Porting ratchet (#73), checked by porting.sh ratchet: the modules that build for iOS and the
+# macOS-only uses accepted in them. Part of the fingerprint, so a recorded module is checked.
+sh_ratchet() { local p; p="$(sh_cfg '.porting.ratchet' 'docs/PORTING_RATCHET.tsv')"; printf '%s' "${p#./}"; }
+sh_ratchet_on() { [ -f "$SH_ROOT/$(sh_ratchet)" ]; }
+
 # What a pass of the verify command covered (SH160-01). The generated verify.sh ends with
 #   swift-harness-result/1: <passed|partial|failed>; checked: <platforms>; tested: <platforms>; not checked: <platforms>
 # (lists ", "-separated or "none"); before 1.6.1 it printed only
@@ -444,6 +449,11 @@ sh_weaken_list() {
     "$here/registry.sh" records "$SH_ROOT" 2>/dev/null | awk -F'\037' -v f="$(sh_registry)" '
       $1 == "C" && $4 != "" { printf "registry\t%s\t%s\t1\n", f, ($3 != "" ? $3 " " $4 : $4) }
       $1 == "R" && $3 != "" { printf "registry-retired\t%s\t%s\t1\n", f, $3 }'
+    # The porting ratchet's modules and accepted uses (#73): one fewer module or one more accepted
+    # use is a weaker ratchet.
+    [ -f "$SH_ROOT/$(sh_ratchet)" ] && awk -F'\t' -v f="$(sh_ratchet)" '
+      $1 == "module" && $2 != "" { printf "ratchet-module\t%s\t%s\t1\n", f, $2 }
+      $1 == "accepted" && $5 + 0 > 0 { printf "ratchet-accepted\t%s\t%s: %s (in %s)\t%d\n", f, $3, $4, $2, $5 }' "$SH_ROOT/$(sh_ratchet)"
   ) | LC_ALL=C sort
 }
 
@@ -506,7 +516,7 @@ sh_fingerprint_tree() { # $1 repository root, $2 depth, then pathspecs for this 
 }
 sh_fingerprint() {
   {
-    sh_fingerprint_tree "$SH_ROOT" 0 "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" "$(sh_performance)"
+    sh_fingerprint_tree "$SH_ROOT" 0 "$(sh_registry)" "$(sh_layout)" "$(sh_ratchet)" "$(sh_snapshots)" "$(sh_performance)"
     printf 'policy\n'
     shasum <"$SH_CONFIG" 2>/dev/null
     sh_verify_manifest "$(sh_cfg '.verify.command' 'scripts/verify.sh fast')" 2>/dev/null | sed 1d

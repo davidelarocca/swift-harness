@@ -5118,6 +5118,69 @@ $auscan" 'Fixed\.swift|ViaAVFAudio\.swift'
 expect_result "porting: .loadInProcess inside #if os(macOS) is guarded" 0 'guarded	Sources/Effects	Sources/Effects/Guarded\.swift:3	\.loadInProcess' "exit=0
 $auscan"
 
+# ---------- porting ratchet (#73) ----------
+
+RT="$(new_project ratchet)"
+mkdir -p "$RT/Sources/Core" "$RT/Sources/MacUI" "$RT/Packages/Kit/Sources/Shared"
+printf '// swift-tools-version: 6.0\n' >"$RT/Package.swift"
+printf '// swift-tools-version: 6.0\n' >"$RT/Packages/Kit/Package.swift"
+printf 'import Foundation\nstruct Model {}\n' >"$RT/Sources/Core/Model.swift"
+printf 'import AppKit\nlet tint = NSColor.red\n' >"$RT/Sources/MacUI/Window.swift"
+printf '#if os(macOS)\nimport AppKit\n#endif\nlet legacy = NSColor.red\n' >"$RT/Packages/Kit/Sources/Shared/Legacy.swift"
+set_config "$RT" '{"format":"none","lint":"none","verify":{"enabled":false}}'
+git -C "$RT" add -A && git -C "$RT" commit -qm modules
+ratchet() { local o c; o="$("$SCRIPTS/porting.sh" ratchet "$RT" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+expect_result "ratchet: no ratchet file, nothing to check" 0 '^exit=0$' "$(ratchet)"
+expect_result "ratchet: --module needs --record" 2 'usage' "$(ratchet --module Sources/Core)"
+expect_result "ratchet: an unknown module is refused, with the names summary uses" 2 'no module Sources/Nope\. Name it as porting\.sh summary does: .*Sources/Core' "$(ratchet --record --module Sources/Nope)"
+expect_result "ratchet: a path outside the project is refused" 2 'not a module folder' "$(ratchet --record --module ../x)"
+out="$(ratchet --record --module Sources/Core --module 'Packages/Kit › Sources/Shared')"
+expect_result "ratchet: recording names the modules and accepts the current uses" 0 '2 module\(s\), 1 macOS-only use\(s\) accepted' "$out"
+expect_result "ratchet: ... listing each accepted use" 0 'accepted: Packages/Kit/Sources/Shared/Legacy\.swift: AppKit NSColor \(1\)' "$out"
+rtfile="$(grep -v '^#' "$RT/docs/PORTING_RATCHET.tsv" | paste -sd'|' -)"
+if [ "$rtfile" = "module	Sources/Core|module	Packages/Kit › Sources/Shared|accepted	Packages/Kit › Sources/Shared	Packages/Kit/Sources/Shared/Legacy.swift	AppKit NSColor	1" ]; then
+  ok "ratchet: the file lists modules and accepted uses, tab-separated"
+else nok "ratchet: the file lists modules and accepted uses, tab-separated" "$rtfile"; fi
+expect_result "ratchet: right after recording, the check passes" 0 '^exit=0$' "$(ratchet)"
+printf 'import AppKit\nlet w = NSWindow()\n' >>"$RT/Sources/Core/Model.swift"
+out="$(ratchet)"
+expect_result "ratchet: a new import AppKit in a ported module fails, naming the line" 1 'Sources/Core/Model\.swift:3: import AppKit \(in Sources/Core, ported to iOS; none accepted here\)' "$out"
+expect_result "ratchet: each new use is named" 1 'Sources/Core/Model\.swift:4: AppKit NSWindow' "$out"
+expect_result "ratchet: the failure says how to fix it, and not to record it" 1 'inside #if os\(macOS\), or behind a protocol.*do not record it yourself' "$out"
+expect_result "ratchet: a module that is not ported is not checked" 1 'Model' "$out" 'MacUI'
+printf '#if os(macOS)\nimport AppKit\nlet w = NSWindow()\n#endif\n' >"$RT/Sources/Core/Model.swift"
+expect_result "ratchet: the same code inside #if os(macOS) passes" 0 '^exit=0$' "$(ratchet)"
+printf 'let more = NSColor.blue\n' >>"$RT/Packages/Kit/Sources/Shared/Legacy.swift"
+expect_result "ratchet: one use more than accepted fails, with both counts" 1 'Legacy\.swift:4, .*Legacy\.swift:5: AppKit NSColor \(in Packages/Kit › Sources/Shared, ported to iOS; 1 accepted here, 2 now\)' "$(ratchet)"
+git -C "$RT" checkout -q -- Packages
+git -C "$RT" add -A && git -C "$RT" commit -qm ratchet
+
+# The end of the turn: no verify approval needed, it reads text only.
+hook session-start.sh "$RT" '{"source":"startup"}' >/dev/null
+printf 'import AppKit\n' >>"$RT/Sources/Core/Model.swift"
+out="$(rstop "$RT")"
+expect_result "stop: the porting ratchet blocks the turn on new macOS-only code" 2 'Sources/Core/Model\.swift:5: import AppKit \(in Sources/Core' "$out"
+expect_result "stop: the porting ratchet is named in the failure header" 2 'porting ratchet' "$out"
+git -C "$RT" checkout -q -- Sources
+expect_result "stop: the ratchet passes once the code is guarded again" 0 '^exit=0' "$(rstop "$RT")"
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$RT" 2>&1)"
+expect_result "doctor: the ratchet row counts modules and accepted uses" 0 'Porting ratchet.*2 ported module\(s\), 1 macOS-only use\(s\) accepted' "exit=0
+$out"
+
+# Weaker: a module dropped, or a use accepted by recording again, is told to the user.
+hook session-start.sh "$RT" '{"source":"startup"}' >/dev/null
+printf 'let more = NSColor.blue\n' >>"$RT/Packages/Kit/Sources/Shared/Legacy.swift"
+"$SCRIPTS/porting.sh" ratchet "$RT" --record >/dev/null 2>&1
+sed -i '' '/^module	Sources\/Core$/d' "$RT/docs/PORTING_RATCHET.tsv"
+out="$(hook weaken-watch.sh "$RT" 2>&1)"
+expect_result "weakened: a module removed from the porting ratchet is reported" 0 'docs/PORTING_RATCHET\.tsv: module Sources/Core removed from the porting ratchet' "exit=0
+$out"
+expect_result "weakened: a macOS-only use accepted by recording again is reported" 0 '1 macOS-only use accepted by the porting ratchet: Packages/Kit/Sources/Shared/Legacy\.swift: AppKit NSColor' "exit=0
+$out"
+set_config "$RT" '{"format":"none","lint":"none","verify":{"enabled":false},"porting":{"ratchet":"plans/ios.tsv"}}'
+expect_result "ratchet: porting.ratchet moves the file" 0 'plans/ios\.tsv' "$(ratchet --record --module Sources/Core)"
+expect_result "ratchet: ... and the check reads it there" 0 '^exit=0$' "$(ratchet)"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
