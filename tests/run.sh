@@ -5360,7 +5360,7 @@ printf '#!/bin/bash\nexit 0\n' >"$RV/scripts/verify.sh"; chmod +x "$RV/scripts/v
 echo '{}' >"$RV/docs/architecture-contracts.json"
 printf '# App\n## Non-negotiable rules\n- The build passes. <!-- check: verify -->\n- Modules keep their layers. <!-- check: architecture contracts -->\n- Core is protected. <!-- check: guard -->\n' >"$RV/CLAUDE.md"
 git -C "$RV" add -A && git -C "$RV" -c user.email=t@e.c -c user.name=t commit -qm init
-rv() { local o c; o="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/rules.sh" --project "$RV" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+rv() { local o c; o="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/rules.sh" --project "$RV" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
 out="$(rv)"
 expect_result "rules: a verify link does not hold while the command is not approved" 0 'verify: off, the verify command is not approved yet' "$out"
 expect_result "rules: ... nor do the architecture contracts, which run with it" 0 'architecture contracts: off, the verify command is not approved yet.*they run only with the verify command' "$out"
