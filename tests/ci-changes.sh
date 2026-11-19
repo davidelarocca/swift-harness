@@ -15,6 +15,7 @@ check "a script runs the hook tests only" "true false false false" pull_request 
 check "verify.sh runs the iOS fixture and check sensitivity" "true false true true" pull_request false plugins/swift-harness/scripts/verify.sh
 check "lib.sh is used by every script" "true false true true" pull_request false plugins/swift-harness/scripts/lib.sh
 check "a template helper runs every fixture" "true true true true" pull_request false plugins/swift-harness/skills/setup/templates/tests/LayoutAudit.swift
+check "the formatter check runs with the Swift fixtures" "true true false false" pull_request false tests/format-helpers.sh
 check "a fixture runs the Swift jobs and check sensitivity" "true true false true" pull_request false tests/fixtures/accessibility/A.swift
 check "the workflow itself runs everything" "true true true true" pull_request false .github/workflows/ci.yml
 check "a draft runs no macOS job" "false false false false" pull_request true plugins/swift-harness/scripts/verify.sh

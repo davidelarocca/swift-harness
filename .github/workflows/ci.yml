@@ -55,7 +55,7 @@ jobs:
           for f in plugins/swift-harness/scripts/*.sh \
                    plugins/swift-harness/skills/setup/templates/verify.sh \
                    tests/run.sh tests/ios-fixture.sh tests/mutate-fixture.sh tests/smoke/*.sh \
-                   tests/ci-changes.sh .github/workflows/changes.sh; do
+                   tests/ci-changes.sh tests/format-helpers.sh .github/workflows/changes.sh; do
             bash -n "$f"
           done
 
@@ -68,7 +68,7 @@ jobs:
             plugins/swift-harness/scripts/*.sh \
             plugins/swift-harness/skills/setup/templates/verify.sh \
             tests/run.sh tests/ios-fixture.sh tests/mutate-fixture.sh tests/smoke/*.sh \
-            tests/ci-changes.sh .github/workflows/changes.sh
+            tests/ci-changes.sh tests/format-helpers.sh .github/workflows/changes.sh
 
       - name: Which macOS jobs a change needs (tests/ci-changes.sh)
         run: bash tests/ci-changes.sh
@@ -123,6 +123,13 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
+
+      # The helpers the setup copies are kept as shipped: with the generated configs, neither
+      # SwiftFormat nor swift-format changes one, as a whole-project run or one file at a time.
+      - name: Formatters leave the template helpers as shipped
+        run: |
+          command -v swiftformat >/dev/null || brew install swiftformat
+          tests/format-helpers.sh
 
       # Builds Tokens, PillCenter and SnapshotTest with the template helpers.
       # Snapshot tests are not run here: the visual fixture below runs the helper.

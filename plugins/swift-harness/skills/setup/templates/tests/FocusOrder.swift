@@ -26,7 +26,11 @@
 // `hasKeyboardFocus` attribute through a query, which works on macOS 26 and 27 but is not
 // documented. When no element reports focus, check() fails saying so rather than passing.
 
-// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// A helper kept as shipped, so that a later version can be compared with it: no formatter
+// rewrites it (SwiftFormat, swift-format) and its style rules are off here; the project's
+// other lint rules still apply.
+// swiftformat:disable all
+// swift-format-ignore-file
 // swiftlint:disable line_length
 
 import XCTest

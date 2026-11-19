@@ -2098,6 +2098,21 @@ expect_row "doctor: an unknown screenshots key warns" "$out" WARN 'Config keys' 
 
 if grep -qF '| `tests/Snapshot.swift` |' "$SKILLS/setup/SKILL.md"; then ok "snapshots: setup installs the snapshot helper"
 else nok "snapshots: setup installs the snapshot helper"; fi
+
+# The helpers are kept as shipped, so each one turns the formatters off for itself, before its
+# first line of code. The real formatters run on them in tests/format-helpers.sh (CI).
+bad=""
+for f in "$TEMPLATES"/tests/*.swift; do
+  code="$(grep -n -m1 -E '^(import|#if|@|enum|struct|final|class|func) ' "$f" | cut -d: -f1)"
+  for marker in '// swiftformat:disable all' '// swift-format-ignore-file'; do
+    line="$(grep -n -m1 -xF -- "$marker" "$f" | cut -d: -f1)"
+    [ -n "$line" ] && [ -n "$code" ] && [ "$line" -lt "$code" ] || bad="$bad $(basename "$f"):$marker"
+  done
+done
+if [ -z "$bad" ]; then ok "templates: every test helper turns SwiftFormat and swift-format off for itself"
+else nok "templates: every test helper turns SwiftFormat and swift-format off for itself" "$bad"; fi
+if grep -qF 'swiftformat:disable all' "$SKILLS/setup/SKILL.md" && [ -x "$HERE/format-helpers.sh" ]; then ok "templates: setup says the helpers are left alone by the formatters"
+else nok "templates: setup says the helpers are left alone by the formatters"; fi
 if [ "$(readlink "$HERE/fixtures/visual/Tests/ScreensTests/Snapshot.swift")" = "../../../../../plugins/swift-harness/skills/setup/templates/tests/Snapshot.swift" ]; then
   ok "snapshots: the Swift fixture compares with the template helper itself"
 else nok "snapshots: the Swift fixture compares with the template helper itself"; fi

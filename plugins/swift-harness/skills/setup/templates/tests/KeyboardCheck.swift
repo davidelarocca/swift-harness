@@ -31,7 +31,11 @@
 // test: FocusOrder.swift for the focus order, XCUIApplication.typeKey for the shortcuts.
 // Letters map to their key on a US keyboard; other layouts match by character.
 
-// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// A helper kept as shipped, so that a later version can be compared with it: no formatter
+// rewrites it (SwiftFormat, swift-format) and its style rules are off here; the project's
+// other lint rules still apply.
+// swiftformat:disable all
+// swift-format-ignore-file
 // swiftlint:disable large_tuple
 
 #if os(macOS)

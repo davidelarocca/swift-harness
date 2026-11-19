@@ -35,7 +35,11 @@
 // window, the image looks like an empty window and capture() reports it as blank. A view of
 // one color is saved like any other.
 
-// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// A helper kept as shipped, so that a later version can be compared with it: no formatter
+// rewrites it (SwiftFormat, swift-format) and its style rules are off here; the project's
+// other lint rules still apply.
+// swiftformat:disable all
+// swift-format-ignore-file
 // swiftlint:disable line_length
 
 #if os(macOS)

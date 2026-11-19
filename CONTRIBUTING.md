@@ -20,6 +20,7 @@ Every change to a hook, template or hook message needs a test that fails before 
 |---|---|---|
 | `tests/run.sh` | Hook scripts and the `verify.sh` template, with fake tools | bash, git, jq |
 | `swift build --build-tests` in `tests/fixtures/design-system` | The Swift reference files compile | Xcode |
+| `tests/format-helpers.sh` | The real formatters leave the template helpers as shipped | swiftformat, Xcode |
 | `tests/smoke/run.sh` | The hooks inside real Claude Code sessions | Claude Code (logged in), Xcode, SwiftLint; about $1 |
 
 CI runs ShellCheck, JSON validation and `claude plugin validate` on every pull request, and the macOS jobs (`tests/run.sh`, the Swift fixtures, the iOS fixture, check sensitivity) only when the pull request changes files they read: see [CI minutes](#ci-minutes). Run the smoke test before opening a pull request that changes hooks, hook messages or templates, and paste its summary in the description. See [tests/smoke/README.md](tests/smoke/README.md).

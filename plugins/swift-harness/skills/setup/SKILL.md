@@ -114,6 +114,8 @@ For each template, if the target file does not exist, create it with placeholder
 | `verify.sh` | `scripts/verify.sh` (then `chmod +x`) |
 | `swift-harness.json` | `.claude/swift-harness.json` (this file switches the plugin hooks on for this project) |
 
+The files under `tests/` are helpers kept as shipped: copy them unchanged, header included, so a later version of the plugin can be compared with them. Each one turns the formatters off for itself (`// swiftformat:disable all`, `// swift-format-ignore-file`), so `swiftformat .` and the format-on-edit hook leave it alone: do not add them to `--exclude`, and do not reformat them by hand.
+
 Rules for filling templates:
 
 - Fill `paths:` globs in the rules with the real folder layout found in step 2.
