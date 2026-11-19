@@ -548,7 +548,7 @@ if [ -n "$rules_json" ] && [ "$(jq -r '.total // 0' <<<"$rules_json")" -gt 0 ]; 
   elif [ "$r_linked" -eq 0 ]; then
     row INFO Rules "$r_total rule(s), none names the check that enforces it. Add <!-- check: NAME --> at the end of a rule's line to link it (rules.sh --all lists the ones nothing checks)"
   else
-    row PASS Rules "$r_linked of $r_total rule(s) name a check, and each check exists and is on; the others are rules nothing checks (rules.sh --all lists them)"
+    row PASS Rules "$r_linked of $r_total rule(s) name a check, and each check exists and is on (not a proof that it catches every case of its rule); the others are rules nothing checks (rules.sh --all lists them)"
   fi
 fi
 

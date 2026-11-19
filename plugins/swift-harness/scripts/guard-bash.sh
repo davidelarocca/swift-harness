@@ -57,6 +57,14 @@ writes() {
 
 escape() { printf '%s' "$1" | sed 's#[][\.*^$+?(){}|]#\\&#g'; }
 
+# Every path is read first, then looked at (#167): stopping at the first match while the list was
+# still being written left a writer on a closed pipe, and where SIGPIPE is ignored (CI runners)
+# it printed "write error: Broken pipe".
+candidates="$(
+  jq -r '.protectedPaths[]? | strings' "$SH_CONFIG" 2>/dev/null
+  sh_snapshots; echo
+  sh_performance; echo
+)"
 hit=""
 while IFS= read -r protected; do
   [ -n "$protected" ] || continue
@@ -65,11 +73,7 @@ while IFS= read -r protected; do
   protected="${protected%/}"
   [ -n "$protected" ] || continue
   if writes "$(escape "$protected")"; then hit="$protected"; break; fi
-done < <(
-  jq -r '.protectedPaths[]? | strings' "$SH_CONFIG" 2>/dev/null
-  sh_snapshots; echo
-  sh_performance; echo
-)
+done <<<"$candidates"
 if [ -z "$hit" ] && [ "$(sh_cfg '.guardPbxproj' 'true')" = "true" ] &&
   writes "${WORD}[.]pbxproj"; then
   hit="project.pbxproj"

@@ -24,7 +24,9 @@
 #   lint <rule id>             a SwiftLint rule: named in .swiftlint.yml (custom rule, opt-in,
 #                              only_rules), not in disabled_rules, or a default rule of the
 #                              installed swiftlint
-# A link is "ok", "off" (the check exists and is turned off), "unknown" (no such check) or
+# A link is "ok" (the check exists and is turned on: not a proof that it catches every case of
+# the rule), "off" (the check exists and is turned off, or is the verify command and the user has
+# not approved it), "unknown" (no such check) or
 # "unchecked" (cannot be told here, for example a lint rule with swiftlint not installed).
 #
 # Default output: the counts, then the links that are off or unknown. --all also lists the
@@ -128,6 +130,21 @@ resolve_lint() { # $1 rule id -> status, why
   esac
 }
 
+# The verify command runs only once the user approved it (#6): until then a rule that names it
+# is enforced by nothing. Known only where the plugin's data folder is (CLAUDE_PLUGIN_DATA).
+verify_runs() { # $1 note for a check that depends on verify; lowers status to off when it does not run
+  local cmd
+  if [ "$(sh_cfg '.verify.enabled' 'true')" != true ]; then
+    [ -z "$1" ] || { status=off; why="verify.enabled is false, and $1"; }
+    return
+  fi
+  if [ -z "${CLAUDE_PLUGIN_DATA:-}" ]; then why="$why; whether the verify command is approved could not be told here"; return; fi
+  cmd="$(sh_cfg '.verify.command' 'scripts/verify.sh fast')"
+  sh_verify_approved "$cmd" "$(sh_state_path)" 2>/dev/null && return
+  status=off
+  why="the verify command is not approved yet (/swift-harness:approve-verify), so it does not run${1:+; $1}"
+}
+
 resolve() { # $1 marker text after "check:" -> status, why
   local name="$1" kind arg
   kind="${name%% *}"; arg=""
@@ -142,13 +159,14 @@ resolve() { # $1 marker text after "check:" -> status, why
       if [ "$(sh_cfg '.security.enabled' 'true')" = true ]; then status=ok; why="security.enabled"; else status=off; why="security.enabled is false"; fi ;;
     "snapshot baselines" | "performance baselines" | "weakened checks") status=ok; why="always on" ;;
     "architecture contracts")
-      if [ -f "$SH_ROOT/docs/architecture-contracts.json" ]; then status=ok; why="docs/architecture-contracts.json exists"; else status=off; why="no docs/architecture-contracts.json"; fi ;;
+      if [ ! -f "$SH_ROOT/docs/architecture-contracts.json" ]; then status=off; why="no docs/architecture-contracts.json"
+      else status=ok; why="docs/architecture-contracts.json exists"; verify_runs "they run only with the verify command"; fi ;;
     "docs references")
       if sh_docs_on; then status=ok; why="docs.enabled"; else status=off; why="docs.enabled is false"; fi ;;
     "component registry")
       if sh_registry_on; then status=ok; why="registry on"; else status=off; why="registry disabled or its file is missing"; fi ;;
     verify | "verify "*)
-      if [ "$(sh_cfg '.verify.enabled' 'true')" = true ]; then status=ok; why="verify.enabled"; else status=off; why="verify.enabled is false"; fi ;;
+      if [ "$(sh_cfg '.verify.enabled' 'true')" = true ]; then status=ok; why="verify.enabled"; verify_runs ""; else status=off; why="verify.enabled is false"; fi ;;
     "lint "*)
       if [[ "$arg" =~ ^[A-Za-z0-9_]+$ ]]; then resolve_lint "$arg"; else status=unknown; why="a lint link names one SwiftLint rule id"; fi ;;
     *) status=unknown; why="no check called \"$name\"" ;;
@@ -196,5 +214,6 @@ jq -r --argjson all "$all" '
     (.unchecked[] | "- \(.file):\(.line): \(.check): \(.why)"),
     (if $all and .unlinked > 0 then "Rules nothing checks (a hope, not a promise):" else empty end),
     (if $all then (.rules[] | select(.links | length == 0) | "- \(.file):\(.line): \(.text)") else empty end),
-    (if (.unlinked > 0 and ($all | not)) then "Run with --all to list the rules nothing checks." else empty end)
+    (if (.unlinked > 0 and ($all | not)) then "Run with --all to list the rules nothing checks." else empty end),
+    (if .linked > 0 then "A link that holds means its check exists and is turned on, not that it catches every case of the rule: /swift-harness:check-sensitivity measures what a check catches." else empty end)
   end' <<<"$result"

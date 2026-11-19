@@ -5336,6 +5336,40 @@ else nok "test-check: runs the scheme on the picked simulator, without signing" 
 expect_result "test-check: a scheme with no iOS destination says so" 1 'not run: the scheme has no iOS destination yet' "$(FAKE_XC_SCHEMES="MacTool:noios" xtc "$XP" --scheme MacTool)"
 mv "$TF/xcodebuild-pkg" "$TF/xcodebuild"; rm -f "$TF/xcodebuild-xc"
 
+# ---------- from an external review of 1.10.0 ----------
+
+# guard-bash: with SIGPIPE ignored, as on CI runners, stopping at the first protected path must
+# not leave a writer on a closed pipe.
+GP="$(new_project guard-pipe)"
+jq '.guardBash = true | .protectedPaths = (["Sources/Audio/"] + [range(0; 400) | "Sources/Gen\(.)/"])' "$GP/.claude/swift-harness.json" >"$GP/cfg.tmp" && mv "$GP/cfg.tmp" "$GP/.claude/swift-harness.json"
+gperr="$( (trap '' PIPE; hook guard-bash.sh "$GP" "$(bash_input 'echo x > Sources/Audio/Engine.swift')" 2>&1 >/dev/null) )"
+if [ -z "$gperr" ]; then ok "guard-bash: no write error on a closed pipe when SIGPIPE is ignored"
+else nok "guard-bash: no write error on a closed pipe when SIGPIPE is ignored" "$gperr"; fi
+out="$(hook guard-bash.sh "$GP" "$(bash_input 'echo x > Sources/Gen399/A.swift')")"
+expect_result "guard-bash: the last of many protected paths still asks" 0 'Sources/Gen399.*protected' "exit=0
+$out"
+
+# rules: a link to the verify command holds only once the command is approved.
+RV="$TMP/rules-verify"
+mkdir -p "$RV/.claude" "$RV/scripts" "$RV/docs"
+git -C "$RV" init -q
+printf '%s\n' '{"verify":{"command":"scripts/verify.sh fast"},"protectedPaths":["Sources/Core/"]}' >"$RV/.claude/swift-harness.json"
+printf '#!/bin/bash\nexit 0\n' >"$RV/scripts/verify.sh"; chmod +x "$RV/scripts/verify.sh"
+echo '{}' >"$RV/docs/architecture-contracts.json"
+printf '# App\n## Non-negotiable rules\n- The build passes. <!-- check: verify -->\n- Modules keep their layers. <!-- check: architecture contracts -->\n- Core is protected. <!-- check: guard -->\n' >"$RV/CLAUDE.md"
+git -C "$RV" add -A && git -C "$RV" -c user.email=t@e.c -c user.name=t commit -qm init
+rv() { local o c; o="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/rules.sh" --project "$RV" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+out="$(rv)"
+expect_result "rules: a verify link does not hold while the command is not approved" 0 'verify: off, the verify command is not approved yet' "$out"
+expect_result "rules: ... nor do the architecture contracts, which run with it" 0 'architecture contracts: off, the verify command is not approved yet.*they run only with the verify command' "$out"
+approve "$RV" >/dev/null
+out="$(rv)"
+expect_result "rules: once approved, both links hold" 0 '3 rule\(s\): 3 name a check' "$out" 'Links to fix'
+expect_result "rules: it says what a link that holds means" 0 'not that it catches every case of the rule' "$out"
+out="$(env -u CLAUDE_PLUGIN_DATA "$SCRIPTS/rules.sh" --project "$RV" --json 2>&1)"
+if jq -e '[.rules[].links[] | select(.check == "verify")][0] | .status == "ok" and (.why | test("could not be told here"))' <<<"$out" >/dev/null; then ok "rules: without the plugin's data folder it says the approval could not be told"
+else nok "rules: without the plugin's data folder it says the approval could not be told" "$out"; fi
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
