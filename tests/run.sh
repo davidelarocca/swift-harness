@@ -5411,6 +5411,10 @@ FAKE_VERIFY_LOG="$WLOG" hook stop-verify.sh "$WT" >/dev/null 2>&1
 if [ "$(wc -l <"$WLOG" | tr -d ' ')" = 1 ]; then ok "stop: a change to watched Rust code alone runs the verify command"
 else nok "stop: a change to watched Rust code alone runs the verify command" "$(cat "$WLOG")"; fi
 out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: watch entries that leave the project are named" 0 'WARN \| Other build systems \| verify\.watch entries not used .*\.\./outside/, /etc/' "exit=0
+$out"
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":["engine/",":!engine/crates/ffi/gen/"]},"protectedPaths":["Sources/Audio/"]}'
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
 expect_result "doctor: watched code of another build system passes" 0 'PASS \| Other build systems \| verify\.watch: engine/' "exit=0
 $out"
 set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast"},"protectedPaths":["Sources/Audio/"]}'
@@ -5555,6 +5559,105 @@ expect_result "audio: an item still missing stays not found" 0 'media services r
 if ! "$SCRIPTS/porting.sh" scan "$AA" | grep -q '^bg	'; then ok "audio: its lines stay out of the scan"; else nok "audio: its lines stay out of the scan"; fi
 expect_result "audio: a project with no audio code says so" 0 'no audio playback, recording or audio unit API found' "exit=0
 $("$SCRIPTS/porting.sh" audio "$CA" 2>&1)"
+
+# ---------- from a second external review (1.11.0) ----------
+
+# The nearest config wins over one at the top of the repository.
+printf '%s\n' '{"verify":{"enabled":false},"protectedPaths":["docs/"]}' >"$MR/.claude-top.json"; mkdir -p "$MR/.claude"; mv "$MR/.claude-top.json" "$MR/.claude/swift-harness.json"
+if [ "$(mroot "$MR/apple" "$MR/apple")" = "$MR/apple" ]; then ok "monorepo: with a config at the top too, the app's own config wins inside the app"
+else nok "monorepo: with a config at the top too, the app's own config wins inside the app" "$(mroot "$MR/apple" "$MR/apple")"; fi
+if [ "$(mroot "$MR/backend" "$MR")" = "$MR" ]; then ok "monorepo: ... and the top config is used outside the app"
+else nok "monorepo: ... and the top config is used outside the app" "$(mroot "$MR/backend" "$MR")"; fi
+if mhook guard.sh "$MR/apple" "$(edit_input "$MR/apple/Sources/Core/Core.swift")" | grep -q '"permissionDecision": "ask"'; then ok "monorepo: the app's protected path is still guarded with a config at the top"
+else nok "monorepo: the app's protected path is still guarded with a config at the top"; fi
+rm -rf "$MR/.claude"
+# check.sh finds a project in a subfolder as the hooks do.
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" FAKE_VERIFY_LOG=/dev/null "$SCRIPTS/check.sh" --project "$MR/apple" 2>&1)"; code=$?
+expect_result "check.sh: a project in a subfolder of its repository is found" "$code" '' "exit=$code
+$out" 'no \.claude/swift-harness\.json'
+expect_result "check.sh: with no config up to the top of the repository it says where it looked" 2 'no \.claude/swift-harness\.json in .*backend or above it' "exit=$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$MR/backend" >/dev/null 2>&1; echo $?)
+$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$MR/backend" 2>&1)"
+
+# Guest mode in a subfolder: the excludes and the Codex launcher carry the subfolder.
+GM="$TMP/guest-mono"
+mkdir -p "$GM/App/Sources"
+git -C "$GM" init -q; git -C "$GM" config user.email t@e.c; git -C "$GM" config user.name t
+echo 'let a = 1' >"$GM/App/Sources/A.swift"; git -C "$GM" add -A; git -C "$GM" commit -qm init
+CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/setup-guest.sh" --project "$GM/App" --fast "swift build" --full "swift test" --local --codex >/dev/null 2>&1
+if [ -z "$(git -C "$GM" status --porcelain)" ]; then ok "guest: --local in a subfolder keeps its files out of git"
+else nok "guest: --local in a subfolder keeps its files out of git" "$(git -C "$GM" status --porcelain)"; fi
+if jq -r '.hooks.SessionStart[0].hooks[0].command' "$GM/App/.codex/hooks.json" 2>/dev/null | grep -q 'show-toplevel)/App/\.codex/swift-harness-hook\.sh'; then ok "guest: the Codex launcher of a subfolder project points into the subfolder"
+else nok "guest: the Codex launcher of a subfolder project points into the subfolder" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$GM/App/.codex/hooks.json" 2>&1)"; fi
+
+# verify.watch: an entry git does not accept does not switch change detection off.
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":[":(glob","engine/"]},"protectedPaths":["Sources/Audio/"]}'
+wchanges "watch: with a malformed entry, a Swift change is still seen" changes 'echo "let w = 9" >>"$WT/Sources/App.swift"'
+wchanges "watch: ... and so is a change under the entries that are valid" changes 'echo "// w" >>"$WT/engine/crates/ffi/src/lib.rs"'
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: a verify.watch entry that is not a pathspec is named" 0 'WARN \| Other build systems \| verify\.watch entries not used .*:\(glob' "exit=0
+$out"
+# A glob with folders reaches into a nested repository.
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":["engine/*/*/src/*.rs"]},"protectedPaths":["Sources/Audio/"]}'
+wchanges "watch: a glob with folders reaches a file of a nested repository" changes 'echo "// g" >>"$WT/engine/vendor/core/src/c.rs"'
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":["other/*/*.rs"]},"protectedPaths":["Sources/Audio/"]}'
+wchanges "watch: ... and a glob for another folder does not" same 'echo "// h" >>"$WT/engine/vendor/core/src/c.rs"'
+
+# Untracked files are hashed in batches: the result is the same, a new one is seen.
+UT="$(new_project untracked-many)"
+mkdir -p "$UT/Sources/Gen"
+for i in 1 2 3 4 5 6 7 8 9 10; do echo "let g$i = $i" >"$UT/Sources/Gen/G $i.swift"; done
+a="$(fingerprint "$UT")"; b="$(fingerprint "$UT")"
+if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "fingerprint: untracked files, names with spaces included, hash the same twice"; else nok "fingerprint: untracked files, names with spaces included, hash the same twice"; fi
+echo 'let g = 0' >>"$UT/Sources/Gen/G 7.swift"
+if [ "$a" != "$(fingerprint "$UT")" ]; then ok "fingerprint: a change to one untracked file is seen"; else nok "fingerprint: a change to one untracked file is seen"; fi
+
+# SwiftLint with another reporter in its config: the hook asks for the one it reads.
+LR="$(new_project lint-reporter)"
+set_config "$LR" '{"format":"none","lint":"swiftlint"}'
+LRF="$TMP/lint-reporter-fakes"; mkdir -p "$LRF"
+cat >"$LRF/swiftlint" <<'FAKE'
+#!/bin/bash
+# fake swiftlint whose config picks the json reporter: xcode lines only with --reporter xcode
+file="${!#}"
+case " $* " in
+  *" --reporter xcode "*) printf '%s:1:5: warning: Force Cast Violation: Force casts should be avoided (force_cast)\n' "$file" ;;
+  *) printf '[{"rule_id":"force_cast","severity":"Warning","file":"%s","line":1}]\n' "$file" ;;
+esac
+FAKE
+chmod +x "$LRF/swiftlint"
+out="$(PATH="$LRF:$PATH" hook post-edit.sh "$LR" "$(edit_input "$LR/Sources/App.swift")" 2>&1)"
+expect_result "post-edit: warnings are read whatever reporter the SwiftLint config picks" 0 'SwiftLint: 1 issue\(s\) in Sources/App\.swift' "exit=0
+$out" 'no issues'
+
+# Architecture contracts: a dump with no targets is a failure to read, not a pass.
+CF="$TMP/contracts-fakes"; mkdir -p "$CF"
+printf '#!/bin/bash\necho "{\\"name\\": \\"X\\"}"\n' >"$CF/swift"; chmod +x "$CF/swift"
+CP="$TMP/contracts-nodump"; mkdir -p "$CP/docs"
+printf '// swift-tools-version: 6.0\n' >"$CP/Package.swift"
+printf '%s\n' '{"version":1,"packages":{".":{"App":[]}}}' >"$CP/docs/architecture-contracts.json"
+out="$(PATH="$CF:$PATH" "$SCRIPTS/contracts.sh" "$CP" 2>&1)"; code=$?
+expect_result "contracts: a dump with no list of targets fails, saying nothing was checked" 1 'gave no list of targets, so its dependencies were not checked' "exit=$code
+$out"
+
+# Security settings turned off with approval: the record says not run, not passed.
+SO="$(new_project security-off)"
+hook session-start.sh "$SO" '{"source":"startup"}' >/dev/null
+set_config "$SO" '{"verify":{"command":"scripts/verify.sh fast"},"security":{"enabled":false}}'
+sdig="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/security.sh" --status --project "$SO" 2>/dev/null | sed -n 's/^Digest: *//p')"
+CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/security.sh" --approve "$sdig" --project "$SO" >/dev/null 2>&1
+approve "$SO" >/dev/null
+echo 'let s = 2' >>"$SO/Sources/App.swift"
+FAKE_VERIFY_LOG=/dev/null hook stop-verify.sh "$SO" >/dev/null 2>&1
+sev="$(find "$TMP/data/state" -name evidence.json -newer "$SO/Sources/App.swift" 2>/dev/null | head -1)"
+if [ -n "$sev" ] && jq -e '[.checks[]? | select(.name == "security settings")][0] | .result == "not run" and (.detail | test("approved by the user"))' "$sev" >/dev/null 2>&1; then ok "stop: security turned off with approval is recorded as not run, not passed"
+else nok "stop: security turned off with approval is recorded as not run, not passed" "$( [ -n "$sev" ] && jq -c '[.checks[]? | select(.name == "security settings")]' "$sev")"; fi
+
+# No git repository: the session is told the end-of-turn check does not run.
+NG="$TMP/no-git"; mkdir -p "$NG/.claude" "$NG/Sources"
+printf '%s\n' '{"verify":{"enabled":false}}' >"$NG/.claude/swift-harness.json"
+out="$(hook session-start.sh "$NG" '{"source":"startup"}' 2>&1)"
+expect_result "session start: without a git repository it says the end-of-turn check does not run" 0 'is not a git repository, so the end-of-turn check .* does not run' "exit=0
+$out"
 
 # ---------- summary ----------
 

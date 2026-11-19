@@ -464,7 +464,11 @@ if [ "$run_ratchet" = "true" ]; then
   fi
 fi
 
-if [ "$run_security" = "true" ]; then
+# Turned off, with the user's approval: nothing is compared, and the record says off, not passed.
+if [ "$run_security" = "true" ] && [ "$(sh_cfg '.security.enabled' 'true')" = "false" ] &&
+  grep -qxF '.claude/swift-harness.json: security.enabled = false' "$state/security-approved" 2>/dev/null; then
+  ev "security settings" "not run" "security.enabled is false, approved by the user: nothing was compared"
+elif [ "$run_security" = "true" ]; then
   ev_t0=$SECONDS
   if security_out="$("$(dirname "$0")/security.sh" check --project "$SH_ROOT" 2>&1)"; then
     ev_ran "security settings" passed "unchanged since the approved state"

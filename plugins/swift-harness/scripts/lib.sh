@@ -42,18 +42,20 @@ sh_root() {
   [ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
   root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || root="${CLAUDE_PROJECT_DIR:-$cwd}"
   root="$( (cd "$root" 2>/dev/null && pwd -P) || printf '%s' "$root")"
+  # A project in a subfolder of the repository (a monorepo: the Swift app next to other code,
+  # set up from that subfolder): the nearest folder with a config from the cwd up to the top
+  # level wins, also over a config at the top level, so an app's own protected paths and checks
+  # are the ones used inside it.
+  inner="$(cd "$cwd" 2>/dev/null && pwd -P)" || inner=""
+  while [ -n "$inner" ] && [ "$inner" != "$root" ] && [[ "$inner/" == "$root"/* ]]; do
+    if [ -f "$inner/.claude/swift-harness.json" ]; then
+      printf '%s' "$inner"
+      return
+    fi
+    inner="$(dirname "$inner")"
+  done
   if [ ! -f "$root/.claude/swift-harness.json" ]; then
-    # A project in a subfolder of the repository (a monorepo: the Swift app next to other code,
-    # set up from that subfolder): the nearest folder with a config from the cwd up to the top
-    # level, else the session's project folder when it is inside this checkout.
-    inner="$(cd "$cwd" 2>/dev/null && pwd -P)" || inner=""
-    while [ -n "$inner" ] && [ "$inner" != "$root" ] && [[ "$inner/" == "$root"/* ]]; do
-      if [ -f "$inner/.claude/swift-harness.json" ]; then
-        printf '%s' "$inner"
-        return
-      fi
-      inner="$(dirname "$inner")"
-    done
+    # Else the session's project folder when it is inside this checkout.
     inner="$(cd "${CLAUDE_PROJECT_DIR:-/nonexistent}" 2>/dev/null && pwd -P)" || inner=""
     if [ -n "$inner" ] && [ "$inner" != "$root" ] && [[ "$inner/" == "$root"/* ]] && [ -f "$inner/.claude/swift-harness.json" ]; then
       printf '%s' "$inner"
@@ -281,7 +283,20 @@ sh_watch() {
       case "$w" in ':!'*) neg=':!'; w="${w#:!}" ;; esac
       w="${w#./}"
       case "$w" in '' | /* | .. | ../* | */../* | */..) continue ;; esac
+      # An entry git does not accept as a pathspec (":(glob" with no ")") would make every listing
+      # fail, Swift files included: it is dropped, and the doctor names it.
+      git -C "$SH_ROOT" ls-files -z -- "$neg$w" ${neg:+.} >/dev/null 2>&1 || continue
       printf '%s%s\n' "$neg" "$w"
+    done
+}
+# The verify.watch entries that are not used: they leave the project or are not a git pathspec.
+sh_watch_dropped() {
+  local used w
+  used="$(sh_watch)"
+  jq -r '.verify.watch // [] | if type == "array" then .[] | strings else empty end' "$SH_CONFIG" 2>/dev/null |
+    while IFS= read -r w; do
+      [ -n "$w" ] || continue
+      grep -qxF -- "${w#./}" <<<"$used" || { [[ "$w" == ':!./'* ]] && grep -qxF -- ":!${w#:!./}" <<<"$used"; } || printf '%s\n' "$w"
     done
 }
 # The watch entries as pathspecs of the repository at $1 (its path from the project root, empty
@@ -293,7 +308,29 @@ sh_watch_for() {
     neg=""
     case "$w" in ':!'*) neg=':!'; w="${w#:!}" ;; esac
     if [ -z "$rel" ]; then printf '%s%s\n' "$neg" "$w"; continue; fi
-    case "$w" in *'*'*) [[ "$w" == */* ]] || printf '%s%s\n' "$neg" "$w"; continue ;; esac
+    case "$w" in
+      *'*'*)
+        if [[ "$w" != */* ]]; then printf '%s%s\n' "$neg" "$w"; continue; fi
+        # A glob with folders ("engines/*/*.rs"): matched part by part against the path of the
+        # nested repository; what is left of it is the pathspec inside.
+        local gp rp i=0 fits=1 rest
+        IFS=/ read -ra gp <<<"$w"
+        IFS=/ read -ra rp <<<"$rel"
+        while [ "$i" -lt "${#rp[@]}" ]; do
+          if [ "$i" -ge "${#gp[@]}" ]; then
+            [[ "${gp[${#gp[@]} - 1]}" == *'*'* ]] || fits=0 # a last "*" crosses folders
+            break
+          fi
+          # shellcheck disable=SC2053 # the glob part is a pattern on purpose
+          [[ "${rp[$i]}" == ${gp[$i]} ]] || { fits=0; break; }
+          i=$((i + 1))
+        done
+        [ "$fits" = 1 ] || continue
+        rest="$(IFS=/; printf '%s' "${gp[*]:$i}")"
+        if [ -z "$rest" ]; then [ -n "$neg" ] || printf '.\n'; else printf '%s%s\n' "$neg" "$rest"; fi
+        continue
+        ;;
+    esac
     p="${w%/}"
     case "$rel/" in "$p"/*) [ -n "$neg" ] || printf '.\n'; continue ;; esac
     case "$w" in "$rel"/*) printf '%s%s\n' "$neg" "${w#"$rel"/}" ;; esac
@@ -598,7 +635,9 @@ sh_fingerprint_repo() { # $1 repository root, then pathspecs added to the build 
   shift
   if git -C "$repo" rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1; then
     git -C "$repo" rev-parse HEAD 2>/dev/null
-    git -C "$repo" diff HEAD -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null
+    # A diff git could not make is never "unchanged": the fingerprint differs each time, so the
+    # check runs instead of passing on what it could not read.
+    git -C "$repo" diff HEAD -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null || printf 'git diff failed %s %s\n' "$(date +%s)" "$RANDOM"
   else
     printf 'no commit yet\n'
     git -C "$repo" ls-files -z --cached -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null |
@@ -607,8 +646,10 @@ sh_fingerprint_repo() { # $1 repository root, then pathspecs added to the build 
         if [ -f "$repo/$f" ]; then shasum <"$repo/$f" 2>/dev/null; else printf 'deleted\n'; fi
       done
   fi
-  git -C "$repo" ls-files -z --others --exclude-standard -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null |
-    while IFS= read -r -d '' f; do shasum "$repo/$f" 2>/dev/null; done
+  # In batches: one shasum per file took a session start past its 30 seconds with ten thousand
+  # untracked files.
+  (cd "$repo" 2>/dev/null && git ls-files -z --others --exclude-standard -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null |
+    xargs -0 shasum 2>/dev/null)
 }
 # Nested repositories of $1, as paths from its root: links in the index (submodules, or a
 # repository added as one) and untracked folders that are repositories.
@@ -658,7 +699,9 @@ sh_swiftlint() {
     return
   fi
   err="$(mktemp -t swift-harness-lint.XXXXXX)"
-  SH_LINT_OUTPUT="$(cd "$SH_ROOT" && swiftlint lint --quiet --force-exclude "$1" 2>"$err")"
+  # --reporter xcode: a project whose config picks another reporter (json, csv) would give
+  # output this cannot read, and a file with warnings would be called clean.
+  SH_LINT_OUTPUT="$(cd "$SH_ROOT" && swiftlint lint --quiet --force-exclude --reporter xcode "$1" 2>"$err")"
   SH_LINT_STATUS=$?
   SH_LINT_ERRORS="$(grep -v '^[[:space:]]*$' "$err" | head -20)"
   rm -f "$err"

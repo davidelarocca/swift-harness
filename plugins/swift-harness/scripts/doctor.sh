@@ -570,6 +570,8 @@ other_build_systems() { # "<manifest><TAB><language><TAB><watch entries>" for ea
 other_builds="$(other_build_systems)"
 if [ -n "$other_builds" ]; then
   row WARN "Other build systems" "$(printf '%s\n' "$other_builds" | awk -F'\t' '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $1, $2 }'): a turn that changes only that code ends with nothing checked. Fix: add \"watch\": [$(printf '%s\n' "$other_builds" | cut -f3 | paste -sd, - | sed 's/,/, /g')] to verify in .claude/swift-harness.json (it does not change the verify approval), and make the verify command build that code"
+elif [ -n "$(sh_watch_dropped)" ]; then
+  row WARN "Other build systems" "verify.watch entries not used (they leave the project or are not a git pathspec): $(sh_watch_dropped | paste -sd, - | sed 's/,/, /g'). Fix: correct them in .claude/swift-harness.json"
 elif [ -n "$(sh_watch)" ]; then
   row PASS "Other build systems" "verify.watch: $(sh_watch | paste -sd, - | sed 's/,/, /g'); changes there run the end-of-turn check"
 fi

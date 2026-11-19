@@ -124,8 +124,12 @@ exclude_locally() {
   common="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)" || { echo "setup-guest: --local needs a git repository" >&2; return 1; }
   common="$(cd "$root" && cd "$common" && pwd -P)" || return 1
   mkdir -p "$common/info" && touch "$common/info/exclude"
+  # Paths in info/exclude are from the top of the repository: a project in a subfolder has its own
+  # in front.
+  local prefix
+  prefix="$(git -C "$root" rev-parse --show-prefix 2>/dev/null)"
   for file in .claude/swift-harness.json "$sdir/verify.sh" ${codex_files:-}; do
-    grep -qxF "/$file" "$common/info/exclude" || printf '/%s\n' "$file" >>"$common/info/exclude"
+    grep -qxF "/$prefix$file" "$common/info/exclude" || printf '/%s%s\n' "$prefix" "$file" >>"$common/info/exclude"
   done
 }
 
@@ -219,7 +223,9 @@ if [ "$codex" = true ]; then
     printf 'export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-%s}"\n' "$data"
     printf 'exec "$plugin/scripts/codex-hook.sh" "$@"\n'
   } >"$root/.codex/swift-harness-hook.sh" && chmod +x "$root/.codex/swift-harness-hook.sh" || exit 1
-  launch='bash "$(git rev-parse --show-toplevel)/.codex/swift-harness-hook.sh"'
+  # The launcher is in the project's folder, which is below the top of the repository when the
+  # project is in a subfolder.
+  launch="bash \"\$(git rev-parse --show-toplevel)/$(git -C "$root" rev-parse --show-prefix 2>/dev/null).codex/swift-harness-hook.sh\""
   jq -n --arg l "$launch" '
     def h($s; $t): {type: "command", command: "\($l) \($s)", timeout: $t};
     {description: "swift-harness checks (guest mode), written by setup-guest.sh --codex",
