@@ -2589,6 +2589,20 @@ expect_row "security: doctor names what already weakens protection in it" "$out"
 out="$(sec --status --project "$P")"
 expect_result "security: approve-security lists an unreviewed baseline in full" 0 'recorded automatically.*app-sandbox = true.*weakening protection:.*allow-jit = true' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
+# The check's own switch is listed with the settings. With no security.enabled key in the config
+# its value is the default: the status says so, and the recorded line stays as it was approved.
+expect_result "security: a default shown with the settings is called the default" 0 '^  \.claude/swift-harness\.json: security\.enabled = true \(the default: the file has no security\.enabled key\)$' "exit=0
+$out"
+if [ "$(sec state --project "$P" | grep -F 'security.enabled')" = '.claude/swift-harness.json: security.enabled = true' ]; then ok "security: ... and the recorded line is unchanged"
+else nok "security: ... and the recorded line is unchanged" "$(sec state --project "$P" | grep -F 'security.enabled')"; fi
+before="$(printf '%s' "$out" | sed -n 's/^Digest: //p')"
+jq '. + {security: {enabled: true}}' "$P/.claude/swift-harness.json" >"$TMP/sj" && mv "$TMP/sj" "$P/.claude/swift-harness.json"
+out2="$(sec --status --project "$P")"
+expect_result "security: a value written in the config is not called the default" 0 '^  \.claude/swift-harness\.json: security\.enabled = true$' "exit=0
+$out2" 'the default'
+if [ "$before" = "$(printf '%s' "$out2" | sed -n 's/^Digest: //p')" ]; then ok "security: ... and the digest to approve is the same either way"
+else nok "security: ... and the digest to approve is the same either way"; fi
+git -C "$P" checkout -q -- .claude/swift-harness.json
 sec --approve "$(printf '%s' "$out" | sed -n 's/^Digest: //p')" --project "$P" >/dev/null
 expect_row "security: once reviewed, the baseline passes" "$(doctor "$P")" PASS 'Security settings' 'unchanged since approval'
 expect_result "security: marking the automatic baseline reviewed in a session is shown to the user" 0 'baseline was approved in this session.*marked as reviewed' "exit=0

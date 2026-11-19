@@ -91,6 +91,16 @@ changes() { # "+ line" for added or changed, "- line" for removed
   diff "$approved" <(current_state) | sed -n -e 's/^> /+ /p' -e 's/^< /- /p'
 }
 digest_of() { { cat "$approved" 2>/dev/null; printf -- '--\n'; current_state; } | shasum -a 256 | cut -d' ' -f1; }
+# For the user's eyes only: the line of the check's own switch says when its value is the
+# default, with no security.enabled key in the file to look for. The recorded line stays as it
+# is: it is part of what is approved, and changing it would ask everyone to approve again.
+shown() {
+  if jq -e '(.security | type) == "object" and (.security | has("enabled"))' "$SH_CONFIG" >/dev/null 2>&1; then
+    cat
+  else
+    sed 's|\(\.claude/swift-harness\.json: security\.enabled = true\)$|\1 (the default: the file has no security.enabled key)|'
+  fi
+}
 
 case "$action" in
   state)
@@ -129,7 +139,7 @@ case "$action" in
     if [ "$action" = "--status" ]; then
       if [ -f "$unreviewed" ]; then
         printf 'The baseline was recorded automatically on %s, at the first session in this folder, and you have not reviewed it. Settings in it:\n%s\n' \
-          "$(cat "$unreviewed")" "$(sed 's/^/  /' "$approved")"
+          "$(cat "$unreviewed")" "$(sed 's/^/  /' "$approved" | shown)"
         relaxed="$(grep -E "$RELAXED" "$approved")"
         [ -z "$relaxed" ] || printf 'Of these, weakening protection:\n%s\n' "$(printf '%s\n' "$relaxed" | sed 's/^/  /')"
         printf '\n'
@@ -137,7 +147,7 @@ case "$action" in
       if [ -z "$out" ]; then
         printf 'No change since the last approval (%s setting(s) recorded).\n' "$(grep -c . "$approved" 2>/dev/null || echo 0)"
       else
-        printf 'Changes since the last approval (+ added or new value, - removed or old value):\n%s\n' "$out"
+        printf 'Changes since the last approval (+ added or new value, - removed or old value):\n%s\n' "$(printf '%s\n' "$out" | shown)"
       fi
       printf 'Digest: %s\n' "$(digest_of)"
       exit 0
