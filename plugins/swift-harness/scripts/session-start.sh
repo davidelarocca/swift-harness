@@ -12,11 +12,19 @@ if ! sh_has_jq; then
   exit 0
 fi
 if ! sh_init; then
+  sub_notice="$(sh_subproject_notice)"
+  if [ -n "$sub_notice" ]; then printf '%s\n' "$sub_notice"; exit 0; fi
   sh_guest_missing_notice
   exit 0
 fi
 
 verify_cmd="$(sh_cfg '.verify.command' 'scripts/verify.sh fast')"
+
+# Without git the end-of-turn check cannot see what changed, and does nothing: say so, since
+# nothing else would outside the doctor.
+if [ "$(sh_in '.source')" != "compact" ] && ! git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  echo "swift-harness: $SH_ROOT is not a git repository, so the end-of-turn check cannot see what changed and does not run: no build or tests at the end of a turn, no evidence record. The guard on protected paths still works. Tell the user; the fix is git init."
+fi
 
 # After a compaction (#10): give Claude the facts the hooks know, which a summary can lose or
 # get wrong, and keep the session baseline as it is. Repository docs stay the source of truth.

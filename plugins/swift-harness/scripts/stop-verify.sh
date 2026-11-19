@@ -27,6 +27,9 @@ sh_registry_on && run_registry=true
 # Layout contract (#34): the same, Markdown and Swift files read as text.
 run_layout=false
 sh_layout_on && run_layout=true
+# Porting ratchet (#73): modules that build for iOS keep building; Swift and C read as text.
+run_ratchet=false
+sh_ratchet_on && run_ratchet=true
 # Security settings (#32): entitlements, ATS and signing build settings read as text, compared
 # with the state the user approved; recorded at session start, so no approval of code is needed.
 run_security=false
@@ -35,7 +38,7 @@ run_security=false
 docs_cmd="$(sh_docs_command)"
 lint_cmd="$(sh_adapter_command lint)"
 format_cmd="$(sh_adapter_command format)"
-[ -n "$docs_cmd$lint_cmd$format_cmd" ] || [ "$verify_enabled" = "true" ] || [ "$lint_gate" = "true" ] || [ "$lint_missing" = "true" ] || [ "$run_registry" = "true" ] || [ "$run_layout" = "true" ] || [ "$run_security" = "true" ] || exit 0
+[ -n "$docs_cmd$lint_cmd$format_cmd" ] || [ "$verify_enabled" = "true" ] || [ "$lint_gate" = "true" ] || [ "$lint_missing" = "true" ] || [ "$run_registry" = "true" ] || [ "$run_layout" = "true" ] || [ "$run_ratchet" = "true" ] || [ "$run_security" = "true" ] || exit 0
 
 command_line="$(sh_cfg '.verify.command' 'scripts/verify.sh fast')"
 max_attempts="$(sh_cfg '.verify.maxAttempts' '3')"
@@ -67,6 +70,7 @@ checks=""
 [ "$run_contracts" = "true" ] && checks="$checks + architecture contracts"
 [ "$run_registry" = "true" ] && checks="${checks:+$checks + }component registry"
 [ "$run_layout" = "true" ] && checks="${checks:+$checks + }layout contract"
+[ "$run_ratchet" = "true" ] && checks="${checks:+$checks + }porting ratchet"
 [ "$run_security" = "true" ] && checks="${checks:+$checks + }security settings"
 { [ "$lint_gate" = "true" ] || [ "$lint_missing" = "true" ]; } && checks="${checks:+$checks + }SwiftLint (lintBlocking)"
 
@@ -449,7 +453,22 @@ if [ "$run_layout" = "true" ]; then
   esac
 fi
 
-if [ "$run_security" = "true" ]; then
+if [ "$run_ratchet" = "true" ]; then
+  ev_t0=$SECONDS
+  if ratchet_out="$("$(dirname "$0")/porting.sh" ratchet "$SH_ROOT" 2>&1)"; then
+    ev_ran "porting ratchet" passed "the ported modules have no new macOS-only code (read as text; no iOS build ran)"
+  else
+    ev_ran "porting ratchet" failed "$(grep -c '^- ' <<<"$ratchet_out") new macOS-only use(s)"
+    printf '\n== Porting ratchet ==\n%s\n' "$ratchet_out" >>"$out"
+    [ "$status" -ne 0 ] || status=1
+  fi
+fi
+
+# Turned off, with the user's approval: nothing is compared, and the record says off, not passed.
+if [ "$run_security" = "true" ] && [ "$(sh_cfg '.security.enabled' 'true')" = "false" ] &&
+  grep -qxF '.claude/swift-harness.json: security.enabled = false' "$state/security-approved" 2>/dev/null; then
+  ev "security settings" "not run" "security.enabled is false, approved by the user: nothing was compared"
+elif [ "$run_security" = "true" ]; then
   ev_t0=$SECONDS
   if security_out="$("$(dirname "$0")/security.sh" check --project "$SH_ROOT" 2>&1)"; then
     ev_ran "security settings" passed "unchanged since the approved state"

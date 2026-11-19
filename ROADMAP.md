@@ -2,21 +2,26 @@
 
 Where swift-harness is going, and why. Live status is in the [milestones](https://github.com/davidelarocca/swift-harness/milestones) and [issues](https://github.com/davidelarocca/swift-harness/issues). This page is updated with every release.
 
-_Last updated: 18 November 2026, after v1.10.0 (rules that name the check enforcing them, and the first porting checks on a real app: builds and tests for the iOS Simulator, on a copy). The porting has started on a real app, so v1.11.0 now makes it safe to carry on day by day, and perception in motion moves to v1.12.0._
+_Last updated: 19 November 2026, after v1.11.0 (porting every day, on any project: a ratchet that keeps ported modules building for iOS, the iOS Simulator checks for Xcode projects, a wider scan, what an audio app needs on iOS, one simulator run at a time, and checks that run when code in another language changes). The next release is v2.0.0: assisted porting for Mac apps in general, checked on two real apps of different shapes. Perception in motion follows as v2.1.0._
 
 **Guiding principle:** every check the harness claims to run must actually run, and must be backed by a test. New features come after the existing gates are reliable, and claims about impact come with measurements. A new method earns its place by beating a simple baseline on held-out data, not by being clever.
 
-## Now: v1.11.0, porting every day
+## Now: v2.0.0, assisted macOS to iOS porting
 
-1.10.0 brought the shared modules of a real Mac app to the iOS Simulator. The port now goes on next to daily Mac work, by several sessions at once, towards the audio and the screens of the iPhone app. These keep what is already ported from breaking, and cover the parts where an audio app breaks on iPhone.
+For any Mac app, SwiftPM or Xcode project: what it takes to reach iOS, built and tested on a copy, then ported a module and a feature at a time without breaking the Mac app, with daily Mac work unable to undo what is ported. It has started on one real app, whose shared modules build and pass their tests on the iOS Simulator since 1.10.0; 1.11.0 added the tools to carry on day by day. It ships when a first real feature works on iPhone and the tools have been checked on a second real app of a different shape.
 
 | | What you get | Issue |
 |---|---|---|
-| 🔒 | **Porting ratchet.** A module that builds for iOS keeps building: new macOS-only API in a ported module fails at the end of the turn, not weeks later. | [#73](https://github.com/davidelarocca/swift-harness/issues/73) |
-| 🎧 | **Audio apps.** Audio session, interruptions and background audio in the porting audit. | [#75](https://github.com/davidelarocca/swift-harness/issues/75) |
-| 🚦 | **Shared machine.** UI tests and simulators ask first, take a lock, build only what is ported. | [#74](https://github.com/davidelarocca/swift-harness/issues/74) |
+| 🍎➡️📱 | **Porting in verified slices.** After you accept the plan and the target structure: shared domain first, adapters for platform APIs, then one feature at a time, each built and tested on iOS and on the Mac, with results per platform. Checked on a real port. | [#48](https://github.com/davidelarocca/swift-harness/issues/48) |
+| 🔐 | **Privacy for iOS.** Usage descriptions and the privacy manifest the App Store needs, compared with the APIs the code uses. | [#172](https://github.com/davidelarocca/swift-harness/issues/172) |
+| 🌙 | **Background work.** Background downloads, location and app lifecycle in the porting audit; the audio part shipped in 1.11.0. | [#75](https://github.com/davidelarocca/swift-harness/issues/75) |
+| 📐 | **iPad, Mac Catalyst and visionOS** as destinations in the plan, the scan and the build checks. | [#174](https://github.com/davidelarocca/swift-harness/issues/174) |
+| 📦 | **Binary frameworks.** An `.xcframework` with no slice for the destination is reported by the scan, not left for the linker. | [#178](https://github.com/davidelarocca/swift-harness/issues/178) |
+| 🚦 | **Shared machine.** UI tests ask first and builds stay within what is ported; the simulator lock shipped in 1.11.0. | [#74](https://github.com/davidelarocca/swift-harness/issues/74) |
+| 📱 | **iOS checked on a real app.** The iOS-aware checks of 1.5.0 used on a real iOS port: the README says iOS once it passes. | [#40](https://github.com/davidelarocca/swift-harness/issues/40) |
+| 🧪 | **Checked on a second real app**, an open-source Xcode project, with what each tool found and missed. | [#175](https://github.com/davidelarocca/swift-harness/issues/175) |
 
-## Next: v1.12.0, perception in motion
+## Next: v2.1.0, perception in motion
 
 Today every check on the running app looks at one state at one size. These look at flows, time and a hostile environment. Test isolation, which they need, shipped in 1.7.0. They need a real app with UI tests to be worth anything, and the evals need paid sessions, so they start when both are available.
 
@@ -45,15 +50,6 @@ Methods from other fields, studied as hypotheses before any becomes a feature. E
 | 🧮 | **Allocation budgets**: virtual machines count no instructions, so performance budgets are "not compared" on CI. Is the number of allocations of an operation stable enough there to catch the same regressions? | The instruction budget on a real Mac, on the same planted regressions | hypothesis |
 | 🧰 | **Xcode as a host**: do the hooks run inside Xcode's own agent, and would the same engine behind an MCP server reach the agents that have no hooks? | `check.sh` called from the agent's rules | to measure first |
 
-## Then: v2.0.0, assisted macOS to iOS porting
-
-Being checked on a real port of a macOS app: its shared modules build and pass their tests on the iOS Simulator since 1.10.0. It ships when a first real feature of that app works on iPhone.
-
-| | What you get | Issue |
-|---|---|---|
-| 🍎➡️📱 | **Porting in verified slices.** After you accept the plan and the target structure: shared domain first, adapters for platform APIs, then one feature at a time, each built and tested on iOS and on the Mac, with results per platform. Checked on a real port. | [#48](https://github.com/davidelarocca/swift-harness/issues/48) |
-| 📱 | **iOS checked on a real app.** The iOS-aware checks of 1.5.0 used on a real iOS port: the README says iOS once it passes. | [#40](https://github.com/davidelarocca/swift-harness/issues/40) |
-
 ## Later
 
 | | What you get | Issue |
@@ -68,6 +64,7 @@ Ideas parked until there is demand: a local, read-only view of the checks with e
 
 | Version | Highlights |
 |---|---|
+| [1.11.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.11.0) | Porting every day, on any project: a porting ratchet that fails new macOS-only code in a module that builds for iOS; `build-check` and `test-check` for Xcode projects, with exit codes a script can trust; ten more macOS-only APIs in the scan, each checked against a real iOS build; `porting.sh audio`, what an audio app needs on iOS; one simulator run at a time; `verify.watch`, so a change to Rust, C++ or a generated project spec runs the end-of-turn check; and fixes from an external review and from a search across project shapes (a project in a subfolder of its repository had every hook off). |
 | [1.10.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.10.0) | Rules and porting checks: a rule can name the check that enforces it, and `/swift-harness:rules`, the doctor and the report say which links hold and how often each check caught something; `porting.sh build-check` and `test-check` build a package's targets for the iOS Simulator and run its tests on an iPhone simulator, on a copy, and the porting scan learned three APIs only a real build had shown (first steps of v2.0.0, on a real app). |
 | [1.9.0](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.9.0) | Checks you can rely on: the end of a turn says when the session made a check weaker (tests or assertions removed, skips, lint rules off, a larger tolerance, a layout row or a registry entry gone), an opt-in question before a shell command writes to a protected file (`guardBash`), `verify.sh` reads a failed run from Xcode's result bundle (each failed test with its message, build errors with file and line, screenshots of failing tests), and adapters run the project's own lint and format checks instead of the harness's. |
 | [1.8.3](https://github.com/davidelarocca/swift-harness/releases/tag/swift-harness--v1.8.3) | No silent skips: the end-of-turn check sees changes git does not show (files kept out of git, no first commit, nested repositories, C++ outside `Sources/`), hooks stay on in a nested repository, the docs adapter no longer reports old problems as new, `check.sh` fails every run while a blocking check fails, non-ASCII paths are read, interrupted and timed-out turns leave a record, and the catch log is bounded. |

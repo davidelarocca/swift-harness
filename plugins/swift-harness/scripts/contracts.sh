@@ -85,8 +85,17 @@ while IFS= read -r -d '' pkg; do
     violations="$violations- could not read $label (swift package dump-package failed):"$'\n'"$(grep -v -e '^[[:space:]]*$' -e 'compiled with:' "$err" | head -15)"$'\n'
     continue
   fi
-  result="$(jq -r --arg label "$label" --argjson c "$(jq --arg p "$pkg" '.packages[$p]' "$contract")" \
-    "$graph_check" <<<"$dump")"
+  # A dump with no list of targets (another toolchain's format, an error printed as JSON) cannot
+  # be checked: that is a failure to read, not a pass.
+  if ! jq -e '(.targets | type) == "array"' <<<"$dump" >/dev/null 2>&1; then
+    violations="$violations- could not read $label: swift package dump-package gave no list of targets, so its dependencies were not checked."$'\n'
+    continue
+  fi
+  if ! result="$(jq -r --arg label "$label" --argjson c "$(jq --arg p "$pkg" '.packages[$p]' "$contract")" \
+    "$graph_check" <<<"$dump" 2>"$err")"; then
+    violations="$violations- could not check $label against the contract: $(head -n 1 "$err")"$'\n'
+    continue
+  fi
   printf '%s\n' "$result" | grep -q '^V	.*depends on' && dependency_violation=true
   violations="$violations$(printf '%s\n' "$result" | sed -n 's/^V	/- /p')"
   [ -z "$violations" ] || violations="${violations%$'\n'}"$'\n'

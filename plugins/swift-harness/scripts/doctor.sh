@@ -64,8 +64,8 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance"])[],
-  (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed"])[] | "verify." + . else empty end),
+  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance", "porting"])[],
+  (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed", "watch"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
@@ -73,7 +73,8 @@ unknown="$(jq -r '
   (if (.security | type) == "object" then (.security | keys - ["enabled"])[] | "security." + . else empty end),
   (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget", "command", "blocking"])[] | "docs." + . else empty end),
   (("lint", "format") as $k | if (.[$k] | type) == "object" then (.[$k] | keys - ["command", "blocking"])[] | "\($k)." + . else empty end),
-  (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end)
+  (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end),
+  (if (.porting | type) == "object" then (.porting | keys - ["ratchet"])[] | "porting." + . else empty end)
 ' "$SH_CONFIG" | paste -sd, - | sed 's/,/, /g')"
 if [ -n "$unknown" ]; then
   row WARN "Config keys" "unknown, ignored by the hooks (typo?): $unknown"
@@ -104,7 +105,8 @@ problems="$(jq -r '
     check(["verify", "command"]; type == "string" and length > 0; "verify.command must be a non-empty string"),
     check(["verify", "maxAttempts"]; type == "number" and . >= 1 and floor == .; "verify.maxAttempts must be a whole number, 1 or more"),
     check(["verify", "retryFailed"]; type == "boolean"; "verify.retryFailed must be true or false"),
-    check(["verify", "inputs"]; type == "array" and all(.[]; type == "string"); "verify.inputs must be a list of paths")
+    check(["verify", "inputs"]; type == "array" and all(.[]; type == "string"); "verify.inputs must be a list of paths"),
+    check(["verify", "watch"]; type == "array" and all(.[]; type == "string"); "verify.watch must be a list of paths")
   else empty end),
   check(["registry"]; type == "object"; "registry must be an object"),
   (if (.registry | type) == "object" then
@@ -116,6 +118,10 @@ problems="$(jq -r '
   (if (.layout | type) == "object" then
     check(["layout", "enabled"]; type == "boolean"; "layout.enabled must be true or false"),
     check(["layout", "path"]; type == "string" and length > 0; "layout.path must be a path")
+  else empty end),
+  check(["porting"]; type == "object"; "porting must be an object"),
+  (if (.porting | type) == "object" then
+    check(["porting", "ratchet"]; type == "string" and length > 0; "porting.ratchet must be a path")
   else empty end),
   check(["screenshots"]; type == "object"; "screenshots must be an object"),
   (if (.screenshots | type) == "object" then
@@ -460,6 +466,22 @@ else
   esac
 fi
 
+# Porting ratchet (#73). Reads Swift and C as text; shown only once a module is recorded.
+ratchet="$(sh_ratchet)"
+if [ -f "$SH_ROOT/$ratchet" ]; then
+  ratchet_mods="$(awk -F'\t' '$1 == "module" && $2 != "" { n++ } END { print n + 0 }' "$SH_ROOT/$ratchet")"
+  ratchet_ok="$(awk -F'\t' '$1 == "accepted" { n += $5 } END { print n + 0 }' "$SH_ROOT/$ratchet")"
+  ratchet_gone="$(awk -F'\t' '$1 == "module" && $2 != "" { print $2 }' "$SH_ROOT/$ratchet" | while IFS= read -r m; do [ -d "$SH_ROOT/${m// › //}" ] || printf '%s\n' "$m"; done | paste -sd, - | sed 's/,/, /g')"
+  ratchet_out="$("$here/porting.sh" ratchet "$SH_ROOT" 2>&1)"
+  if [ $? -ne 0 ]; then
+    row FAIL "Porting ratchet" "$(printf '%s\n' "$ratchet_out" | grep '^- ' | head -3 | sed 's/^- //' | paste -sd ';' - | sed 's/;/; /g'). Fix: put it inside #if os(macOS) or behind an adapter; only the user accepts it (porting.sh ratchet --record)"
+  elif [ -n "$ratchet_gone" ]; then
+    row WARN "Porting ratchet" "$ratchet: no folder for $ratchet_gone (renamed or removed?): nothing there is checked. Fix: record the module under its new name with the user's yes"
+  else
+    row PASS "Porting ratchet" "$ratchet_mods ported module(s), $ratchet_ok macOS-only use(s) accepted, checked at the end of each turn (text only; porting.sh build-check proves the iOS build)"
+  fi
+fi
+
 # Docs references (#70). Reads Markdown only. With docs.command, the project's own check (#105).
 if ! sh_docs_on; then
   row INFO "Docs references" "off (docs.enabled is false)"
@@ -516,6 +538,44 @@ else
   fi
 fi
 
+# ---------- other build systems (#177) ----------
+# Code the app builds from another language or tool is not a build input by default: a turn that
+# changes only it ends with nothing checked. Read from the files git lists and from the root of
+# each nested repository; nothing is run.
+other_build_systems() { # "<manifest><TAB><language><TAB><watch entries>" for each one nothing watches
+  {
+    git -C "$SH_ROOT" -c core.quotepath=off ls-files -co --exclude-standard -- 'Cargo.toml' '*/Cargo.toml' 'CMakeLists.txt' '*/CMakeLists.txt' 'go.mod' '*/go.mod' 'meson.build' '*/meson.build' 'build.gradle' '*/build.gradle' 'build.gradle.kts' '*/build.gradle.kts' 2>/dev/null
+    sh_nested_repos "$SH_ROOT" | while IFS= read -r sub; do
+      for m in Cargo.toml CMakeLists.txt go.mod meson.build build.gradle build.gradle.kts; do
+        [ -f "$SH_ROOT/$sub/$m" ] && printf '%s/%s\n' "$sub" "$m"
+      done
+    done
+  } | LC_ALL=C sort -u | while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    sh_watched "$m" && continue
+    case "$(basename "$m")" in
+      Cargo.toml) lang="Rust" globs='"*.rs", "Cargo.toml", "Cargo.lock"' ;;
+      CMakeLists.txt) lang="CMake" globs='"CMakeLists.txt", "*.cmake"' ;;
+      go.mod) lang="Go" globs='"*.go", "go.mod", "go.sum"' ;;
+      meson.build) lang="Meson" globs='"meson.build"' ;;
+      *) lang="Gradle" globs='"*.gradle", "*.gradle.kts", "*.kt"' ;;
+    esac
+    d="$(dirname "$m")"
+    if [ "$d" = . ]; then printf '%s\t%s\t%s\n' "$m" "$lang" "$globs"; else printf '%s\t%s\t"%s/"\n' "$m" "$lang" "$d"; fi
+  done | awk -F'\t' '
+    { d = $3; gsub(/"/, "", d)
+      for (k in kept) if (substr(d, 1, length(k)) == k && k ~ /\/$/) next
+      if (!seen[$3]++) { kept[d] = 1; print } }' | head -6
+}
+other_builds="$(other_build_systems)"
+if [ -n "$other_builds" ]; then
+  row WARN "Other build systems" "$(printf '%s\n' "$other_builds" | awk -F'\t' '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $1, $2 }'): a turn that changes only that code ends with nothing checked. Fix: add \"watch\": [$(printf '%s\n' "$other_builds" | cut -f3 | paste -sd, - | sed 's/,/, /g')] to verify in .claude/swift-harness.json (it does not change the verify approval), and make the verify command build that code"
+elif [ -n "$(sh_watch_dropped)" ]; then
+  row WARN "Other build systems" "verify.watch entries not used (they leave the project or are not a git pathspec): $(sh_watch_dropped | paste -sd, - | sed 's/,/, /g'). Fix: correct them in .claude/swift-harness.json"
+elif [ -n "$(sh_watch)" ]; then
+  row PASS "Other build systems" "verify.watch: $(sh_watch | paste -sd, - | sed 's/,/, /g'); changes there run the end-of-turn check"
+fi
+
 # ---------- rules and their checks (#148) ----------
 
 rules_json="$("$here/rules.sh" --project "$SH_ROOT" --json 2>/dev/null)" || rules_json=""
@@ -527,7 +587,7 @@ if [ -n "$rules_json" ] && [ "$(jq -r '.total // 0' <<<"$rules_json")" -gt 0 ]; 
   elif [ "$r_linked" -eq 0 ]; then
     row INFO Rules "$r_total rule(s), none names the check that enforces it. Add <!-- check: NAME --> at the end of a rule's line to link it (rules.sh --all lists the ones nothing checks)"
   else
-    row PASS Rules "$r_linked of $r_total rule(s) name a check, and each check exists and is on; the others are rules nothing checks (rules.sh --all lists them)"
+    row PASS Rules "$r_linked of $r_total rule(s) name a check, and each check exists and is on (not a proof that it catches every case of its rule); the others are rules nothing checks (rules.sh --all lists them)"
   fi
 fi
 

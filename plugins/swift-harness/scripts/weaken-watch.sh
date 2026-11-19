@@ -6,8 +6,9 @@
 # file: tests or assertions removed, a test file removed, skips added (XCTSkip, .disabled(...),
 # #if false), a larger tolerance: in a test file, swiftlint:disable added, in .swiftlint.yml a
 # rule disabled, no longer opted in or no longer in only_rules, or a path excluded, a layout
-# contract row removed or its Min lowered, and a registry component gone from Components
-# without being retired. A test file renamed with the same counts is not a removal, nor a
+# contract row removed or its Min lowered, a registry component gone from Components
+# without being retired, and a module removed from the porting ratchet or a macOS-only use
+# accepted in it. A test file renamed with the same counts is not a removal, nor a
 # component that keeps its ID under a new name. Text only, no project code runs. Said once per
 # set, recorded in the catch log. Never blocks.
 
@@ -71,6 +72,8 @@ report="$(awk -F'\t' '
         if (!has) print f ": layout row " name " removed (its sizes are no longer measured)"
         else if (lower(n[k], s[k])) print f ": Min of " name " lowered (" s[k] " -> " n[k] ")"
       }
+      else if (kind == "ratchet-module" && b < a) print f ": module " name " removed from the porting ratchet (its new macOS-only code is no longer caught)"
+      else if (kind == "ratchet-accepted" && b > a) print f ": " plural(b - a, "macOS-only use") " accepted by the porting ratchet: " name
       else if (kind == "registry" && b < a) {
         id = name; sub(/ .*/, "", id)
         if (!(("registry-retired" FS f FS id) in n) && !(id in nid)) print f ": " name " no longer under Components (no longer checked)"

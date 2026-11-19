@@ -43,9 +43,15 @@ while [ $# -gt 0 ]; do
 done
 command -v jq >/dev/null 2>&1 || { echo "check: jq is required (brew install jq)." >&2; exit 2; }
 dir="$(cd "$dir" 2>/dev/null && pwd -P)" || { echo "check: no such folder." >&2; exit 2; }
-root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root="$dir"
-root="$(cd "$root" && pwd -P)"
-[ -f "$root/.claude/swift-harness.json" ] || { echo "check: no .claude/swift-harness.json in $root." >&2; exit 2; }
+# The project: the nearest folder with a config from --project up to the top of its repository,
+# as the hooks find it (a Swift app in a subfolder of a monorepo).
+top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || top="$dir"
+top="$(cd "$top" && pwd -P)"
+root="$dir"
+while [ ! -f "$root/.claude/swift-harness.json" ] && [ "$root" != "$top" ] && [[ "$root/" == "$top"/* ]]; do
+  root="$(dirname "$root")"
+done
+[ -f "$root/.claude/swift-harness.json" ] || { echo "check: no .claude/swift-harness.json in $dir or above it, up to $top." >&2; exit 2; }
 session="agent-$(printf '%s' "$agent" | LC_ALL=C tr -cd 'A-Za-z0-9_-' | cut -c1-40)"
 
 # The data folder the hooks use, where the approval is.

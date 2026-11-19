@@ -13,6 +13,8 @@ TEMPLATE="$PLUGIN/skills/setup/templates/verify.sh"
 # Physical path, so the symlink tests below control exactly where a symlink appears.
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-tests.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
+# The simulator lock (#74) of the tests, apart from the machine's own.
+export SWIFT_HARNESS_LOCK_DIR="$TMP/sim-lock"
 
 passed=0
 failed=0
@@ -4942,6 +4944,11 @@ case " ${FAKE_SWIFT_FAIL:-} " in
     printf '%s/Sources/DSP/Denormals.swift:4:3: error: cannot find '"'"'fegetenv'"'"' in scope\n' "$PWD"
     echo "error: Build failed"; exit 1 ;;
 esac
+case " ${FAKE_SWIFT_LINK:-} " in
+  *" $target "*)
+    printf '%s/Sources/Net/n.swift:2:5: error: not concurrency-safe [\033]8;;https://docs.swift.org/x\033\\#MutableGlobalVariable\033]8;;\033\\]\n' "$PWD"
+    echo "error: Build failed"; exit 1 ;;
+esac
 case " ${FAKE_SWIFT_C:-} " in
   *" $target "*) # the new build system writes a C error as "error: path:line:col message"
     printf 'error: %s/Sources/IO/io.c:3:10 '"'"'IOKit/a.h'"'"' file not found\n' "$PWD"
@@ -4962,15 +4969,16 @@ bcbefore="$(snapshot "$BC")"
 out="$(FAKE_SWIFT_FAIL="DSP Domain" bc "$BC")"
 expect_result "build-check: a target that builds is a PASS, a failing one a FAIL with its errors" 0 '- PASS Core.*- FAIL DSP: 2 error\(s\).*Sources/DSP/Denormals\.swift:3:11: cannot find .fenv_t. in scope' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
-expect_result "build-check: the same error twice is counted once, colours are gone" 0 'FAIL DSP: 2 error' "$out" $'\x1b'
-expect_result "build-check: a target behind a failing one shows the other's errors, and says why" 0 'FAIL Domain: 2 error\(s\)' "$out"
+expect_result "build-check: the same error twice is counted once, colours are gone" 1 'FAIL DSP: 2 error' "$out" $'\x1b'
+expect_result "build-check: a target behind a failing one shows the other's errors, and says why" 1 'FAIL Domain: 2 error\(s\)' "$out"
 expect_result "build-check: names the module the error came from only for a dependency" 0 'Domain: 2 error.*\(in DSP, a dependency\)' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
 expect_result "build-check: ... and the DSP's own errors carry no such note" 0 'FAIL DSP: 2 error\(s\) +Sources/DSP/Denormals\.swift:3:11: cannot find .fenv_t. in scope +Sources/DSP/Denormals\.swift:4:3: cannot find .fegetenv. in scope +(- |A target)' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
-expect_result "build-check: it says a dependency's errors hide the target's own" 0 'behind a failing dependency' "$out"
-expect_result "build-check: it says it is a build only" 0 '1 built, 2 failed\. This is a build only: nothing was tested' "$out"
-expect_result "build-check: it names the SDK and the iOS version it used" 0 'iOS 27\.0, SDK 27\.2' "$out"
+expect_result "build-check: it says a dependency's errors hide the target's own" 1 'behind a failing dependency' "$out"
+expect_result "build-check: it says it is a build only" 1 '1 built, 2 failed\. This is a build only: nothing was tested' "$out"
+expect_result "build-check: exits 1 when a target failed" 1 'FAIL DSP' "$out"
+expect_result "build-check: it names the SDK and the iOS version it used" 1 'iOS 27\.0, SDK 27\.2' "$out"
 if grep -q -- '--triple [a-z0-9_]*-apple-ios27.0-simulator' "$TMP/bc-swift.log" && grep -q -- "--sdk $TMP/bc-sdk" "$TMP/bc-swift.log"; then ok "build-check: builds each target for the simulator triple with the simulator SDK"
 else nok "build-check: builds each target for the simulator triple with the simulator SDK" "$(cat "$TMP/bc-swift.log")"; fi
 if [ "$(grep -c -- '--target' "$TMP/bc-swift.log")" = 3 ]; then ok "build-check: one build per folder of Sources/"; else nok "build-check: one build per folder of Sources/" "$(cat "$TMP/bc-swift.log")"; fi
@@ -5090,7 +5098,9 @@ expect_result "test-check: tests that do not build show the compiler's errors, o
 $(printf '%s' "$out" | tr '\n' ' ')" $'\x1b'
 expect_result "test-check: a result bundle it cannot read is not called a build failure" 0 'result bundle could not be read.*TEST SUCCEEDED' "exit=0
 $(printf '%s' "$(tcrun "$TC")" | tr '\n' ' ')" 'did not build'
-expect_result "test-check: a failure with no error line shows xcodebuild's own" 0 'did not run: xcodebuild: error: The project does not contain a scheme' "$(FAKE_XCB=noscheme tcrun "$TC")"
+expect_result "test-check: a failure with no error line shows xcodebuild's own" 1 'did not run: xcodebuild: error: The project does not contain a scheme' "$(FAKE_XCB=noscheme tcrun "$TC")"
+expect_result "test-check: exits 0 when tests ran and none failed" 0 '10 passed, 0 failed' "$(FAKE_SUMMARY="$TMP/tc-pass.json" tcrun "$TC" --target CoreTests)"
+expect_result "test-check: exits 1 when a test failed" 1 '1 failed' "$(FAKE_XCB=fail FAKE_SUMMARY="$TMP/tc-fail.json" tcrun "$TC" --target CoreTests)"
 expect_result "test-check: an unknown --device says so" 1 'no available iOS simulator called .iPad Mini.' "$(tcrun "$TC" --device "iPad Mini")"
 printf '{"devices": {}}\n' >"$TMP/tc-nosims.json"
 expect_result "test-check: no iPhone simulator says how to get one" 1 'no iPhone simulator' "$(FAKE_SIMS="$TMP/tc-nosims.json" tcrun "$TC")"
@@ -5117,6 +5127,537 @@ expect_result "porting: ... not when the file imports CoreAudio or AVFAudio" 0 '
 $auscan" 'Fixed\.swift|ViaAVFAudio\.swift'
 expect_result "porting: .loadInProcess inside #if os(macOS) is guarded" 0 'guarded	Sources/Effects	Sources/Effects/Guarded\.swift:3	\.loadInProcess' "exit=0
 $auscan"
+
+# ---------- porting ratchet (#73) ----------
+
+RT="$(new_project ratchet)"
+mkdir -p "$RT/Sources/Core" "$RT/Sources/MacUI" "$RT/Packages/Kit/Sources/Shared"
+printf '// swift-tools-version: 6.0\n' >"$RT/Package.swift"
+printf '// swift-tools-version: 6.0\n' >"$RT/Packages/Kit/Package.swift"
+printf 'import Foundation\nstruct Model {}\n' >"$RT/Sources/Core/Model.swift"
+printf 'import AppKit\nlet tint = NSColor.red\n' >"$RT/Sources/MacUI/Window.swift"
+printf '#if os(macOS)\nimport AppKit\n#endif\nlet legacy = NSColor.red\n' >"$RT/Packages/Kit/Sources/Shared/Legacy.swift"
+set_config "$RT" '{"format":"none","lint":"none","verify":{"enabled":false}}'
+git -C "$RT" add -A && git -C "$RT" commit -qm modules
+ratchet() { local o c; o="$("$SCRIPTS/porting.sh" ratchet "$RT" "$@" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+expect_result "ratchet: no ratchet file, nothing to check" 0 '^exit=0$' "$(ratchet)"
+expect_result "ratchet: --module needs --record" 2 'usage' "$(ratchet --module Sources/Core)"
+expect_result "ratchet: an unknown module is refused, with the names summary uses" 2 'no module Sources/Nope\. Name it as porting\.sh summary does: .*Sources/Core' "$(ratchet --record --module Sources/Nope)"
+expect_result "ratchet: a path outside the project is refused" 2 'not a module folder' "$(ratchet --record --module ../x)"
+out="$(ratchet --record --module Sources/Core --module 'Packages/Kit › Sources/Shared')"
+expect_result "ratchet: recording names the modules and accepts the current uses" 0 '2 module\(s\), 1 macOS-only use\(s\) accepted' "$out"
+expect_result "ratchet: ... listing each accepted use" 0 'accepted: Packages/Kit/Sources/Shared/Legacy\.swift: AppKit NSColor \(1\)' "$out"
+rtfile="$(grep -v '^#' "$RT/docs/PORTING_RATCHET.tsv" | paste -sd'|' -)"
+if [ "$rtfile" = "module	Sources/Core|module	Packages/Kit › Sources/Shared|accepted	Packages/Kit › Sources/Shared	Packages/Kit/Sources/Shared/Legacy.swift	AppKit NSColor	1" ]; then
+  ok "ratchet: the file lists modules and accepted uses, tab-separated"
+else nok "ratchet: the file lists modules and accepted uses, tab-separated" "$rtfile"; fi
+expect_result "ratchet: right after recording, the check passes" 0 '^exit=0$' "$(ratchet)"
+printf 'import AppKit\nlet w = NSWindow()\n' >>"$RT/Sources/Core/Model.swift"
+out="$(ratchet)"
+expect_result "ratchet: a new import AppKit in a ported module fails, naming the line" 1 'Sources/Core/Model\.swift:3: import AppKit \(in Sources/Core, ported to iOS; none accepted here\)' "$out"
+expect_result "ratchet: each new use is named" 1 'Sources/Core/Model\.swift:4: AppKit NSWindow' "$out"
+expect_result "ratchet: the failure says how to fix it, and not to record it" 1 'inside #if os\(macOS\), or behind a protocol.*do not record it yourself' "$out"
+expect_result "ratchet: a module that is not ported is not checked" 1 'Model' "$out" 'MacUI'
+printf '#if os(macOS)\nimport AppKit\nlet w = NSWindow()\n#endif\n' >"$RT/Sources/Core/Model.swift"
+expect_result "ratchet: the same code inside #if os(macOS) passes" 0 '^exit=0$' "$(ratchet)"
+printf 'let more = NSColor.blue\n' >>"$RT/Packages/Kit/Sources/Shared/Legacy.swift"
+expect_result "ratchet: one use more than accepted fails, with both counts" 1 'Legacy\.swift:4, .*Legacy\.swift:5: AppKit NSColor \(in Packages/Kit › Sources/Shared, ported to iOS; 1 accepted here, 2 now\)' "$(ratchet)"
+git -C "$RT" checkout -q -- Packages
+git -C "$RT" add -A && git -C "$RT" commit -qm ratchet
+
+# The end of the turn: no verify approval needed, it reads text only.
+hook session-start.sh "$RT" '{"source":"startup"}' >/dev/null
+printf 'import AppKit\n' >>"$RT/Sources/Core/Model.swift"
+out="$(rstop "$RT")"
+expect_result "stop: the porting ratchet blocks the turn on new macOS-only code" 2 'Sources/Core/Model\.swift:5: import AppKit \(in Sources/Core' "$out"
+expect_result "stop: the porting ratchet is named in the failure header" 2 'porting ratchet' "$out"
+git -C "$RT" checkout -q -- Sources
+expect_result "stop: the ratchet passes once the code is guarded again" 0 '^exit=0' "$(rstop "$RT")"
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$RT" 2>&1)"
+expect_result "doctor: the ratchet row counts modules and accepted uses" 0 'Porting ratchet.*2 ported module\(s\), 1 macOS-only use\(s\) accepted' "exit=0
+$out"
+
+# Weaker: a module dropped, or a use accepted by recording again, is told to the user.
+hook session-start.sh "$RT" '{"source":"startup"}' >/dev/null
+printf 'let more = NSColor.blue\n' >>"$RT/Packages/Kit/Sources/Shared/Legacy.swift"
+"$SCRIPTS/porting.sh" ratchet "$RT" --record >/dev/null 2>&1
+sed -i '' '/^module	Sources\/Core$/d' "$RT/docs/PORTING_RATCHET.tsv"
+out="$(hook weaken-watch.sh "$RT" 2>&1)"
+expect_result "weakened: a module removed from the porting ratchet is reported" 0 'docs/PORTING_RATCHET\.tsv: module Sources/Core removed from the porting ratchet' "exit=0
+$out"
+expect_result "weakened: a macOS-only use accepted by recording again is reported" 0 '1 macOS-only use accepted by the porting ratchet: Packages/Kit/Sources/Shared/Legacy\.swift: AppKit NSColor' "exit=0
+$out"
+set_config "$RT" '{"format":"none","lint":"none","verify":{"enabled":false},"porting":{"ratchet":"plans/ios.tsv"}}'
+expect_result "ratchet: porting.ratchet moves the file" 0 'plans/ios\.tsv' "$(ratchet --record --module Sources/Core)"
+expect_result "ratchet: ... and the check reads it there" 0 '^exit=0$' "$(ratchet)"
+
+# ---------- porting: APIs common in Mac apps (#173) ----------
+
+out="$(FAKE_SWIFT_LINK="Net" bc "$BC" --target Net)"
+expect_result "build-check: a terminal hyperlink in an error keeps its text, not its escape codes" 1 'n\.swift:2:5: not concurrency-safe \[#MutableGlobalVariable\]' "$out" $'\x1b|8;;'
+
+CA="$TMP/common-apis"
+mkdir -p "$CA/Sources/Tools" "$CA/Sources/Guarded" "$CA/Sources/UI"
+printf '// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "X", targets: [])\n' >"$CA/Package.swift"
+cat >"$CA/Sources/Tools/Tools.swift" <<'SWIFT'
+import Foundation
+import CoreGraphics
+func run() throws { let p = Process(); try p.run() }
+let script = NSAppleScript(source: "")
+let home = FileManager.default.homeDirectoryForCurrentUser
+let center = DistributedNotificationCenter.default()
+let note = NSUserNotification()
+let xpc = NSXPCConnection(machServiceName: "a", options: [])
+let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID)
+let trusted = AXIsProcessTrusted()
+let host = Host.current().name
+// Process() and NSAppleScript in a comment
+let text = "Host.current() in a string"
+let info = ProcessInfo.processInfo
+SWIFT
+cat >"$CA/Sources/Guarded/Guarded.swift" <<'SWIFT'
+#if os(macOS)
+import Foundation
+let p = Process()
+let host = Host.current()
+#endif
+SWIFT
+cat >"$CA/Sources/UI/App.swift" <<'SWIFT'
+import SwiftUI
+struct Docs: App { var body: some Scene { DocumentGroup(newDocument: Doc()) { _ in Text("") } } }
+struct Open: View {
+  @Environment(\.openWindow) private var openWindow
+  var body: some View { Table(rows) { TableColumn("Name", value: \.name) } }
+}
+SWIFT
+git -C "$CA" init -q
+cascan="$("$SCRIPTS/porting.sh" scan "$CA" 2>&1)"
+for row in '3	Process' '4	AppleScript' '5	home folder of the user' '6	distributed notifications' '7	NSUserNotification' '8	XPC to a Mach service' '9	Core Graphics window' '10	accessibility automation' '11	Host'; do
+  n="${row%%	*}"; what="${row#*	}"
+  expect_result "porting: $what blocks iOS, with its line (checked by a real iOS build)" 0 "blocks	Sources/Tools	Sources/Tools/Tools\.swift:$n	$what" "exit=0
+$cascan"
+done
+expect_result "porting: ... not in comments, strings or ProcessInfo" 0 'Tools' "exit=0
+$cascan" 'Tools\.swift:(12|13|14)	'
+expect_result "porting: Process and Host inside #if os(macOS) are guarded" 0 'guarded	Sources/Guarded	Sources/Guarded/Guarded\.swift:3	Process' "exit=0
+$cascan" 'blocks	Sources/Guarded'
+expect_result "porting: DocumentGroup is an adaptation" 0 'adapt	Sources/UI	Sources/UI/App\.swift:2	document app' "exit=0
+$cascan"
+expect_result "porting: openWindow is an adaptation" 0 'adapt	Sources/UI	Sources/UI/App\.swift:4	several windows' "exit=0
+$cascan"
+expect_result "porting: Table is an adaptation" 0 'adapt	Sources/UI	Sources/UI/App\.swift:5	Table \(one column' "exit=0
+$cascan"
+
+# ---------- porting: Xcode projects (#171) ----------
+
+XP="$TMP/xc-project"
+mkdir -p "$XP/App.xcodeproj" "$XP/App" "$XP/Shared"
+echo '// pbx' >"$XP/App.xcodeproj/project.pbxproj"
+echo 'import SwiftUI' >"$XP/App/App.swift"
+echo 'secret' >"$XP/Secrets.xcconfig"
+echo 'key' >"$XP/AuthKey_1.p8"
+printf 'machine x login y password z\n' >"$XP/.netrc"
+ln -s ../../outside-shared.swift "$XP/Shared/Linked.swift"
+ln -s ../nowhere.swift "$XP/Shared/Broken.swift"
+echo 'let shared = 1' >"$TMP/outside-shared.swift"
+git -C "$XP" init -q
+cat >"$BF/xcodebuild" <<'FAKE'
+#!/bin/bash
+# fake xcodebuild for Xcode projects: -list -json, and build/test per scheme from FAKE_XC_SCHEMES
+# ("Name:pass Name:fail Name:noios").
+echo "xcodebuild $*" >>"$FAKE_SWIFT_LOG"
+ls -a "$PWD" | tr '\n' ' ' >>"$FAKE_SWIFT_LOG"; echo >>"$FAKE_SWIFT_LOG"
+[ -f "$PWD/Shared/Linked.swift" ] && [ ! -L "$PWD/Shared/Linked.swift" ] && echo "linked file copied" >>"$FAKE_SWIFT_LOG"
+case "$*" in
+  "-list -json"*)
+    names="$(for x in ${FAKE_XC_SCHEMES:-}; do printf '"%s",' "${x%%:*}"; done)"
+    printf '{"project": {"name": "App", "schemes": [%s], "targets": ["App"]}}\n' "${names%,}"; exit 0 ;;
+esac
+scheme=""; bundle=""
+while [ $# -gt 0 ]; do
+  [ "$1" = -scheme ] && scheme="$2"
+  [ "$1" = -resultBundlePath ] && bundle="$2"
+  shift
+done
+case " ${FAKE_XC_SCHEMES:-} " in
+  *" $scheme:pass "*) [ -z "$bundle" ] || mkdir -p "$bundle"; echo "** BUILD SUCCEEDED **"; exit 0 ;;
+  *" $scheme:noios "*) echo "xcodebuild: error: Unable to find a destination matching the provided destination specifier:"; exit 70 ;;
+  *" $scheme:fail "*)
+    printf '%s/App/App.swift:3:8: error: Unable to resolve module dependency: '"'"'AppKit'"'"'\n' "${PWD#/private}"
+    echo "** BUILD FAILED **"; exit 65 ;;
+esac
+echo "xcodebuild: error: The project does not contain a scheme named $scheme."; exit 66
+FAKE
+chmod +x "$BF/xcodebuild"
+xbefore="$(snapshot "$XP")"
+: >"$TMP/bc-swift.log"
+out="$(FAKE_XC_SCHEMES="App:pass MacTool:noios Broken:fail" bc "$XP")"
+expect_result "build-check: an Xcode project builds every scheme xcodebuild lists" 1 '- PASS App' "$out"
+expect_result "build-check: a scheme with no iOS destination is NOT iOS, not a failure" 1 '- NOT iOS MacTool: the scheme has no iOS destination yet' "$out"
+expect_result "build-check: a failing scheme shows its first error, with a path inside the project" 1 '- FAIL Broken: 1 error\(s\)' "$out"
+expect_result "build-check: ... even when xcodebuild drops /private from the copy's path" 1 '^    App/App\.swift:3:8: Unable to resolve module dependency' "$out" 'swift-harness-port'
+expect_result "build-check: the Xcode summary counts the three kinds" 1 '1 built, 1 failed, 1 with no iOS destination\. This is a build only' "$out"
+expect_result "build-check: a broken link is named and the rest is copied" 1 'Note: not copied \(the build sees the rest\): .*Shared/Broken\.swift' "$out"
+expect_result "build-check: only NOT iOS and PASS exit 0" 0 '- NOT iOS MacTool' "$(FAKE_XC_SCHEMES="App:pass MacTool:noios" bc "$XP")"
+if grep -q -- "-project App.xcodeproj -scheme App -destination generic/platform=iOS Simulator .*CODE_SIGNING_ALLOWED=NO" "$TMP/bc-swift.log"; then ok "build-check: each scheme builds for the generic iOS Simulator, without signing"
+else nok "build-check: each scheme builds for the generic iOS Simulator, without signing" "$(grep xcodebuild "$TMP/bc-swift.log")"; fi
+if ! grep -qE '(^| )(\.git|Secrets\.xcconfig|AuthKey_1\.p8|\.netrc)( |$)' "$TMP/bc-swift.log" && grep -q 'App.xcodeproj' "$TMP/bc-swift.log"; then ok "build-check: the Xcode copy keeps the project, without .git or secrets"
+else nok "build-check: the Xcode copy keeps the project, without .git or secrets" "$(grep App.xcodeproj "$TMP/bc-swift.log" | head -2)"; fi
+if grep -q 'linked file copied' "$TMP/bc-swift.log"; then ok "build-check: a link to a file outside the project is copied as a file"
+else nok "build-check: a link to a file outside the project is copied as a file"; fi
+if [ "$xbefore" = "$(snapshot "$XP")" ]; then ok "build-check: the Xcode project is unchanged"; else nok "build-check: the Xcode project is unchanged"; fi
+: >"$TMP/bc-swift.log"
+out="$(FAKE_XC_SCHEMES="App:pass MacTool:noios" bc "$XP" --scheme App)"
+if [ "$(grep -c -- '-scheme ' "$TMP/bc-swift.log")" = 1 ] && ! grep -q -- '-list' "$TMP/bc-swift.log"; then ok "build-check: --scheme builds only that scheme"
+else nok "build-check: --scheme builds only that scheme" "$(grep xcodebuild "$TMP/bc-swift.log")"; fi
+expect_result "build-check: --target is for packages, not Xcode projects" 2 '--scheme' "$(bc "$XP" --target App)"
+expect_result "build-check: an Xcode project with no scheme says so" 1 'no scheme found in App\.xcodeproj' "$(FAKE_XC_SCHEMES="" bc "$XP")"
+mkdir -p "$XP/Other.xcodeproj"
+expect_result "build-check: several projects ask for --project" 1 'several Xcode workspaces or projects .*App\.xcodeproj, Other\.xcodeproj.*--project' "$(FAKE_XC_SCHEMES="App:pass" bc "$XP")"
+expect_result "build-check: --project picks one" 0 '- PASS App' "$(FAKE_XC_SCHEMES="App:pass" bc "$XP" --project App.xcodeproj)"
+expect_result "build-check: --project outside the root is a usage error" 2 'usage' "$(bc "$XP" --project ../x.xcodeproj)"
+mkdir -p "$XP/App.xcworkspace"
+: >"$TMP/bc-swift.log"
+FAKE_XC_SCHEMES="App:pass" bc "$XP" --scheme App >/dev/null
+if grep -q -- '-workspace App.xcworkspace -scheme App' "$TMP/bc-swift.log"; then ok "build-check: a workspace is preferred to its projects"
+else nok "build-check: a workspace is preferred to its projects" "$(grep xcodebuild "$TMP/bc-swift.log")"; fi
+rm -rf "$XP/App.xcworkspace" "$XP/Other.xcodeproj"
+expect_result "build-check: no Package.swift and no Xcode project says so" 1 'no Package\.swift and no Xcode project' "$(bc "$BN")"
+
+# test-check on an Xcode project: the fakes of test-check, with the scheme named.
+cp "$BF/xcodebuild" "$TF/xcodebuild-xc"
+xtc() { local out code; out="$(PATH="$TF:$PATH" TMPDIR="$TMP/tc-tmp" FAKE_SIMS="$TMP/tc-sims.json" FAKE_TC_LOG="$TMP/tc.log" FAKE_SWIFT_LOG="$TMP/tc.log" "$SCRIPTS/porting.sh" test-check "$@" 2>&1 </dev/null)"; code=$?; printf 'exit=%s\n%s' "$code" "$out"; }
+mv "$TF/xcodebuild" "$TF/xcodebuild-pkg"; cp "$TF/xcodebuild-xc" "$TF/xcodebuild"
+expect_result "test-check: an Xcode project needs the test scheme named" 1 'name the test scheme of App\.xcodeproj with --scheme' "$(xtc "$XP")"
+: >"$TMP/tc.log"
+out="$(FAKE_XC_SCHEMES="App:pass" FAKE_SUMMARY="$TMP/tc-pass.json" xtc "$XP" --scheme App)"
+expect_result "test-check: an Xcode scheme's counts come from its result bundle" 0 'App\.xcodeproj.*Scheme App:.*12 test\(s\): 10 passed, 0 failed, 2 skipped' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+if grep -q -- 'xcodebuild test -project App.xcodeproj -scheme App -destination platform=iOS Simulator,id=NEW-1 .*CODE_SIGNING_ALLOWED=NO' "$TMP/tc.log"; then ok "test-check: runs the scheme on the picked simulator, without signing"
+else nok "test-check: runs the scheme on the picked simulator, without signing" "$(grep xcodebuild "$TMP/tc.log")"; fi
+expect_result "test-check: a scheme with no iOS destination says so" 1 'not run: the scheme has no iOS destination yet' "$(FAKE_XC_SCHEMES="MacTool:noios" xtc "$XP" --scheme MacTool)"
+mv "$TF/xcodebuild-pkg" "$TF/xcodebuild"; rm -f "$TF/xcodebuild-xc"
+
+# ---------- from an external review of 1.10.0 ----------
+
+# guard-bash: with SIGPIPE ignored, as on CI runners, stopping at the first protected path must
+# not leave a writer on a closed pipe.
+GP="$(new_project guard-pipe)"
+jq '.guardBash = true | .protectedPaths = (["Sources/Audio/"] + [range(0; 400) | "Sources/Gen\(.)/"])' "$GP/.claude/swift-harness.json" >"$GP/cfg.tmp" && mv "$GP/cfg.tmp" "$GP/.claude/swift-harness.json"
+gperr="$( (trap '' PIPE; hook guard-bash.sh "$GP" "$(bash_input 'echo x > Sources/Audio/Engine.swift')" 2>&1 >/dev/null) )"
+if [ -z "$gperr" ]; then ok "guard-bash: no write error on a closed pipe when SIGPIPE is ignored"
+else nok "guard-bash: no write error on a closed pipe when SIGPIPE is ignored" "$gperr"; fi
+out="$(hook guard-bash.sh "$GP" "$(bash_input 'echo x > Sources/Gen399/A.swift')")"
+expect_result "guard-bash: the last of many protected paths still asks" 0 'Sources/Gen399.*protected' "exit=0
+$out"
+
+# rules: a link to the verify command holds only once the command is approved.
+RV="$TMP/rules-verify"
+mkdir -p "$RV/.claude" "$RV/scripts" "$RV/docs"
+git -C "$RV" init -q
+printf '%s\n' '{"verify":{"command":"scripts/verify.sh fast"},"protectedPaths":["Sources/Core/"]}' >"$RV/.claude/swift-harness.json"
+printf '#!/bin/bash\nexit 0\n' >"$RV/scripts/verify.sh"; chmod +x "$RV/scripts/verify.sh"
+echo '{}' >"$RV/docs/architecture-contracts.json"
+printf '# App\n## Non-negotiable rules\n- The build passes. <!-- check: verify -->\n- Modules keep their layers. <!-- check: architecture contracts -->\n- Core is protected. <!-- check: guard -->\n' >"$RV/CLAUDE.md"
+git -C "$RV" add -A && git -C "$RV" -c user.email=t@e.c -c user.name=t commit -qm init
+rv() { local o c; o="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/rules.sh" --project "$RV" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+out="$(rv)"
+expect_result "rules: a verify link does not hold while the command is not approved" 0 'verify: off, the verify command is not approved yet' "$out"
+expect_result "rules: ... nor do the architecture contracts, which run with it" 0 'architecture contracts: off, the verify command is not approved yet.*they run only with the verify command' "$out"
+approve "$RV" >/dev/null
+out="$(rv)"
+expect_result "rules: once approved, both links hold" 0 '3 rule\(s\): 3 name a check' "$out" 'Links to fix'
+expect_result "rules: it says what a link that holds means" 0 'not that it catches every case of the rule' "$out"
+out="$(env -u CLAUDE_PLUGIN_DATA "$SCRIPTS/rules.sh" --project "$RV" --json 2>&1)"
+if jq -e '[.rules[].links[] | select(.check == "verify")][0] | .status == "ok" and (.why | test("could not be told here"))' <<<"$out" >/dev/null; then ok "rules: without the plugin's data folder it says the approval could not be told"
+else nok "rules: without the plugin's data folder it says the approval could not be told" "$out"; fi
+
+# ---------- verify.watch: build inputs beyond Swift (#177) ----------
+
+WT="$(new_project watch)"
+mkdir -p "$WT/engine/crates/ffi/src" "$WT/engine/target" "$WT/engine/vendor/core/src" "$WT/apple"
+echo 'fn a() {}' >"$WT/engine/crates/ffi/src/lib.rs"
+echo '[package]' >"$WT/engine/Cargo.toml"
+echo 'name: X' >"$WT/apple/project.yml"
+echo 'target/' >"$WT/.gitignore"
+git -C "$WT/engine/vendor/core" init -q
+echo 'fn c() {}' >"$WT/engine/vendor/core/src/c.rs"
+git -C "$WT/engine/vendor/core" add -A && git -C "$WT/engine/vendor/core" -c user.email=t@e.c -c user.name=t commit -qm core
+git -C "$WT" add -A 2>/dev/null; git -C "$WT" commit -qm engine
+wchanges() { # $1 name, $2 "same" or "changes", $3 command that edits the project
+  local a b
+  a="$(fingerprint "$WT")"; eval "$3"; b="$(fingerprint "$WT")"
+  if { [ "$2" = changes ] && [ "$a" != "$b" ]; } || { [ "$2" = same ] && [ "$a" = "$b" ]; }; then ok "$1"; else nok "$1"; fi
+}
+wchanges "watch: without verify.watch a Rust change is not a build input" same 'echo "// x" >>"$WT/engine/crates/ffi/src/lib.rs"'
+wchanges "watch: an XcodeGen project.yml is a build input with no setting" changes 'echo "x: 1" >>"$WT/apple/project.yml"'
+wchanges "watch: a Podfile is a build input with no setting" changes 'echo "pod 1" >"$WT/Podfile"'
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":["engine/",":!engine/crates/ffi/gen/","../outside/","/etc/"]},"protectedPaths":["Sources/Audio/"]}'
+approve "$WT" >/dev/null
+wchanges "watch: a Rust change under a watched folder is seen" changes 'echo "// y" >>"$WT/engine/crates/ffi/src/lib.rs"'
+wchanges "watch: a file git ignores under it is not" same 'echo junk >"$WT/engine/target/out.o"'
+wchanges "watch: a change inside a nested repository under it is seen" changes 'echo "// z" >>"$WT/engine/vendor/core/src/c.rs"'
+wchanges "watch: a folder left out with :! is not seen" same 'mkdir -p "$WT/engine/crates/ffi/gen"; echo g >"$WT/engine/crates/ffi/gen/g.rs"'
+if [ "$(jq -nc --arg cwd "$WT" '{cwd: $cwd}' | bash -c '. "$0"; sh_init && sh_watch | paste -sd" " -' "$SCRIPTS/lib.sh")" = "engine/ :!engine/crates/ffi/gen/" ]; then ok "watch: entries that leave the project are dropped"
+else nok "watch: entries that leave the project are dropped"; fi
+if CLAUDE_PLUGIN_DATA="$TMP/data" bash -c '. "$0" </dev/null; SH_INPUT="{\"cwd\":\"$1\"}"; SH_ROOT="$(sh_root)"; SH_CONFIG="$SH_ROOT/.claude/swift-harness.json"; sh_verify_approved "scripts/verify.sh fast" "$(sh_state_path)"' "$SCRIPTS/lib.sh" "$WT"; then ok "watch: changing watched code does not ask for a new verify approval"
+else nok "watch: changing watched code does not ask for a new verify approval"; fi
+# The end of the turn: a change to watched Rust code alone runs the verify command.
+git -C "$WT" add -A 2>/dev/null; git -C "$WT" commit -qm watched
+hook session-start.sh "$WT" '{"source":"startup"}' >/dev/null
+WLOG="$TMP/watch-verify.log"; : >"$WLOG"
+echo '// end of turn' >>"$WT/engine/crates/ffi/src/lib.rs"
+FAKE_VERIFY_LOG="$WLOG" hook stop-verify.sh "$WT" >/dev/null 2>&1
+if [ "$(wc -l <"$WLOG" | tr -d ' ')" = 1 ]; then ok "stop: a change to watched Rust code alone runs the verify command"
+else nok "stop: a change to watched Rust code alone runs the verify command" "$(cat "$WLOG")"; fi
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: watch entries that leave the project are named" 0 'WARN \| Other build systems \| verify\.watch entries not used .*\.\./outside/, /etc/' "exit=0
+$out"
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":["engine/",":!engine/crates/ffi/gen/"]},"protectedPaths":["Sources/Audio/"]}'
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: watched code of another build system passes" 0 'PASS \| Other build systems \| verify\.watch: engine/' "exit=0
+$out"
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast"},"protectedPaths":["Sources/Audio/"]}'
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: a Cargo.toml nothing watches is a warning with the entry to add" 0 'WARN \| Other build systems \| engine/Cargo\.toml \(Rust\).*"watch": \["engine/"\]' "exit=0
+$out"
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":"engine"}}'
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: verify.watch must be a list" 0 'verify\.watch must be a list of paths' "exit=0
+$out"
+
+# ---------- simulator lock (#74) ----------
+
+SL="$SCRIPTS/simulator-lock.sh"
+expect_result "simulator lock: free when nothing runs" 0 '^free$' "exit=0
+$("$SL" status)"
+"$SL" run --name "a long UI test run" -- sleep 6 &
+slpid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$SWIFT_HARNESS_LOCK_DIR/simulator.lock/holder" ] && break; sleep 0.2; done
+expect_result "simulator lock: status names the run that holds it" 0 '^busy: a long UI test run \(pid [0-9]+\)' "exit=0
+$("$SL" status)"
+out="$("$SL" run -- echo second 2>&1)"; code=$?
+expect_result "simulator lock: a second run does not start, and says who holds the lock" 75 'busy: a long UI test run .*Nothing ran' "exit=$code
+$out" '^second$'
+: >"$TMP/tc.log"
+out="$(FAKE_SUMMARY="$TMP/tc-pass.json" tcrun "$TC" --target CoreTests)"
+expect_result "test-check: with the simulator busy it exits 3 and runs nothing" 3 'the simulator is busy: a long UI test run' "$out"
+if ! grep -q 'xcodebuild' "$TMP/tc.log"; then ok "test-check: ... xcodebuild was not started"; else nok "test-check: ... xcodebuild was not started" "$(cat "$TMP/tc.log")"; fi
+out="$("$SL" run --wait 30 -- echo waited 2>&1)"; code=$?
+expect_result "simulator lock: --wait runs once the lock is free" 0 '^waited$' "exit=$code
+$out"
+wait "$slpid" 2>/dev/null
+"$SL" run -- sh -c 'exit 7'
+expect_result "simulator lock: the exit code is the command's" 7 '' "exit=$?"
+mkdir -p "$SWIFT_HARNESS_LOCK_DIR/simulator.lock"; printf '999999\n1\na run that died\n' >"$SWIFT_HARNESS_LOCK_DIR/simulator.lock/holder"
+expect_result "simulator lock: a lock whose process is gone is taken over" 0 '^took it$' "exit=0
+$("$SL" run -- echo "took it" 2>&1)"
+out="$(FAKE_SUMMARY="$TMP/tc-pass.json" tcrun "$TC" --target CoreTests)"
+expect_result "test-check: it takes the lock and gives it back" 0 '10 passed' "$out"
+expect_result "simulator lock: free again after test-check" 0 '^free$' "exit=0
+$("$SL" status)"
+expect_result "simulator lock: a missing command is a usage error" 2 'usage' "exit=$("$SL" run -- >/dev/null 2>&1; echo $?)
+$("$SL" run 2>&1)"
+expect_result "test-check: --wait needs a number" 2 'usage' "$(tcrun "$TC" --wait soon)"
+
+# ---------- a project in a subfolder of the repository (monorepo) ----------
+
+MR="$TMP/monorepo"
+mkdir -p "$MR/apple/.claude" "$MR/apple/Sources/Core" "$MR/apple/scripts" "$MR/backend"
+git -C "$MR" init -q; git -C "$MR" config user.email t@e.c; git -C "$MR" config user.name t
+printf '%s\n' '{"verify":{"command":"scripts/verify.sh fast","maxAttempts":3},"protectedPaths":["Sources/Core/"]}' >"$MR/apple/.claude/swift-harness.json"
+printf '#!/bin/bash\necho run >>"${FAKE_VERIFY_LOG:-/dev/null}"\nexit "${FAKE_VERIFY_EXIT:-0}"\n' >"$MR/apple/scripts/verify.sh"; chmod +x "$MR/apple/scripts/verify.sh"
+echo 'let core = 1' >"$MR/apple/Sources/Core/Core.swift"
+echo 'package main' >"$MR/backend/main.go"
+git -C "$MR" add -A && git -C "$MR" commit -qm init
+mroot() { jq -nc --arg cwd "$1" '{cwd: $cwd}' | CLAUDE_PROJECT_DIR="$2" bash -c '. "$0"; sh_init && printf "%s" "$SH_ROOT"' "$SCRIPTS/lib.sh"; }
+if [ "$(mroot "$MR/apple" "$MR/apple")" = "$MR/apple" ]; then ok "monorepo: a session in the app's subfolder finds its config"
+else nok "monorepo: a session in the app's subfolder finds its config" "$(mroot "$MR/apple" "$MR/apple")"; fi
+if [ "$(mroot "$MR/apple/Sources/Core" "$MR/apple")" = "$MR/apple" ]; then ok "monorepo: ... from a folder below it too"
+else nok "monorepo: ... from a folder below it too"; fi
+if [ "$(mroot "$MR/backend" "$MR/apple")" = "$MR/apple" ]; then ok "monorepo: ... and when the cwd moved to a sibling folder of the same checkout"
+else nok "monorepo: ... and when the cwd moved to a sibling folder of the same checkout" "$(mroot "$MR/backend" "$MR/apple")"; fi
+mhook() { local extra="${3:-}"; [ -n "$extra" ] || extra='{}'; jq -nc --arg cwd "$2" --argjson extra "$extra" '{cwd: $cwd, session_id: "mono"} + $extra' | CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$MR/apple" "$SCRIPTS/$1"; }
+if mhook guard.sh "$MR/apple" "$(edit_input "$MR/apple/Sources/Core/Core.swift")" | grep -q '"permissionDecision": "ask"'; then ok "monorepo: the guard asks for a protected path of the subfolder project"
+else nok "monorepo: the guard asks for a protected path of the subfolder project"; fi
+approve "$MR/apple" >/dev/null
+mhook session-start.sh "$MR/apple" '{"source":"startup"}' >/dev/null
+MLOG="$TMP/mono-verify.log"; : >"$MLOG"
+echo 'let more = 2' >>"$MR/apple/Sources/Core/Core.swift"
+FAKE_VERIFY_LOG="$MLOG" mhook stop-verify.sh "$MR/apple" >/dev/null 2>&1
+if [ "$(wc -l <"$MLOG" | tr -d ' ')" = 1 ]; then ok "monorepo: the end-of-turn check runs for the subfolder project"
+else nok "monorepo: the end-of-turn check runs for the subfolder project" "runs: $(cat "$MLOG")"; fi
+echo 'package main // changed' >"$MR/backend/main.go"
+FAKE_VERIFY_LOG="$MLOG" mhook stop-verify.sh "$MR/apple" >/dev/null 2>&1
+if [ "$(wc -l <"$MLOG" | tr -d ' ')" = 1 ]; then ok "monorepo: a change outside the subfolder does not run it again"
+else nok "monorepo: a change outside the subfolder does not run it again" "runs: $(wc -l <"$MLOG")"; fi
+out="$(jq -nc --arg cwd "$MR" '{cwd: $cwd, session_id: "top", source: "startup"}' | CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$MR" "$SCRIPTS/session-start.sh" 2>&1)"
+expect_result "monorepo: a session started above the project is told no check runs, and where the plugin is" 0 'no check runs here.*set up in: apple' "exit=0
+$out"
+
+# ---------- porting: audio on iOS (#75) ----------
+
+AA="$TMP/audio-app"
+mkdir -p "$AA/Sources/Player" "$AA/Sources/Devices" "$AA/App"
+printf '// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "X", targets: [])\n' >"$AA/Package.swift"
+cat >"$AA/Sources/Player/Engine.swift" <<'SWIFT'
+import AVFoundation
+final class Engine {
+  let engine = AVAudioEngine()
+  // AVAudioSession.sharedInstance().setCategory(.playback) in a comment
+  let note = "MPRemoteCommandCenter in a string"
+}
+SWIFT
+cat >"$AA/Sources/Devices/Output.swift" <<'SWIFT'
+#if os(macOS)
+import CoreAudio
+import AVFoundation
+final class Output {
+  let unit = AVAudioUnitEQ()
+  var hog = kAudioDevicePropertyHogMode
+  var rate = kAudioDevicePropertyNominalSampleRate
+}
+#endif
+SWIFT
+git -C "$AA" init -q
+aud() { local o c; o="$("$SCRIPTS/porting.sh" audio "$AA" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+out="$(aud)"
+expect_result "audio: names the audio code iOS compiles" 0 'Audio code iOS compiles: 1 file\(s\) \(Sources/Player/Engine\.swift:3\)' "$out"
+expect_result "audio: names the audio code only the Mac compiles" 0 'only the Mac compiles \(behind #if\): 1 file\(s\) \(Sources/Devices/Output\.swift:5\)' "$out"
+expect_result "audio: with no session code every item is not found" 0 'audio session category \(AVAudioSession setCategory\): not found' "$out"
+expect_result "audio: comments and strings are not code" 0 'remote commands.*: not found' "$out"
+expect_result "audio: background audio is not found without UIBackgroundModes" 0 'background audio .*: not found' "$out"
+expect_result "audio: hog mode is named as having no iOS equivalent" 0 'exclusive device access \(hog mode\): Sources/Devices/Output\.swift:6' "$out"
+expect_result "audio: so is the device sample rate" 0 'device sample rate .*: Sources/Devices/Output\.swift:7' "$out"
+expect_result "audio: it says what found does not prove" 0 'proved only on a simulator or a device' "$out"
+cat >"$AA/Sources/Player/Session.swift" <<'SWIFT'
+#if os(iOS)
+import AVFoundation
+import MediaPlayer
+final class Session {
+  func start() throws {
+    let s = AVAudioSession.sharedInstance()
+    try s.setCategory(.playback)
+    try s.setActive(true)
+    NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: AVAudioSession.interruptionNotification, object: s)
+    NotificationCenter.default.addObserver(self, selector: #selector(route), name: AVAudioSession.routeChangeNotification, object: s)
+    MPRemoteCommandCenter.shared().playCommand.isEnabled = true
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = [:]
+  }
+}
+#endif
+SWIFT
+printf '<plist><dict>\n<key>UIBackgroundModes</key>\n<array>\n<string>audio</string>\n</array>\n</dict></plist>\n' >"$AA/App/Info.plist"
+out="$(aud)"
+expect_result "audio: the session category is found with its line" 0 'audio session category \(AVAudioSession setCategory\): Sources/Player/Session\.swift:7' "$out"
+expect_result "audio: activation, interruptions and route changes too" 0 'session activation \(setActive\): Sources/Player/Session\.swift:8' "$out"
+expect_result "audio: ... interruptions" 0 'interruptionNotification\): Sources/Player/Session\.swift:9' "$out"
+expect_result "audio: ... route changes" 0 'routeChangeNotification\): Sources/Player/Session\.swift:10' "$out"
+expect_result "audio: remote commands and Now Playing" 0 'MPRemoteCommandCenter\): Sources/Player/Session\.swift:11' "$out"
+expect_result "audio: background audio is read from the Info.plist" 0 'background audio .*: App/Info\.plist:4' "$out"
+expect_result "audio: an item still missing stays not found" 0 'media services reset .*: not found' "$out"
+if ! "$SCRIPTS/porting.sh" scan "$AA" | grep -q '^bg	'; then ok "audio: its lines stay out of the scan"; else nok "audio: its lines stay out of the scan"; fi
+expect_result "audio: a project with no audio code says so" 0 'no audio playback, recording or audio unit API found' "exit=0
+$("$SCRIPTS/porting.sh" audio "$CA" 2>&1)"
+
+# ---------- from a second external review (1.11.0) ----------
+
+# The nearest config wins over one at the top of the repository.
+printf '%s\n' '{"verify":{"enabled":false},"protectedPaths":["docs/"]}' >"$MR/.claude-top.json"; mkdir -p "$MR/.claude"; mv "$MR/.claude-top.json" "$MR/.claude/swift-harness.json"
+if [ "$(mroot "$MR/apple" "$MR/apple")" = "$MR/apple" ]; then ok "monorepo: with a config at the top too, the app's own config wins inside the app"
+else nok "monorepo: with a config at the top too, the app's own config wins inside the app" "$(mroot "$MR/apple" "$MR/apple")"; fi
+if [ "$(mroot "$MR/backend" "$MR")" = "$MR" ]; then ok "monorepo: ... and the top config is used outside the app"
+else nok "monorepo: ... and the top config is used outside the app" "$(mroot "$MR/backend" "$MR")"; fi
+if mhook guard.sh "$MR/apple" "$(edit_input "$MR/apple/Sources/Core/Core.swift")" | grep -q '"permissionDecision": "ask"'; then ok "monorepo: the app's protected path is still guarded with a config at the top"
+else nok "monorepo: the app's protected path is still guarded with a config at the top"; fi
+rm -rf "$MR/.claude"
+# check.sh finds a project in a subfolder as the hooks do.
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" FAKE_VERIFY_LOG=/dev/null "$SCRIPTS/check.sh" --project "$MR/apple" 2>&1)"; code=$?
+expect_result "check.sh: a project in a subfolder of its repository is found" "$code" '' "exit=$code
+$out" 'no \.claude/swift-harness\.json'
+expect_result "check.sh: with no config up to the top of the repository it says where it looked" 2 'no \.claude/swift-harness\.json in .*backend or above it' "exit=$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$MR/backend" >/dev/null 2>&1; echo $?)
+$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$MR/backend" 2>&1)"
+
+# Guest mode in a subfolder: the excludes and the Codex launcher carry the subfolder.
+GM="$TMP/guest-mono"
+mkdir -p "$GM/App/Sources"
+git -C "$GM" init -q; git -C "$GM" config user.email t@e.c; git -C "$GM" config user.name t
+echo 'let a = 1' >"$GM/App/Sources/A.swift"; git -C "$GM" add -A; git -C "$GM" commit -qm init
+CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/setup-guest.sh" --project "$GM/App" --fast "swift build" --full "swift test" --local --codex >/dev/null 2>&1
+if [ -z "$(git -C "$GM" status --porcelain)" ]; then ok "guest: --local in a subfolder keeps its files out of git"
+else nok "guest: --local in a subfolder keeps its files out of git" "$(git -C "$GM" status --porcelain)"; fi
+if jq -r '.hooks.SessionStart[0].hooks[0].command' "$GM/App/.codex/hooks.json" 2>/dev/null | grep -q 'show-toplevel)/App/\.codex/swift-harness-hook\.sh'; then ok "guest: the Codex launcher of a subfolder project points into the subfolder"
+else nok "guest: the Codex launcher of a subfolder project points into the subfolder" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$GM/App/.codex/hooks.json" 2>&1)"; fi
+
+# verify.watch: an entry git does not accept does not switch change detection off.
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":[":(glob","engine/"]},"protectedPaths":["Sources/Audio/"]}'
+wchanges "watch: with a malformed entry, a Swift change is still seen" changes 'echo "let w = 9" >>"$WT/Sources/App.swift"'
+wchanges "watch: ... and so is a change under the entries that are valid" changes 'echo "// w" >>"$WT/engine/crates/ffi/src/lib.rs"'
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: a verify.watch entry that is not a pathspec is named" 0 'WARN \| Other build systems \| verify\.watch entries not used .*:\(glob' "exit=0
+$out"
+# A glob with folders reaches into a nested repository.
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":["engine/*/*/src/*.rs"]},"protectedPaths":["Sources/Audio/"]}'
+wchanges "watch: a glob with folders reaches a file of a nested repository" changes 'echo "// g" >>"$WT/engine/vendor/core/src/c.rs"'
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":["other/*/*.rs"]},"protectedPaths":["Sources/Audio/"]}'
+wchanges "watch: ... and a glob for another folder does not" same 'echo "// h" >>"$WT/engine/vendor/core/src/c.rs"'
+
+# Untracked files are hashed in batches: the result is the same, a new one is seen.
+UT="$(new_project untracked-many)"
+mkdir -p "$UT/Sources/Gen"
+for i in 1 2 3 4 5 6 7 8 9 10; do echo "let g$i = $i" >"$UT/Sources/Gen/G $i.swift"; done
+a="$(fingerprint "$UT")"; b="$(fingerprint "$UT")"
+if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "fingerprint: untracked files, names with spaces included, hash the same twice"; else nok "fingerprint: untracked files, names with spaces included, hash the same twice"; fi
+echo 'let g = 0' >>"$UT/Sources/Gen/G 7.swift"
+if [ "$a" != "$(fingerprint "$UT")" ]; then ok "fingerprint: a change to one untracked file is seen"; else nok "fingerprint: a change to one untracked file is seen"; fi
+
+# SwiftLint with another reporter in its config: the hook asks for the one it reads.
+LR="$(new_project lint-reporter)"
+set_config "$LR" '{"format":"none","lint":"swiftlint"}'
+LRF="$TMP/lint-reporter-fakes"; mkdir -p "$LRF"
+cat >"$LRF/swiftlint" <<'FAKE'
+#!/bin/bash
+# fake swiftlint whose config picks the json reporter: xcode lines only with --reporter xcode
+file="${!#}"
+case " $* " in
+  *" --reporter xcode "*) printf '%s:1:5: warning: Force Cast Violation: Force casts should be avoided (force_cast)\n' "$file" ;;
+  *) printf '[{"rule_id":"force_cast","severity":"Warning","file":"%s","line":1}]\n' "$file" ;;
+esac
+FAKE
+chmod +x "$LRF/swiftlint"
+out="$(PATH="$LRF:$PATH" hook post-edit.sh "$LR" "$(edit_input "$LR/Sources/App.swift")" 2>&1)"
+expect_result "post-edit: warnings are read whatever reporter the SwiftLint config picks" 0 'SwiftLint: 1 issue\(s\) in Sources/App\.swift' "exit=0
+$out" 'no issues'
+
+# Architecture contracts: a dump with no targets is a failure to read, not a pass.
+CF="$TMP/contracts-fakes"; mkdir -p "$CF"
+printf '#!/bin/bash\necho "{\\"name\\": \\"X\\"}"\n' >"$CF/swift"; chmod +x "$CF/swift"
+CP="$TMP/contracts-nodump"; mkdir -p "$CP/docs"
+printf '// swift-tools-version: 6.0\n' >"$CP/Package.swift"
+printf '%s\n' '{"version":1,"packages":{".":{"App":[]}}}' >"$CP/docs/architecture-contracts.json"
+out="$(PATH="$CF:$PATH" "$SCRIPTS/contracts.sh" "$CP" 2>&1)"; code=$?
+expect_result "contracts: a dump with no list of targets fails, saying nothing was checked" 1 'gave no list of targets, so its dependencies were not checked' "exit=$code
+$out"
+
+# Security settings turned off with approval: the record says not run, not passed.
+SO="$(new_project security-off)"
+hook session-start.sh "$SO" '{"source":"startup"}' >/dev/null
+set_config "$SO" '{"verify":{"command":"scripts/verify.sh fast"},"security":{"enabled":false}}'
+sdig="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/security.sh" --status --project "$SO" 2>/dev/null | sed -n 's/^Digest: *//p')"
+CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/security.sh" --approve "$sdig" --project "$SO" >/dev/null 2>&1
+approve "$SO" >/dev/null
+echo 'let s = 2' >>"$SO/Sources/App.swift"
+FAKE_VERIFY_LOG=/dev/null hook stop-verify.sh "$SO" >/dev/null 2>&1
+sev="$(find "$TMP/data/state" -name evidence.json -newer "$SO/Sources/App.swift" 2>/dev/null | head -1)"
+if [ -n "$sev" ] && jq -e '[.checks[]? | select(.name == "security settings")][0] | .result == "not run" and (.detail | test("approved by the user"))' "$sev" >/dev/null 2>&1; then ok "stop: security turned off with approval is recorded as not run, not passed"
+else nok "stop: security turned off with approval is recorded as not run, not passed" "$( [ -n "$sev" ] && jq -c '[.checks[]? | select(.name == "security settings")]' "$sev")"; fi
+
+# No git repository: the session is told the end-of-turn check does not run.
+NG="$TMP/no-git"; mkdir -p "$NG/.claude" "$NG/Sources"
+printf '%s\n' '{"verify":{"enabled":false}}' >"$NG/.claude/swift-harness.json"
+out="$(hook session-start.sh "$NG" '{"source":"startup"}' 2>&1)"
+expect_result "session start: without a git repository it says the end-of-turn check does not run" 0 'is not a git repository, so the end-of-turn check .* does not run' "exit=0
+$out"
 
 # ---------- summary ----------
 

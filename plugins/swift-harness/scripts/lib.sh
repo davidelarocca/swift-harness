@@ -37,12 +37,30 @@ sh_same_repository() { # $1, $2 folders: true when both are checkouts of one rep
   [ "$a" = "$b" ]
 }
 sh_root() {
-  local cwd root outer project hops=0
+  local cwd root outer project inner hops=0
   cwd="$(sh_in '.cwd')"
   [ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
   root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || root="${CLAUDE_PROJECT_DIR:-$cwd}"
   root="$( (cd "$root" 2>/dev/null && pwd -P) || printf '%s' "$root")"
+  # A project in a subfolder of the repository (a monorepo: the Swift app next to other code,
+  # set up from that subfolder): the nearest folder with a config from the cwd up to the top
+  # level wins, also over a config at the top level, so an app's own protected paths and checks
+  # are the ones used inside it.
+  inner="$(cd "$cwd" 2>/dev/null && pwd -P)" || inner=""
+  while [ -n "$inner" ] && [ "$inner" != "$root" ] && [[ "$inner/" == "$root"/* ]]; do
+    if [ -f "$inner/.claude/swift-harness.json" ]; then
+      printf '%s' "$inner"
+      return
+    fi
+    inner="$(dirname "$inner")"
+  done
   if [ ! -f "$root/.claude/swift-harness.json" ]; then
+    # Else the session's project folder when it is inside this checkout.
+    inner="$(cd "${CLAUDE_PROJECT_DIR:-/nonexistent}" 2>/dev/null && pwd -P)" || inner=""
+    if [ -n "$inner" ] && [ "$inner" != "$root" ] && [[ "$inner/" == "$root"/* ]] && [ -f "$inner/.claude/swift-harness.json" ]; then
+      printf '%s' "$inner"
+      return
+    fi
     outer="$root"
     while [ "$hops" -lt 8 ] && [ "$outer" != "/" ]; do
       outer="$(git -C "$(dirname "$outer")" rev-parse --show-toplevel 2>/dev/null)" || break
@@ -247,9 +265,143 @@ SH_BUILD_INPUTS=(
   '*/Resources/*' '*__Snapshots__/*'
   'Sources/*' '*/Sources/*' 'Tests/*' '*/Tests/*'
   '.swiftlint.yml' '.swiftformat' '.swift-format' '.claude/swift-harness.json' 'scripts/*'
+  'project.yml' '*/project.yml' 'Podfile' '*/Podfile' 'Podfile.lock' '*/Podfile.lock' 'Cartfile' 'Cartfile.resolved'
   'docs/architecture-contracts.json'
   ':!.build/*' ':!*/.build/*' ':!*DerivedData/*' ':!*xcuserdata/*' ':!*.DS_Store'
 )
+
+# verify.watch (#177): more files whose changes make the end-of-turn check run, for what the app
+# builds from other languages or tools (a Rust engine, C++ with CMake, a generated project).
+# Folders, files or git pathspec globs from the project root, ":!" in front to leave something
+# out. Unlike verify.inputs they are not part of the verify approval: the check runs again, the
+# user is not asked again. One entry per line; entries that leave the project are dropped.
+sh_watch() {
+  local w neg
+  jq -r '.verify.watch // [] | if type == "array" then .[] | strings else empty end' "$SH_CONFIG" 2>/dev/null |
+    while IFS= read -r w; do
+      neg=""
+      case "$w" in ':!'*) neg=':!'; w="${w#:!}" ;; esac
+      w="${w#./}"
+      case "$w" in '' | /* | .. | ../* | */../* | */..) continue ;; esac
+      # An entry git does not accept as a pathspec (":(glob" with no ")") would make every listing
+      # fail, Swift files included: it is dropped, and the doctor names it.
+      git -C "$SH_ROOT" ls-files -z -- "$neg$w" ${neg:+.} >/dev/null 2>&1 || continue
+      printf '%s%s\n' "$neg" "$w"
+    done
+}
+# The verify.watch entries that are not used: they leave the project or are not a git pathspec.
+sh_watch_dropped() {
+  local used w
+  used="$(sh_watch)"
+  jq -r '.verify.watch // [] | if type == "array" then .[] | strings else empty end' "$SH_CONFIG" 2>/dev/null |
+    while IFS= read -r w; do
+      [ -n "$w" ] || continue
+      grep -qxF -- "${w#./}" <<<"$used" || { [[ "$w" == ':!./'* ]] && grep -qxF -- ":!${w#:!./}" <<<"$used"; } || printf '%s\n' "$w"
+    done
+}
+# The watch entries as pathspecs of the repository at $1 (its path from the project root, empty
+# for the project itself): a nested repository or submodule gets the entries that reach into it,
+# "." when an entry holds it whole, and globs as they are.
+sh_watch_for() {
+  local rel="$1" w neg p
+  sh_watch | while IFS= read -r w; do
+    neg=""
+    case "$w" in ':!'*) neg=':!'; w="${w#:!}" ;; esac
+    if [ -z "$rel" ]; then printf '%s%s\n' "$neg" "$w"; continue; fi
+    case "$w" in
+      *'*'*)
+        if [[ "$w" != */* ]]; then printf '%s%s\n' "$neg" "$w"; continue; fi
+        # A glob with folders ("engines/*/*.rs"): matched part by part against the path of the
+        # nested repository; what is left of it is the pathspec inside.
+        local gp rp i=0 fits=1 rest
+        IFS=/ read -ra gp <<<"$w"
+        IFS=/ read -ra rp <<<"$rel"
+        while [ "$i" -lt "${#rp[@]}" ]; do
+          if [ "$i" -ge "${#gp[@]}" ]; then
+            [[ "${gp[${#gp[@]} - 1]}" == *'*'* ]] || fits=0 # a last "*" crosses folders
+            break
+          fi
+          # shellcheck disable=SC2053 # the glob part is a pattern on purpose
+          [[ "${rp[$i]}" == ${gp[$i]} ]] || { fits=0; break; }
+          i=$((i + 1))
+        done
+        [ "$fits" = 1 ] || continue
+        rest="$(IFS=/; printf '%s' "${gp[*]:$i}")"
+        if [ -z "$rest" ]; then [ -n "$neg" ] || printf '.\n'; else printf '%s%s\n' "$neg" "$rest"; fi
+        continue
+        ;;
+    esac
+    p="${w%/}"
+    case "$rel/" in "$p"/*) [ -n "$neg" ] || printf '.\n'; continue ;; esac
+    case "$w" in "$rel"/*) printf '%s%s\n' "$neg" "${w#"$rel"/}" ;; esac
+  done
+}
+# True when the path $1 (from the project root) is covered by a watch entry.
+sh_watched() {
+  local f="$1" w p hit=1
+  while IFS= read -r w; do
+    case "$w" in
+      ':!'*) w="${w#:!}"; p="${w%/}"
+        # shellcheck disable=SC2254 # the entry is a pattern on purpose
+        case "$f" in "$p" | "$p"/* | $w) return 1 ;; esac ;;
+      *) p="${w%/}"
+        # shellcheck disable=SC2254
+        case "$f" in "$p" | "$p"/* | $w) hit=0 ;; esac ;;
+    esac
+  done < <(sh_watch)
+  return "$hit"
+}
+
+# One simulator or UI test run at a time on this machine (#74): simulators and UI tests are
+# heavy and shared by every session of the user. The lock is a folder (mkdir is atomic) in
+# /tmp/swift-harness-<uid>, or SWIFT_HARNESS_LOCK_DIR; it holds the pid, the start time and what
+# runs. A lock whose process is gone is taken over.
+sh_sim_lock_path() { printf '%s/simulator.lock' "${SWIFT_HARNESS_LOCK_DIR:-/tmp/swift-harness-$(id -u)}"; }
+# $1 what runs. Returns 0 with the lock held (SH_SIM_LOCK set), 1 when a live run holds it
+# (SH_SIM_LOCK_HOLDER says which).
+sh_sim_lock_take() {
+  local lock pid since what try now
+  lock="$(sh_sim_lock_path)"
+  mkdir -p "$(dirname "$lock")" 2>/dev/null
+  SH_SIM_LOCK=""; SH_SIM_LOCK_HOLDER=""
+  for try in 1 2; do
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s\n%s\n%s\n' "$$" "$(date +%s)" "$1" >"$lock/holder"
+      SH_SIM_LOCK="$lock"
+      return 0
+    fi
+    pid="$(sed -n 1p "$lock/holder" 2>/dev/null)"; since="$(sed -n 2p "$lock/holder" 2>/dev/null)"; what="$(sed -n 3p "$lock/holder" 2>/dev/null)"
+    case "$pid" in '' | *[!0-9]*) pid=0 ;; esac
+    case "$since" in '' | *[!0-9]*) since=0 ;; esac
+    now="$(date +%s)"
+    if [ "$pid" -gt 0 ] && kill -0 "$pid" 2>/dev/null; then
+      SH_SIM_LOCK_HOLDER="${what:-a run} (pid $pid, started $(((now - since) / 60)) min ago)"
+      return 1
+    fi
+    # No holder written yet: another run is taking the lock right now.
+    if [ "$pid" -eq 0 ] && [ -z "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      SH_SIM_LOCK_HOLDER="a run that is starting"
+      return 1
+    fi
+    rm -rf "$lock" # its process is gone
+  done
+  SH_SIM_LOCK_HOLDER="a run that took the lock at the same moment"
+  return 1
+}
+sh_sim_lock_release() {
+  [ -n "${SH_SIM_LOCK:-}" ] || return 0
+  [ "$(sed -n 1p "$SH_SIM_LOCK/holder" 2>/dev/null)" = "$$" ] && rm -rf "$SH_SIM_LOCK"
+  SH_SIM_LOCK=""
+}
+# $1 what runs, $2 seconds to wait (0: do not wait). Returns like sh_sim_lock_take.
+sh_sim_lock_wait() {
+  local waited=0
+  until sh_sim_lock_take "$1"; do
+    [ "$waited" -lt "${2:-0}" ] || return 1
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
 
 # Architecture contract (#13), checked by contracts.sh. Also a build input above.
 SH_CONTRACT="docs/architecture-contracts.json"
@@ -263,6 +415,11 @@ sh_registry_on() { [ "$(sh_cfg '.registry.enabled' 'true')" = "true" ] && [ -f "
 # fingerprint: the tests read it, so an edited contract can change their result.
 sh_layout() { local p; p="$(sh_cfg '.layout.path' 'docs/LAYOUT_CONTRACT.md')"; printf '%s' "${p#./}"; }
 sh_layout_on() { [ "$(sh_cfg '.layout.enabled' 'true')" = "true" ] && [ -f "$SH_ROOT/$(sh_layout)" ]; }
+
+# Porting ratchet (#73), checked by porting.sh ratchet: the modules that build for iOS and the
+# macOS-only uses accepted in them. Part of the fingerprint, so a recorded module is checked.
+sh_ratchet() { local p; p="$(sh_cfg '.porting.ratchet' 'docs/PORTING_RATCHET.tsv')"; printf '%s' "${p#./}"; }
+sh_ratchet_on() { [ -f "$SH_ROOT/$(sh_ratchet)" ]; }
 
 # What a pass of the verify command covered (SH160-01). The generated verify.sh ends with
 #   swift-harness-result/1: <passed|partial|failed>; checked: <platforms>; tested: <platforms>; not checked: <platforms>
@@ -444,6 +601,11 @@ sh_weaken_list() {
     "$here/registry.sh" records "$SH_ROOT" 2>/dev/null | awk -F'\037' -v f="$(sh_registry)" '
       $1 == "C" && $4 != "" { printf "registry\t%s\t%s\t1\n", f, ($3 != "" ? $3 " " $4 : $4) }
       $1 == "R" && $3 != "" { printf "registry-retired\t%s\t%s\t1\n", f, $3 }'
+    # The porting ratchet's modules and accepted uses (#73): one fewer module or one more accepted
+    # use is a weaker ratchet.
+    [ -f "$SH_ROOT/$(sh_ratchet)" ] && awk -F'\t' -v f="$(sh_ratchet)" '
+      $1 == "module" && $2 != "" { printf "ratchet-module\t%s\t%s\t1\n", f, $2 }
+      $1 == "accepted" && $5 + 0 > 0 { printf "ratchet-accepted\t%s\t%s: %s (in %s)\t%d\n", f, $3, $4, $2, $5 }' "$SH_ROOT/$(sh_ratchet)"
   ) | LC_ALL=C sort
 }
 
@@ -473,7 +635,9 @@ sh_fingerprint_repo() { # $1 repository root, then pathspecs added to the build 
   shift
   if git -C "$repo" rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1; then
     git -C "$repo" rev-parse HEAD 2>/dev/null
-    git -C "$repo" diff HEAD -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null
+    # A diff git could not make is never "unchanged": the fingerprint differs each time, so the
+    # check runs instead of passing on what it could not read.
+    git -C "$repo" diff HEAD -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null || printf 'git diff failed %s %s\n' "$(date +%s)" "$RANDOM"
   else
     printf 'no commit yet\n'
     git -C "$repo" ls-files -z --cached -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null |
@@ -482,8 +646,10 @@ sh_fingerprint_repo() { # $1 repository root, then pathspecs added to the build 
         if [ -f "$repo/$f" ]; then shasum <"$repo/$f" 2>/dev/null; else printf 'deleted\n'; fi
       done
   fi
-  git -C "$repo" ls-files -z --others --exclude-standard -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null |
-    while IFS= read -r -d '' f; do shasum "$repo/$f" 2>/dev/null; done
+  # In batches: one shasum per file took a session start past its 30 seconds with ten thousand
+  # untracked files.
+  (cd "$repo" 2>/dev/null && git ls-files -z --others --exclude-standard -- "${SH_BUILD_INPUTS[@]}" "$@" 2>/dev/null |
+    xargs -0 shasum 2>/dev/null)
 }
 # Nested repositories of $1, as paths from its root: links in the index (submodules, or a
 # repository added as one) and untracked folders that are repositories.
@@ -493,20 +659,22 @@ sh_nested_repos() {
     git -C "$1" ls-files -z --others --exclude-standard 2>/dev/null | tr '\0' '\n' | sed -n 's#/$##p'
   } | LC_ALL=C sort -u
 }
-sh_fingerprint_tree() { # $1 repository root, $2 depth, then pathspecs for this repository only
-  local repo="$1" depth="$2" sub
-  shift 2
-  sh_fingerprint_repo "$repo" "$@"
+sh_fingerprint_tree() { # $1 repository root, $2 depth, $3 its path from the project root, then pathspecs for this repository only
+  local repo="$1" depth="$2" rel="$3" sub w
+  local watch=()
+  shift 3
+  while IFS= read -r w; do [ -n "$w" ] && watch+=("$w"); done < <(sh_watch_for "$rel")
+  sh_fingerprint_repo "$repo" "$@" ${watch[@]+"${watch[@]}"}
   [ "$depth" -lt 4 ] || return 0
   sh_nested_repos "$repo" | while IFS= read -r sub; do
     [ -n "$sub" ] && [ -e "$repo/$sub/.git" ] || continue
     printf 'nested %s\n' "$sub"
-    sh_fingerprint_tree "$repo/$sub" $((depth + 1))
+    sh_fingerprint_tree "$repo/$sub" $((depth + 1)) "${rel:+$rel/}$sub"
   done
 }
 sh_fingerprint() {
   {
-    sh_fingerprint_tree "$SH_ROOT" 0 "$(sh_registry)" "$(sh_layout)" "$(sh_snapshots)" "$(sh_performance)"
+    sh_fingerprint_tree "$SH_ROOT" 0 "" "$(sh_registry)" "$(sh_layout)" "$(sh_ratchet)" "$(sh_snapshots)" "$(sh_performance)"
     printf 'policy\n'
     shasum <"$SH_CONFIG" 2>/dev/null
     sh_verify_manifest "$(sh_cfg '.verify.command' 'scripts/verify.sh fast')" 2>/dev/null | sed 1d
@@ -531,7 +699,9 @@ sh_swiftlint() {
     return
   fi
   err="$(mktemp -t swift-harness-lint.XXXXXX)"
-  SH_LINT_OUTPUT="$(cd "$SH_ROOT" && swiftlint lint --quiet --force-exclude "$1" 2>"$err")"
+  # --reporter xcode: a project whose config picks another reporter (json, csv) would give
+  # output this cannot read, and a file with warnings would be called clean.
+  SH_LINT_OUTPUT="$(cd "$SH_ROOT" && swiftlint lint --quiet --force-exclude --reporter xcode "$1" 2>"$err")"
   SH_LINT_STATUS=$?
   SH_LINT_ERRORS="$(grep -v '^[[:space:]]*$' "$err" | head -20)"
   rm -f "$err"
@@ -774,6 +944,18 @@ sh_platforms() { # $1 project root
 # (#71): the files are kept out of git, so a new worktree starts without them, and every hook
 # would do nothing in silence. Tell the user and Claude, with the command that prepares it.
 # Writes nothing.
+# A session started above a project set up in a subfolder (a monorepo): no config here, so no
+# check runs, and nothing would say so. Names the folders that have one.
+sh_subproject_notice() {
+  local subs msg
+  [ -n "${SH_ROOT:-}" ] && [ ! -f "$SH_ROOT/.claude/swift-harness.json" ] || return 0
+  subs="$(git -C "$SH_ROOT" -c core.quotepath=off ls-files -co --exclude-standard -- '*/.claude/swift-harness.json' 2>/dev/null |
+    sed 's|/\.claude/swift-harness\.json$||' | head -5 | paste -sd, - | sed 's/,/, /g')"
+  [ -n "$subs" ] || return 0
+  msg="swift-harness: this session started in $SH_ROOT, which has no .claude/swift-harness.json, so no check runs here: no guard on protected paths, no build or tests at the end of a turn. The plugin is set up in: $subs. Start the session in that folder to have its checks."
+  jq -n --arg msg "$msg" '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $msg}}'
+}
+
 sh_guest_missing_notice() {
   local common src w msg
   [ -n "${SH_ROOT:-}" ] || return 0
