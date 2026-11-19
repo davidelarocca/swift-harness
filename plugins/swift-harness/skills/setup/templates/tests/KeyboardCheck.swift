@@ -24,6 +24,15 @@
 // focusable views, host the one under test, or give the component a way to set its focus.
 // Shortcuts (defaultAction, cancelAction, Command combinations) work wherever focus is.
 //
+// When no view takes the focus, a key that is not a shortcut reaches nothing, and the test
+// fails on its assertion with no word about why. `focused` says whether a view took it, and
+// the first such key pressed without one prints a note (`focusNote`). The usual reason: standard controls
+// (Slider, Toggle, Picker, Button) take the focus only while "Keyboard navigation" is on in
+// System Settings > Keyboard, in a test as in the app, and a test cannot turn it on (measured
+// on macOS 27, with `swift test` and with `xcodebuild test`). A component whose keys must
+// work whatever that setting takes the focus itself: `.focusable(interactions: .edit)` with
+// `.onKeyPress`. Assert it when a test depends on it: `#expect(keys.focused)`.
+//
 // What it cannot check, measured on macOS 26 and 27: Tab and focus order (a test process has no key
 // view loop: Tab does not move focus), the app's menu commands, and shortcuts that differ only
 // by Shift (in a test process SwiftUI can take Command-F for a Command-Shift-F shortcut on the
@@ -53,6 +62,7 @@ final class KeyboardCheck {
     static let settle: TimeInterval = 0.1
 
     let window: NSWindow
+    private var noted = false
 
     private init(window: NSWindow) { self.window = window }
 
@@ -75,6 +85,22 @@ final class KeyboardCheck {
         return KeyboardCheck(window: window)
     }
 
+    /// True when a view of the hosted content has the keyboard focus: a key that is not a
+    /// shortcut goes to it. False when the focus stayed on the window: such a key reaches nothing.
+    var focused: Bool {
+        guard let responder = window.firstResponder else { return false }
+        return responder !== window
+    }
+
+    /// Why keys may reach nothing, when no view has the focus; nil when one has it.
+    var focusNote: String? {
+        if focused { return nil }
+        let setting = NSApp.isFullKeyboardAccessEnabled
+            ? "\"Keyboard navigation\" is on, so the hosted view has nothing that can take the focus"
+            : "\"Keyboard navigation\" is off on this Mac (System Settings > Keyboard), so standard controls (Slider, Toggle, Picker, Button) do not take it, or the hosted view has nothing that can"
+        return "no view took the focus: \(setting). Keys that are not shortcuts (Return for .defaultAction, Escape for .cancelAction, Command combinations) reach nothing. A component whose keys must work whatever the setting takes the focus itself: .focusable(interactions: .edit) with .onKeyPress."
+    }
+
     func press(_ character: String, modifiers: NSEvent.ModifierFlags = []) {
         press(.character(character), modifiers: modifiers)
     }
@@ -82,6 +108,14 @@ final class KeyboardCheck {
     func press(_ key: Key, modifiers: NSEvent.ModifierFlags = []) {
         let (characters, code, extra) = Self.event(for: key)
         let flags = modifiers.union(extra)
+        // Said once per window, and only for a key that needs the focus: a shortcut does not.
+        var shortcut = flags.contains(.command)
+        if case .return = key { shortcut = true }
+        if case .escape = key { shortcut = true }
+        if !shortcut, !noted, let note = focusNote {
+            noted = true
+            print("swift-harness keyboard: \(note)")
+        }
         let shown = flags.contains(.shift) ? characters.uppercased() : characters
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             guard let event = NSEvent.keyEvent(
