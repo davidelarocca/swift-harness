@@ -408,6 +408,7 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `verify.command` | any shell command, exit 0 means pass | `scripts/verify.sh fast` |
 | `verify.maxAttempts` | consecutive failures before Claude may stop | `3` |
 | `verify.inputs` | files or folders covered by the approval in addition to the files the command names, such as a script the command calls through quotes or `make` | `[]` |
+| `verify.watch` | more files, folders or git pathspec globs whose changes make the end-of-turn check run, for code the app builds from another language or tool (a Rust engine, C++ with CMake); `:!` in front leaves something out. Not part of the verify approval. XcodeGen `project.yml`, `Podfile` and `Cartfile` are watched without it | `[]` |
 | `protectedPaths` | path prefixes relative to the repo root that require approval before an Edit or Write (`../` and symlinks are resolved, also when the entry itself is a symlink) | `[]` |
 | `guardPbxproj` | ask before edits to `*.pbxproj` | `true` |
 | `guardBash` | also ask before a Bash command that names a protected path, `*.pbxproj` or a baseline folder together with a write: a redirect or `tee` into it, `sed -i` or `perl -i` on it, `rm`, `mv` or `touch` on it, `cp` onto it, `git checkout` or `git restore` of it, or an inline script that writes files. Reading never asks. Read as text, so a path built at run time is missed | `false` |

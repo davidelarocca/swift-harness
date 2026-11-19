@@ -247,9 +247,57 @@ SH_BUILD_INPUTS=(
   '*/Resources/*' '*__Snapshots__/*'
   'Sources/*' '*/Sources/*' 'Tests/*' '*/Tests/*'
   '.swiftlint.yml' '.swiftformat' '.swift-format' '.claude/swift-harness.json' 'scripts/*'
+  'project.yml' '*/project.yml' 'Podfile' '*/Podfile' 'Podfile.lock' '*/Podfile.lock' 'Cartfile' 'Cartfile.resolved'
   'docs/architecture-contracts.json'
   ':!.build/*' ':!*/.build/*' ':!*DerivedData/*' ':!*xcuserdata/*' ':!*.DS_Store'
 )
+
+# verify.watch (#177): more files whose changes make the end-of-turn check run, for what the app
+# builds from other languages or tools (a Rust engine, C++ with CMake, a generated project).
+# Folders, files or git pathspec globs from the project root, ":!" in front to leave something
+# out. Unlike verify.inputs they are not part of the verify approval: the check runs again, the
+# user is not asked again. One entry per line; entries that leave the project are dropped.
+sh_watch() {
+  local w neg
+  jq -r '.verify.watch // [] | if type == "array" then .[] | strings else empty end' "$SH_CONFIG" 2>/dev/null |
+    while IFS= read -r w; do
+      neg=""
+      case "$w" in ':!'*) neg=':!'; w="${w#:!}" ;; esac
+      w="${w#./}"
+      case "$w" in '' | /* | .. | ../* | */../* | */..) continue ;; esac
+      printf '%s%s\n' "$neg" "$w"
+    done
+}
+# The watch entries as pathspecs of the repository at $1 (its path from the project root, empty
+# for the project itself): a nested repository or submodule gets the entries that reach into it,
+# "." when an entry holds it whole, and globs as they are.
+sh_watch_for() {
+  local rel="$1" w neg p
+  sh_watch | while IFS= read -r w; do
+    neg=""
+    case "$w" in ':!'*) neg=':!'; w="${w#:!}" ;; esac
+    if [ -z "$rel" ]; then printf '%s%s\n' "$neg" "$w"; continue; fi
+    case "$w" in *'*'*) [[ "$w" == */* ]] || printf '%s%s\n' "$neg" "$w"; continue ;; esac
+    p="${w%/}"
+    case "$rel/" in "$p"/*) [ -n "$neg" ] || printf '.\n'; continue ;; esac
+    case "$w" in "$rel"/*) printf '%s%s\n' "$neg" "${w#"$rel"/}" ;; esac
+  done
+}
+# True when the path $1 (from the project root) is covered by a watch entry.
+sh_watched() {
+  local f="$1" w p hit=1
+  while IFS= read -r w; do
+    case "$w" in
+      ':!'*) w="${w#:!}"; p="${w%/}"
+        # shellcheck disable=SC2254 # the entry is a pattern on purpose
+        case "$f" in "$p" | "$p"/* | $w) return 1 ;; esac ;;
+      *) p="${w%/}"
+        # shellcheck disable=SC2254
+        case "$f" in "$p" | "$p"/* | $w) hit=0 ;; esac ;;
+    esac
+  done < <(sh_watch)
+  return "$hit"
+}
 
 # Architecture contract (#13), checked by contracts.sh. Also a build input above.
 SH_CONTRACT="docs/architecture-contracts.json"
@@ -503,20 +551,22 @@ sh_nested_repos() {
     git -C "$1" ls-files -z --others --exclude-standard 2>/dev/null | tr '\0' '\n' | sed -n 's#/$##p'
   } | LC_ALL=C sort -u
 }
-sh_fingerprint_tree() { # $1 repository root, $2 depth, then pathspecs for this repository only
-  local repo="$1" depth="$2" sub
-  shift 2
-  sh_fingerprint_repo "$repo" "$@"
+sh_fingerprint_tree() { # $1 repository root, $2 depth, $3 its path from the project root, then pathspecs for this repository only
+  local repo="$1" depth="$2" rel="$3" sub w
+  local watch=()
+  shift 3
+  while IFS= read -r w; do [ -n "$w" ] && watch+=("$w"); done < <(sh_watch_for "$rel")
+  sh_fingerprint_repo "$repo" "$@" ${watch[@]+"${watch[@]}"}
   [ "$depth" -lt 4 ] || return 0
   sh_nested_repos "$repo" | while IFS= read -r sub; do
     [ -n "$sub" ] && [ -e "$repo/$sub/.git" ] || continue
     printf 'nested %s\n' "$sub"
-    sh_fingerprint_tree "$repo/$sub" $((depth + 1))
+    sh_fingerprint_tree "$repo/$sub" $((depth + 1)) "${rel:+$rel/}$sub"
   done
 }
 sh_fingerprint() {
   {
-    sh_fingerprint_tree "$SH_ROOT" 0 "$(sh_registry)" "$(sh_layout)" "$(sh_ratchet)" "$(sh_snapshots)" "$(sh_performance)"
+    sh_fingerprint_tree "$SH_ROOT" 0 "" "$(sh_registry)" "$(sh_layout)" "$(sh_ratchet)" "$(sh_snapshots)" "$(sh_performance)"
     printf 'policy\n'
     shasum <"$SH_CONFIG" 2>/dev/null
     sh_verify_manifest "$(sh_cfg '.verify.command' 'scripts/verify.sh fast')" 2>/dev/null | sed 1d

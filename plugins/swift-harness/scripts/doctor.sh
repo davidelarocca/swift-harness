@@ -65,7 +65,7 @@ fi
 
 unknown="$(jq -r '
   (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance", "porting"])[],
-  (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed"])[] | "verify." + . else empty end),
+  (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed", "watch"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
@@ -105,7 +105,8 @@ problems="$(jq -r '
     check(["verify", "command"]; type == "string" and length > 0; "verify.command must be a non-empty string"),
     check(["verify", "maxAttempts"]; type == "number" and . >= 1 and floor == .; "verify.maxAttempts must be a whole number, 1 or more"),
     check(["verify", "retryFailed"]; type == "boolean"; "verify.retryFailed must be true or false"),
-    check(["verify", "inputs"]; type == "array" and all(.[]; type == "string"); "verify.inputs must be a list of paths")
+    check(["verify", "inputs"]; type == "array" and all(.[]; type == "string"); "verify.inputs must be a list of paths"),
+    check(["verify", "watch"]; type == "array" and all(.[]; type == "string"); "verify.watch must be a list of paths")
   else empty end),
   check(["registry"]; type == "object"; "registry must be an object"),
   (if (.registry | type) == "object" then
@@ -535,6 +536,42 @@ else
   else
     row PASS "Snapshot baselines" "$count image(s) made on macOS $made, compared on this Mac; only /swift-harness:approve-snapshots replaces them"
   fi
+fi
+
+# ---------- other build systems (#177) ----------
+# Code the app builds from another language or tool is not a build input by default: a turn that
+# changes only it ends with nothing checked. Read from the files git lists and from the root of
+# each nested repository; nothing is run.
+other_build_systems() { # "<manifest><TAB><language><TAB><watch entries>" for each one nothing watches
+  {
+    git -C "$SH_ROOT" -c core.quotepath=off ls-files -co --exclude-standard -- 'Cargo.toml' '*/Cargo.toml' 'CMakeLists.txt' '*/CMakeLists.txt' 'go.mod' '*/go.mod' 'meson.build' '*/meson.build' 'build.gradle' '*/build.gradle' 'build.gradle.kts' '*/build.gradle.kts' 2>/dev/null
+    sh_nested_repos "$SH_ROOT" | while IFS= read -r sub; do
+      for m in Cargo.toml CMakeLists.txt go.mod meson.build build.gradle build.gradle.kts; do
+        [ -f "$SH_ROOT/$sub/$m" ] && printf '%s/%s\n' "$sub" "$m"
+      done
+    done
+  } | LC_ALL=C sort -u | while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    sh_watched "$m" && continue
+    case "$(basename "$m")" in
+      Cargo.toml) lang="Rust" globs='"*.rs", "Cargo.toml", "Cargo.lock"' ;;
+      CMakeLists.txt) lang="CMake" globs='"CMakeLists.txt", "*.cmake"' ;;
+      go.mod) lang="Go" globs='"*.go", "go.mod", "go.sum"' ;;
+      meson.build) lang="Meson" globs='"meson.build"' ;;
+      *) lang="Gradle" globs='"*.gradle", "*.gradle.kts", "*.kt"' ;;
+    esac
+    d="$(dirname "$m")"
+    if [ "$d" = . ]; then printf '%s\t%s\t%s\n' "$m" "$lang" "$globs"; else printf '%s\t%s\t"%s/"\n' "$m" "$lang" "$d"; fi
+  done | awk -F'\t' '
+    { d = $3; gsub(/"/, "", d)
+      for (k in kept) if (substr(d, 1, length(k)) == k && k ~ /\/$/) next
+      if (!seen[$3]++) { kept[d] = 1; print } }' | head -6
+}
+other_builds="$(other_build_systems)"
+if [ -n "$other_builds" ]; then
+  row WARN "Other build systems" "$(printf '%s\n' "$other_builds" | awk -F'\t' '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $1, $2 }'): a turn that changes only that code ends with nothing checked. Fix: add \"watch\": [$(printf '%s\n' "$other_builds" | cut -f3 | paste -sd, - | sed 's/,/, /g')] to verify in .claude/swift-harness.json (it does not change the verify approval), and make the verify command build that code"
+elif [ -n "$(sh_watch)" ]; then
+  row PASS "Other build systems" "verify.watch: $(sh_watch | paste -sd, - | sed 's/,/, /g'); changes there run the end-of-turn check"
 fi
 
 # ---------- rules and their checks (#148) ----------

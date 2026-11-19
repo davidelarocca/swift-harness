@@ -5370,6 +5370,56 @@ out="$(env -u CLAUDE_PLUGIN_DATA "$SCRIPTS/rules.sh" --project "$RV" --json 2>&1
 if jq -e '[.rules[].links[] | select(.check == "verify")][0] | .status == "ok" and (.why | test("could not be told here"))' <<<"$out" >/dev/null; then ok "rules: without the plugin's data folder it says the approval could not be told"
 else nok "rules: without the plugin's data folder it says the approval could not be told" "$out"; fi
 
+# ---------- verify.watch: build inputs beyond Swift (#177) ----------
+
+WT="$(new_project watch)"
+mkdir -p "$WT/engine/crates/ffi/src" "$WT/engine/target" "$WT/engine/vendor/core/src" "$WT/apple"
+echo 'fn a() {}' >"$WT/engine/crates/ffi/src/lib.rs"
+echo '[package]' >"$WT/engine/Cargo.toml"
+echo 'name: X' >"$WT/apple/project.yml"
+echo 'target/' >"$WT/.gitignore"
+git -C "$WT/engine/vendor/core" init -q
+echo 'fn c() {}' >"$WT/engine/vendor/core/src/c.rs"
+git -C "$WT/engine/vendor/core" add -A && git -C "$WT/engine/vendor/core" -c user.email=t@e.c -c user.name=t commit -qm core
+git -C "$WT" add -A 2>/dev/null; git -C "$WT" commit -qm engine
+wchanges() { # $1 name, $2 "same" or "changes", $3 command that edits the project
+  local a b
+  a="$(fingerprint "$WT")"; eval "$3"; b="$(fingerprint "$WT")"
+  if { [ "$2" = changes ] && [ "$a" != "$b" ]; } || { [ "$2" = same ] && [ "$a" = "$b" ]; }; then ok "$1"; else nok "$1"; fi
+}
+wchanges "watch: without verify.watch a Rust change is not a build input" same 'echo "// x" >>"$WT/engine/crates/ffi/src/lib.rs"'
+wchanges "watch: an XcodeGen project.yml is a build input with no setting" changes 'echo "x: 1" >>"$WT/apple/project.yml"'
+wchanges "watch: a Podfile is a build input with no setting" changes 'echo "pod 1" >"$WT/Podfile"'
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":["engine/",":!engine/crates/ffi/gen/","../outside/","/etc/"]},"protectedPaths":["Sources/Audio/"]}'
+approve "$WT" >/dev/null
+wchanges "watch: a Rust change under a watched folder is seen" changes 'echo "// y" >>"$WT/engine/crates/ffi/src/lib.rs"'
+wchanges "watch: a file git ignores under it is not" same 'echo junk >"$WT/engine/target/out.o"'
+wchanges "watch: a change inside a nested repository under it is seen" changes 'echo "// z" >>"$WT/engine/vendor/core/src/c.rs"'
+wchanges "watch: a folder left out with :! is not seen" same 'mkdir -p "$WT/engine/crates/ffi/gen"; echo g >"$WT/engine/crates/ffi/gen/g.rs"'
+if [ "$(jq -nc --arg cwd "$WT" '{cwd: $cwd}' | bash -c '. "$0"; sh_init && sh_watch | paste -sd" " -' "$SCRIPTS/lib.sh")" = "engine/ :!engine/crates/ffi/gen/" ]; then ok "watch: entries that leave the project are dropped"
+else nok "watch: entries that leave the project are dropped"; fi
+if CLAUDE_PLUGIN_DATA="$TMP/data" bash -c '. "$0" </dev/null; SH_INPUT="{\"cwd\":\"$1\"}"; SH_ROOT="$(sh_root)"; SH_CONFIG="$SH_ROOT/.claude/swift-harness.json"; sh_verify_approved "scripts/verify.sh fast" "$(sh_state_path)"' "$SCRIPTS/lib.sh" "$WT"; then ok "watch: changing watched code does not ask for a new verify approval"
+else nok "watch: changing watched code does not ask for a new verify approval"; fi
+# The end of the turn: a change to watched Rust code alone runs the verify command.
+git -C "$WT" add -A 2>/dev/null; git -C "$WT" commit -qm watched
+hook session-start.sh "$WT" '{"source":"startup"}' >/dev/null
+WLOG="$TMP/watch-verify.log"; : >"$WLOG"
+echo '// end of turn' >>"$WT/engine/crates/ffi/src/lib.rs"
+FAKE_VERIFY_LOG="$WLOG" hook stop-verify.sh "$WT" >/dev/null 2>&1
+if [ "$(wc -l <"$WLOG" | tr -d ' ')" = 1 ]; then ok "stop: a change to watched Rust code alone runs the verify command"
+else nok "stop: a change to watched Rust code alone runs the verify command" "$(cat "$WLOG")"; fi
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: watched code of another build system passes" 0 'PASS \| Other build systems \| verify\.watch: engine/' "exit=0
+$out"
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast"},"protectedPaths":["Sources/Audio/"]}'
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: a Cargo.toml nothing watches is a warning with the entry to add" 0 'WARN \| Other build systems \| engine/Cargo\.toml \(Rust\).*"watch": \["engine/"\]' "exit=0
+$out"
+set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":"engine"}}'
+out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
+expect_result "doctor: verify.watch must be a list" 0 'verify\.watch must be a list of paths' "exit=0
+$out"
+
 # ---------- summary ----------
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
