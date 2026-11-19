@@ -13,6 +13,8 @@ TEMPLATE="$PLUGIN/skills/setup/templates/verify.sh"
 # Physical path, so the symlink tests below control exactly where a symlink appears.
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-tests.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
+# The simulator lock (#74) of the tests, apart from the machine's own.
+export SWIFT_HARNESS_LOCK_DIR="$TMP/sim-lock"
 
 passed=0
 failed=0
@@ -5419,6 +5421,140 @@ set_config "$WT" '{"verify":{"command":"scripts/verify.sh fast","watch":"engine"
 out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$WT" 2>&1)"
 expect_result "doctor: verify.watch must be a list" 0 'verify\.watch must be a list of paths' "exit=0
 $out"
+
+# ---------- simulator lock (#74) ----------
+
+SL="$SCRIPTS/simulator-lock.sh"
+expect_result "simulator lock: free when nothing runs" 0 '^free$' "exit=0
+$("$SL" status)"
+"$SL" run --name "a long UI test run" -- sleep 6 &
+slpid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$SWIFT_HARNESS_LOCK_DIR/simulator.lock/holder" ] && break; sleep 0.2; done
+expect_result "simulator lock: status names the run that holds it" 0 '^busy: a long UI test run \(pid [0-9]+\)' "exit=0
+$("$SL" status)"
+out="$("$SL" run -- echo second 2>&1)"; code=$?
+expect_result "simulator lock: a second run does not start, and says who holds the lock" 75 'busy: a long UI test run .*Nothing ran' "exit=$code
+$out" '^second$'
+: >"$TMP/tc.log"
+out="$(FAKE_SUMMARY="$TMP/tc-pass.json" tcrun "$TC" --target CoreTests)"
+expect_result "test-check: with the simulator busy it exits 3 and runs nothing" 3 'the simulator is busy: a long UI test run' "$out"
+if ! grep -q 'xcodebuild' "$TMP/tc.log"; then ok "test-check: ... xcodebuild was not started"; else nok "test-check: ... xcodebuild was not started" "$(cat "$TMP/tc.log")"; fi
+out="$("$SL" run --wait 30 -- echo waited 2>&1)"; code=$?
+expect_result "simulator lock: --wait runs once the lock is free" 0 '^waited$' "exit=$code
+$out"
+wait "$slpid" 2>/dev/null
+"$SL" run -- sh -c 'exit 7'
+expect_result "simulator lock: the exit code is the command's" 7 '' "exit=$?"
+mkdir -p "$SWIFT_HARNESS_LOCK_DIR/simulator.lock"; printf '999999\n1\na run that died\n' >"$SWIFT_HARNESS_LOCK_DIR/simulator.lock/holder"
+expect_result "simulator lock: a lock whose process is gone is taken over" 0 '^took it$' "exit=0
+$("$SL" run -- echo "took it" 2>&1)"
+out="$(FAKE_SUMMARY="$TMP/tc-pass.json" tcrun "$TC" --target CoreTests)"
+expect_result "test-check: it takes the lock and gives it back" 0 '10 passed' "$out"
+expect_result "simulator lock: free again after test-check" 0 '^free$' "exit=0
+$("$SL" status)"
+expect_result "simulator lock: a missing command is a usage error" 2 'usage' "exit=$("$SL" run -- >/dev/null 2>&1; echo $?)
+$("$SL" run 2>&1)"
+expect_result "test-check: --wait needs a number" 2 'usage' "$(tcrun "$TC" --wait soon)"
+
+# ---------- a project in a subfolder of the repository (monorepo) ----------
+
+MR="$TMP/monorepo"
+mkdir -p "$MR/apple/.claude" "$MR/apple/Sources/Core" "$MR/apple/scripts" "$MR/backend"
+git -C "$MR" init -q; git -C "$MR" config user.email t@e.c; git -C "$MR" config user.name t
+printf '%s\n' '{"verify":{"command":"scripts/verify.sh fast","maxAttempts":3},"protectedPaths":["Sources/Core/"]}' >"$MR/apple/.claude/swift-harness.json"
+printf '#!/bin/bash\necho run >>"${FAKE_VERIFY_LOG:-/dev/null}"\nexit "${FAKE_VERIFY_EXIT:-0}"\n' >"$MR/apple/scripts/verify.sh"; chmod +x "$MR/apple/scripts/verify.sh"
+echo 'let core = 1' >"$MR/apple/Sources/Core/Core.swift"
+echo 'package main' >"$MR/backend/main.go"
+git -C "$MR" add -A && git -C "$MR" commit -qm init
+mroot() { jq -nc --arg cwd "$1" '{cwd: $cwd}' | CLAUDE_PROJECT_DIR="$2" bash -c '. "$0"; sh_init && printf "%s" "$SH_ROOT"' "$SCRIPTS/lib.sh"; }
+if [ "$(mroot "$MR/apple" "$MR/apple")" = "$MR/apple" ]; then ok "monorepo: a session in the app's subfolder finds its config"
+else nok "monorepo: a session in the app's subfolder finds its config" "$(mroot "$MR/apple" "$MR/apple")"; fi
+if [ "$(mroot "$MR/apple/Sources/Core" "$MR/apple")" = "$MR/apple" ]; then ok "monorepo: ... from a folder below it too"
+else nok "monorepo: ... from a folder below it too"; fi
+if [ "$(mroot "$MR/backend" "$MR/apple")" = "$MR/apple" ]; then ok "monorepo: ... and when the cwd moved to a sibling folder of the same checkout"
+else nok "monorepo: ... and when the cwd moved to a sibling folder of the same checkout" "$(mroot "$MR/backend" "$MR/apple")"; fi
+mhook() { local extra="${3:-}"; [ -n "$extra" ] || extra='{}'; jq -nc --arg cwd "$2" --argjson extra "$extra" '{cwd: $cwd, session_id: "mono"} + $extra' | CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$MR/apple" "$SCRIPTS/$1"; }
+if mhook guard.sh "$MR/apple" "$(edit_input "$MR/apple/Sources/Core/Core.swift")" | grep -q '"permissionDecision": "ask"'; then ok "monorepo: the guard asks for a protected path of the subfolder project"
+else nok "monorepo: the guard asks for a protected path of the subfolder project"; fi
+approve "$MR/apple" >/dev/null
+mhook session-start.sh "$MR/apple" '{"source":"startup"}' >/dev/null
+MLOG="$TMP/mono-verify.log"; : >"$MLOG"
+echo 'let more = 2' >>"$MR/apple/Sources/Core/Core.swift"
+FAKE_VERIFY_LOG="$MLOG" mhook stop-verify.sh "$MR/apple" >/dev/null 2>&1
+if [ "$(wc -l <"$MLOG" | tr -d ' ')" = 1 ]; then ok "monorepo: the end-of-turn check runs for the subfolder project"
+else nok "monorepo: the end-of-turn check runs for the subfolder project" "runs: $(cat "$MLOG")"; fi
+echo 'package main // changed' >"$MR/backend/main.go"
+FAKE_VERIFY_LOG="$MLOG" mhook stop-verify.sh "$MR/apple" >/dev/null 2>&1
+if [ "$(wc -l <"$MLOG" | tr -d ' ')" = 1 ]; then ok "monorepo: a change outside the subfolder does not run it again"
+else nok "monorepo: a change outside the subfolder does not run it again" "runs: $(wc -l <"$MLOG")"; fi
+out="$(jq -nc --arg cwd "$MR" '{cwd: $cwd, session_id: "top", source: "startup"}' | CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$MR" "$SCRIPTS/session-start.sh" 2>&1)"
+expect_result "monorepo: a session started above the project is told no check runs, and where the plugin is" 0 'no check runs here.*set up in: apple' "exit=0
+$out"
+
+# ---------- porting: audio on iOS (#75) ----------
+
+AA="$TMP/audio-app"
+mkdir -p "$AA/Sources/Player" "$AA/Sources/Devices" "$AA/App"
+printf '// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "X", targets: [])\n' >"$AA/Package.swift"
+cat >"$AA/Sources/Player/Engine.swift" <<'SWIFT'
+import AVFoundation
+final class Engine {
+  let engine = AVAudioEngine()
+  // AVAudioSession.sharedInstance().setCategory(.playback) in a comment
+  let note = "MPRemoteCommandCenter in a string"
+}
+SWIFT
+cat >"$AA/Sources/Devices/Output.swift" <<'SWIFT'
+#if os(macOS)
+import CoreAudio
+import AVFoundation
+final class Output {
+  let unit = AVAudioUnitEQ()
+  var hog = kAudioDevicePropertyHogMode
+  var rate = kAudioDevicePropertyNominalSampleRate
+}
+#endif
+SWIFT
+git -C "$AA" init -q
+aud() { local o c; o="$("$SCRIPTS/porting.sh" audio "$AA" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+out="$(aud)"
+expect_result "audio: names the audio code iOS compiles" 0 'Audio code iOS compiles: 1 file\(s\) \(Sources/Player/Engine\.swift:3\)' "$out"
+expect_result "audio: names the audio code only the Mac compiles" 0 'only the Mac compiles \(behind #if\): 1 file\(s\) \(Sources/Devices/Output\.swift:5\)' "$out"
+expect_result "audio: with no session code every item is not found" 0 'audio session category \(AVAudioSession setCategory\): not found' "$out"
+expect_result "audio: comments and strings are not code" 0 'remote commands.*: not found' "$out"
+expect_result "audio: background audio is not found without UIBackgroundModes" 0 'background audio .*: not found' "$out"
+expect_result "audio: hog mode is named as having no iOS equivalent" 0 'exclusive device access \(hog mode\): Sources/Devices/Output\.swift:6' "$out"
+expect_result "audio: so is the device sample rate" 0 'device sample rate .*: Sources/Devices/Output\.swift:7' "$out"
+expect_result "audio: it says what found does not prove" 0 'proved only on a simulator or a device' "$out"
+cat >"$AA/Sources/Player/Session.swift" <<'SWIFT'
+#if os(iOS)
+import AVFoundation
+import MediaPlayer
+final class Session {
+  func start() throws {
+    let s = AVAudioSession.sharedInstance()
+    try s.setCategory(.playback)
+    try s.setActive(true)
+    NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: AVAudioSession.interruptionNotification, object: s)
+    NotificationCenter.default.addObserver(self, selector: #selector(route), name: AVAudioSession.routeChangeNotification, object: s)
+    MPRemoteCommandCenter.shared().playCommand.isEnabled = true
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = [:]
+  }
+}
+#endif
+SWIFT
+printf '<plist><dict>\n<key>UIBackgroundModes</key>\n<array>\n<string>audio</string>\n</array>\n</dict></plist>\n' >"$AA/App/Info.plist"
+out="$(aud)"
+expect_result "audio: the session category is found with its line" 0 'audio session category \(AVAudioSession setCategory\): Sources/Player/Session\.swift:7' "$out"
+expect_result "audio: activation, interruptions and route changes too" 0 'session activation \(setActive\): Sources/Player/Session\.swift:8' "$out"
+expect_result "audio: ... interruptions" 0 'interruptionNotification\): Sources/Player/Session\.swift:9' "$out"
+expect_result "audio: ... route changes" 0 'routeChangeNotification\): Sources/Player/Session\.swift:10' "$out"
+expect_result "audio: remote commands and Now Playing" 0 'MPRemoteCommandCenter\): Sources/Player/Session\.swift:11' "$out"
+expect_result "audio: background audio is read from the Info.plist" 0 'background audio .*: App/Info\.plist:4' "$out"
+expect_result "audio: an item still missing stays not found" 0 'media services reset .*: not found' "$out"
+if ! "$SCRIPTS/porting.sh" scan "$AA" | grep -q '^bg	'; then ok "audio: its lines stay out of the scan"; else nok "audio: its lines stay out of the scan"; fi
+expect_result "audio: a project with no audio code says so" 0 'no audio playback, recording or audio unit API found' "exit=0
+$("$SCRIPTS/porting.sh" audio "$CA" 2>&1)"
 
 # ---------- summary ----------
 

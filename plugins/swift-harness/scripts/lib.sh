@@ -37,12 +37,28 @@ sh_same_repository() { # $1, $2 folders: true when both are checkouts of one rep
   [ "$a" = "$b" ]
 }
 sh_root() {
-  local cwd root outer project hops=0
+  local cwd root outer project inner hops=0
   cwd="$(sh_in '.cwd')"
   [ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
   root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || root="${CLAUDE_PROJECT_DIR:-$cwd}"
   root="$( (cd "$root" 2>/dev/null && pwd -P) || printf '%s' "$root")"
   if [ ! -f "$root/.claude/swift-harness.json" ]; then
+    # A project in a subfolder of the repository (a monorepo: the Swift app next to other code,
+    # set up from that subfolder): the nearest folder with a config from the cwd up to the top
+    # level, else the session's project folder when it is inside this checkout.
+    inner="$(cd "$cwd" 2>/dev/null && pwd -P)" || inner=""
+    while [ -n "$inner" ] && [ "$inner" != "$root" ] && [[ "$inner/" == "$root"/* ]]; do
+      if [ -f "$inner/.claude/swift-harness.json" ]; then
+        printf '%s' "$inner"
+        return
+      fi
+      inner="$(dirname "$inner")"
+    done
+    inner="$(cd "${CLAUDE_PROJECT_DIR:-/nonexistent}" 2>/dev/null && pwd -P)" || inner=""
+    if [ -n "$inner" ] && [ "$inner" != "$root" ] && [[ "$inner/" == "$root"/* ]] && [ -f "$inner/.claude/swift-harness.json" ]; then
+      printf '%s' "$inner"
+      return
+    fi
     outer="$root"
     while [ "$hops" -lt 8 ] && [ "$outer" != "/" ]; do
       outer="$(git -C "$(dirname "$outer")" rev-parse --show-toplevel 2>/dev/null)" || break
@@ -297,6 +313,57 @@ sh_watched() {
     esac
   done < <(sh_watch)
   return "$hit"
+}
+
+# One simulator or UI test run at a time on this machine (#74): simulators and UI tests are
+# heavy and shared by every session of the user. The lock is a folder (mkdir is atomic) in
+# /tmp/swift-harness-<uid>, or SWIFT_HARNESS_LOCK_DIR; it holds the pid, the start time and what
+# runs. A lock whose process is gone is taken over.
+sh_sim_lock_path() { printf '%s/simulator.lock' "${SWIFT_HARNESS_LOCK_DIR:-/tmp/swift-harness-$(id -u)}"; }
+# $1 what runs. Returns 0 with the lock held (SH_SIM_LOCK set), 1 when a live run holds it
+# (SH_SIM_LOCK_HOLDER says which).
+sh_sim_lock_take() {
+  local lock pid since what try now
+  lock="$(sh_sim_lock_path)"
+  mkdir -p "$(dirname "$lock")" 2>/dev/null
+  SH_SIM_LOCK=""; SH_SIM_LOCK_HOLDER=""
+  for try in 1 2; do
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s\n%s\n%s\n' "$$" "$(date +%s)" "$1" >"$lock/holder"
+      SH_SIM_LOCK="$lock"
+      return 0
+    fi
+    pid="$(sed -n 1p "$lock/holder" 2>/dev/null)"; since="$(sed -n 2p "$lock/holder" 2>/dev/null)"; what="$(sed -n 3p "$lock/holder" 2>/dev/null)"
+    case "$pid" in '' | *[!0-9]*) pid=0 ;; esac
+    case "$since" in '' | *[!0-9]*) since=0 ;; esac
+    now="$(date +%s)"
+    if [ "$pid" -gt 0 ] && kill -0 "$pid" 2>/dev/null; then
+      SH_SIM_LOCK_HOLDER="${what:-a run} (pid $pid, started $(((now - since) / 60)) min ago)"
+      return 1
+    fi
+    # No holder written yet: another run is taking the lock right now.
+    if [ "$pid" -eq 0 ] && [ -z "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      SH_SIM_LOCK_HOLDER="a run that is starting"
+      return 1
+    fi
+    rm -rf "$lock" # its process is gone
+  done
+  SH_SIM_LOCK_HOLDER="a run that took the lock at the same moment"
+  return 1
+}
+sh_sim_lock_release() {
+  [ -n "${SH_SIM_LOCK:-}" ] || return 0
+  [ "$(sed -n 1p "$SH_SIM_LOCK/holder" 2>/dev/null)" = "$$" ] && rm -rf "$SH_SIM_LOCK"
+  SH_SIM_LOCK=""
+}
+# $1 what runs, $2 seconds to wait (0: do not wait). Returns like sh_sim_lock_take.
+sh_sim_lock_wait() {
+  local waited=0
+  until sh_sim_lock_take "$1"; do
+    [ "$waited" -lt "${2:-0}" ] || return 1
+    sleep 5
+    waited=$((waited + 5))
+  done
 }
 
 # Architecture contract (#13), checked by contracts.sh. Also a build input above.
@@ -834,6 +901,18 @@ sh_platforms() { # $1 project root
 # (#71): the files are kept out of git, so a new worktree starts without them, and every hook
 # would do nothing in silence. Tell the user and Claude, with the command that prepares it.
 # Writes nothing.
+# A session started above a project set up in a subfolder (a monorepo): no config here, so no
+# check runs, and nothing would say so. Names the folders that have one.
+sh_subproject_notice() {
+  local subs msg
+  [ -n "${SH_ROOT:-}" ] && [ ! -f "$SH_ROOT/.claude/swift-harness.json" ] || return 0
+  subs="$(git -C "$SH_ROOT" -c core.quotepath=off ls-files -co --exclude-standard -- '*/.claude/swift-harness.json' 2>/dev/null |
+    sed 's|/\.claude/swift-harness\.json$||' | head -5 | paste -sd, - | sed 's/,/, /g')"
+  [ -n "$subs" ] || return 0
+  msg="swift-harness: this session started in $SH_ROOT, which has no .claude/swift-harness.json, so no check runs here: no guard on protected paths, no build or tests at the end of a turn. The plugin is set up in: $subs. Start the session in that folder to have its checks."
+  jq -n --arg msg "$msg" '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $msg}}'
+}
+
 sh_guest_missing_notice() {
   local common src w msg
   [ -n "${SH_ROOT:-}" ] || return 0

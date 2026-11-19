@@ -3,6 +3,7 @@
 #
 #   porting.sh scan    [project-dir]  one line per signal: level, module, file:line, signal
 #   porting.sh summary [project-dir]  platforms, then one line per module, then dependencies
+#   porting.sh audio   [project-dir]  what an audio app needs on iOS, found or not found (#75)
 #   porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]
 #                                     builds each package target for the iOS Simulator, on a COPY
 #   porting.sh test-check [project-dir] [--target NAME]... [--device NAME] [--keep]
@@ -25,6 +26,10 @@
 # scheme with no iOS destination is reported as NOT iOS, not as a failure. test-check runs
 # `xcodebuild test` on the named schemes. --project picks a workspace or project at the root when
 # there are several (a workspace is preferred to a project otherwise).
+#
+# One simulator run at a time (#74): test-check takes the machine's simulator lock (see
+# simulator-lock.sh). When another run holds it, test-check exits 3 with nothing run, or waits
+# with --wait SECONDS.
 #
 # Exit codes: build-check 0 when nothing failed (a scheme with no iOS destination is not a
 # failure), 1 when a target or scheme failed; test-check 0 only when tests ran and none failed;
@@ -65,8 +70,8 @@ mode="${1:-}"
 dir_arg=""
 case "${1:-}" in --* | "") ;; *) dir_arg="$1"; shift ;; esac
 root="$(cd "${dir_arg:-$PWD}" 2>/dev/null && pwd -P)" || { printf 'porting: no such folder: %s\n' "$dir_arg"; exit 2; }
-usage() { printf 'usage: porting.sh scan|summary [project-dir]\n       porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]\n       porting.sh build-check [project-dir] [--project NAME] [--scheme NAME]... [--keep]\n       porting.sh test-check [project-dir] [--target NAME]... [--device NAME] [--keep]\n       porting.sh test-check [project-dir] [--project NAME] --scheme NAME... [--device NAME] [--keep]\n       porting.sh ratchet [project-dir] [--record [--module MODULE]...]\n'; exit 2; }
-case "$mode" in scan | summary) [ $# -eq 0 ] || usage ;; build-check | test-check | ratchet) ;; *) usage ;; esac
+usage() { printf 'usage: porting.sh scan|summary|audio [project-dir]\n       porting.sh build-check [project-dir] [--target NAME]... [--ios VERSION] [--keep]\n       porting.sh build-check [project-dir] [--project NAME] [--scheme NAME]... [--keep]\n       porting.sh test-check [project-dir] [--target NAME]... [--device NAME] [--wait SECONDS] [--keep]\n       porting.sh test-check [project-dir] [--project NAME] --scheme NAME... [--device NAME] [--wait SECONDS] [--keep]\n       porting.sh ratchet [project-dir] [--record [--module MODULE]...]\n'; exit 2; }
+case "$mode" in scan | summary | audio) [ $# -eq 0 ] || usage ;; build-check | test-check | ratchet) ;; *) usage ;; esac
 
 list() { git -C "$root" -c core.quotepath=off ls-files -co --exclude-standard "$@" 2>/dev/null; }
 packages="$(list 'Package.swift' '*/Package.swift' | sed -e 's|/\{0,1\}Package\.swift$||' -e 's|^$|.|' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
@@ -117,7 +122,9 @@ scan() { # $1, optional: folders, one per line; only the files under them are re
       else if (!active()) return
       printf "%s\t%s\t%s:%d\t%s\n", level, mod, FILENAME, FNR, signal
     }
-    FNR == 1 { depth = 0; incomment = 0; inmls = 0; coreaudio = 0; mod = module(FILENAME) }
+    # Lines for `porting.sh audio` (#75), kept out of scan and summary.
+    function bg(what) { printf "bg\t%s\t%s:%d\t%s\n", mod, FILENAME, FNR, what }
+    FNR == 1 { depth = 0; incomment = 0; inmls = 0; coreaudio = 0; session = 0; mod = module(FILENAME) }
     {
       line = $0
       # Block comments, then line comments and string contents, so text never counts as code.
@@ -188,6 +195,23 @@ scan() { # $1, optional: folders, one per line; only the files under them are re
       if (active() && line ~ /^[ \t]*(@[A-Za-z_]+[ \t]+)*import[ \t]+(CoreAudio|AVFAudio|AVFoundation)([ \t.;]|$)/) coreaudio = 1
       if (!coreaudio && line ~ /(^|[^A-Za-z0-9_])UnsafeMutableAudioBufferListPointer([^A-Za-z0-9_]|$)/) hit("blocks", "UnsafeMutableAudioBufferListPointer without import CoreAudio (AudioToolbox does not bring it on iOS)")
 
+      # Audio on iOS (#75): what the code uses, and what it already handles in code iOS compiles.
+      if (line ~ /(^|[^A-Za-z0-9_])(AVAudioEngine|AVAudioPlayer|AVAudioPlayerNode|AVPlayer|AVQueuePlayer|AVAudioRecorder|AUAudioUnit|AVAudioUnit[A-Za-z]*|AudioQueue[A-Za-z]+|AVAudioSourceNode|AVAudioSinkNode|AudioComponentInstance[A-Za-z]*|AudioUnitRender)([^A-Za-z0-9_]|$)/) bg(active() ? "uses" : "uses-mac")
+      if (active()) {
+        if (line ~ /(^|[^A-Za-z0-9_])AVAudioSession([^A-Za-z0-9_]|$)/) session = 1
+        if (session && line ~ /\.setCategory[ \t]*\(/) bg("category")
+        if (session && line ~ /\.setActive[ \t]*\(/) bg("active")
+        if (line ~ /interruptionNotification/) bg("interruptions")
+        if (line ~ /routeChangeNotification/) bg("routes")
+        if (line ~ /mediaServicesWereResetNotification/) bg("reset")
+        if (line ~ /(^|[^A-Za-z0-9_])MPRemoteCommandCenter([^A-Za-z0-9_]|$)/) bg("remote")
+        if (line ~ /(^|[^A-Za-z0-9_])MPNowPlayingInfoCenter([^A-Za-z0-9_]|$)/) bg("nowplaying")
+      }
+      if (line ~ /kAudioDevicePropertyHogMode/) bg("mac-hog")
+      if (line ~ /kAudioDevicePropertyNominalSampleRate|kAudioDevicePropertyAvailableNominalSampleRates/) bg("mac-rate")
+      if (line ~ /kAudioHardwarePropertyDefaultOutputDevice|kAudioHardwarePropertyDevices|kAudioOutputUnitProperty_CurrentDevice/) bg("mac-device")
+      if (line ~ /kAudioDevicePropertyBufferFrameSize/) bg("mac-buffer")
+
       if (line ~ /\.onHover[ \t]*[({]/ || line ~ /\.onContinuousHover/) hit("adapt", "hover (needs a touch alternative)")
       if (line ~ /\.(keyboardShortcut|onKeyPress)[ \t]*\(/) hit("adapt", "keyboard (no keyboard on most iPhones)")
       if (line ~ /\.help[ \t]*\(/) hit("adapt", ".help tooltip (not shown on touch)")
@@ -225,6 +249,19 @@ modules() { # "<module><TAB><source files>" for every module, sorted
       END { for (m in files) printf "%s\t%d\n", m, files[m] }' | LC_ALL=C sort
 }
 
+cleanup() { # the copy, unless --keep, and the simulator lock when this run holds it
+  [ "${keep:-false}" = true ] || [ -z "${work:-}" ] || rm -rf "$work"
+  sh_sim_lock_release
+}
+# test-check holds the simulator lock (#74) while it runs: one simulator run at a time on this
+# machine. Busy: exit 3 with nothing run, or wait with --wait SECONDS.
+take_simulator() { # $1 seconds to wait
+  trap cleanup EXIT
+  sh_sim_lock_wait "porting.sh test-check on $root" "$1" && return 0
+  printf 'porting: the simulator is busy: %s. Nothing ran. Run this again when it ends, or pass --wait SECONDS to wait for it.\n' "$SH_SIM_LOCK_HOLDER"
+  exit 3
+}
+
 # The copy leaves out files that look like secrets BY NAME (.env*, Secrets*, keys, certificates,
 # provisioning profiles, .netrc). It is not a sandbox: a secret under another name is copied, and
 # the build on the copy runs the project's scripts with the user's permissions.
@@ -232,7 +269,7 @@ make_copy() { # sets work and copy: a copy of the project with no .git, build ou
   work="$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-port.XXXXXX")" || exit 1
   work="$(cd "$work" && pwd -P)" # the physical path: the compiler prints it, not a link
   copy="$work/copy"
-  if [ "$keep" != true ]; then trap 'rm -rf "$work"' EXIT; fi
+  trap cleanup EXIT
   mkdir -p "$copy"
   # --copy-unsafe-links: a link that points outside the project becomes a copy of its file, so the
   # copy builds as the project does.
@@ -346,13 +383,14 @@ report_tests() { # $1 xcodebuild output, $2 result bundle: counts and first fail
 }
 
 test_check() {
-  local targets=() device="" keep=false t schemes=() project=""
+  local targets=() device="" keep=false t schemes=() project="" wait=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --target) [ $# -ge 2 ] || usage; targets+=("$2"); shift 2 ;;
       --device) [ $# -ge 2 ] || usage; device="$2"; shift 2 ;;
       --scheme) [ $# -ge 2 ] && [ -n "$2" ] || usage; schemes+=("$2"); shift 2 ;;
       --project) [ $# -ge 2 ] || usage; project="$2"; shift 2 ;;
+      --wait) [ $# -ge 2 ] && [[ "$2" =~ ^[0-9]+$ ]] || usage; wait="$2"; shift 2 ;;
       --keep) keep=true; shift ;;
       *) usage ;;
     esac
@@ -368,6 +406,7 @@ test_check() {
     [ ${#schemes[@]} -gt 0 ] || { printf 'porting: name the test scheme of %s with --scheme (xcodebuild -list shows them).\n' "$xc_name"; exit 1; }
     local udid name version state s out result=0
     pick_simulator "$device"
+    take_simulator "$wait"
     make_copy
     printf 'Tests on the iOS Simulator (%s, iOS %s) on a copy of %s, %s:\n' "$name" "$version" "$root" "$xc_name"
     for s in "${schemes[@]}"; do
@@ -389,6 +428,7 @@ test_check() {
   # The simulator: the first iPhone of the newest iOS runtime, or the one --device names.
   local udid name version state
   pick_simulator "$device"
+  take_simulator "$wait"
 
   # A copy without the root Xcode project or workspace, so xcodebuild opens the package, and a
   # temporary scheme in it that builds and runs only these test targets (-only-testing would still
@@ -602,8 +642,66 @@ if [ "$mode" = test-check ]; then
 fi
 
 if [ "$mode" = scan ]; then
-  scan
+  scan | awk -F'\t' '$1 != "bg"'
   exit 0
+fi
+
+# ---------- audio (#75) ----------
+# What an app that plays or records audio needs on iOS, read from the code: each item with the
+# first place it is found, or "not found". Static: found means the call is in code iOS compiles,
+# not that it is right. Exit 0: printed.
+audio() {
+  local sig plist f
+  sig="$(scan | awk -F'\t' '$1 == "bg"')"
+  if [ -z "$(printf '%s\n' "$sig" | awk -F'\t' '$4 == "uses" || $4 == "uses-mac"')" ]; then
+    printf 'Audio on iOS: no audio playback, recording or audio unit API found in this project. Nothing to check here.\n'
+    exit 0
+  fi
+  # UIBackgroundModes with audio: an Info.plist, a build setting, or an XcodeGen spec.
+  plist="$(
+    list '*.plist' | while IFS= read -r f; do
+      awk -v f="$f" '/<key>UIBackgroundModes<\/key>/ { on = 1; next } on && /<\/array>/ { on = 0 } on && /<string>audio<\/string>/ { print f ":" FNR; exit }' "$root/$f" 2>/dev/null
+    done
+    list '*.pbxproj' '*.xcconfig' | while IFS= read -r f; do
+      awk -v f="$f" '/INFOPLIST_KEY_UIBackgroundModes/ && /audio/ { print f ":" FNR; exit }' "$root/$f" 2>/dev/null
+    done
+    list 'project.yml' '*/project.yml' | while IFS= read -r f; do
+      awk -v f="$f" '/UIBackgroundModes/ { on = FNR } on && FNR - on <= 6 && /(^|[^A-Za-z])audio([^A-Za-z]|$)/ { print f ":" FNR; exit }' "$root/$f" 2>/dev/null
+    done
+  )"
+  plist="$(printf '%s\n' "$plist" | head -1)"
+  printf '%s\n' "$sig" | SH_PLIST="$plist" awk -F'\t' '
+    { n[$4]++; if (!($4 in first)) first[$4] = $3; f = $3; sub(/:[0-9]+$/, "", f); if (!seen[$4 SUBSEP f]++) files[$4]++
+      if (($4 == "uses" || $4 == "uses-mac") && shown[$4] < 3 && !listed[$4 SUBSEP f]++) { where[$4] = where[$4] (shown[$4]++ ? ", " : "") $3 } }
+    function item(label, key) { printf "- %s: %s\n", label, (key in first) ? first[key] (n[key] > 1 ? " (+" n[key] - 1 " more)" : "") : "not found" }
+    END {
+      print "Audio on iOS, read from the code (static: nothing was run):"
+      if (files["uses"]) printf "Audio code iOS compiles: %d file(s) (%s%s)\n", files["uses"], where["uses"], (files["uses"] > 3 ? ", ..." : "")
+      else print "Audio code iOS compiles: none"
+      if (files["uses-mac"]) printf "Audio code only the Mac compiles (behind #if): %d file(s) (%s%s): each needs an iOS counterpart or a decision\n", files["uses-mac"], where["uses-mac"], (files["uses-mac"] > 3 ? ", ..." : "")
+      print "What iOS needs:"
+      item("audio session category (AVAudioSession setCategory)", "category")
+      item("session activation (setActive)", "active")
+      item("interruptions: calls, Siri, other apps (interruptionNotification)", "interruptions")
+      item("route changes: headphones, Bluetooth, AirPlay (routeChangeNotification)", "routes")
+      item("media services reset (mediaServicesWereResetNotification)", "reset")
+      item("remote commands: lock screen, headphones, CarPlay (MPRemoteCommandCenter)", "remote")
+      item("Now Playing info (MPNowPlayingInfoCenter)", "nowplaying")
+      printf "- background audio (UIBackgroundModes audio in an Info.plist, a build setting or project.yml): %s\n", (ENVIRON["SH_PLIST"] != "" ? ENVIRON["SH_PLIST"] : "not found")
+      print "macOS-only audio with no iOS equivalent (an adapter or a product decision):"
+      any = 0
+      if ("mac-hog" in first) { item("exclusive device access (hog mode)", "mac-hog"); any = 1 }
+      if ("mac-rate" in first) { item("device sample rate (on iOS: the session preferred sample rate, a request)", "mac-rate"); any = 1 }
+      if ("mac-device" in first) { item("output device selection (on iOS: the system route, AVRoutePickerView)", "mac-device"); any = 1 }
+      if ("mac-buffer" in first) { item("device buffer size (on iOS: the session preferred IO buffer duration, a request)", "mac-buffer"); any = 1 }
+      if (!any) print "- none found"
+      print "Found means the call is in code iOS compiles, not that it is right or complete. Interruptions, route changes and background audio are proved only on a simulator or a device."
+    }'
+  exit 0
+}
+if [ "$mode" = audio ]; then
+  [ $# -eq 0 ] || usage
+  audio
 fi
 
 # ---------- summary ----------

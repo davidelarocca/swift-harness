@@ -35,6 +35,20 @@ Never "ready": each column says what happened, on which date.
 | What | Evidence | Options | Decision needed from |
 |---|---|---|---|
 
+## Audio on iOS
+
+Only for an app that plays or records audio; delete it otherwise. From `porting.sh audio`, as printed: static evidence, nothing was run.
+
+| What iOS needs | Evidence (`file:line` or not found) | What is missing | Proved on a device or simulator |
+|---|---|---|---|
+| Audio session category and activation | {{...}} | {{...}} | {{no}} |
+| Interruptions (calls, Siri, other apps) | {{...}} | {{...}} | {{no}} |
+| Route changes (headphones, Bluetooth, AirPlay) | {{...}} | {{...}} | {{no}} |
+| Remote commands and Now Playing | {{...}} | {{...}} | {{no}} |
+| Background audio (`UIBackgroundModes`) | {{...}} | {{...}} | {{no}} |
+
+macOS-only audio with no iOS equivalent (exclusive device access, device sample rate, output device selection): {{each with `file:line`, and the adapter or the product decision it needs}}.
+
 ## Target structure
 
 | Option | What changes | Shared | Effort | Risks for macOS |

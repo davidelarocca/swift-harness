@@ -12,6 +12,8 @@ if ! sh_has_jq; then
   exit 0
 fi
 if ! sh_init; then
+  sub_notice="$(sh_subproject_notice)"
+  if [ -n "$sub_notice" ]; then printf '%s\n' "$sub_notice"; exit 0; fi
   sh_guest_missing_notice
   exit 0
 fi
