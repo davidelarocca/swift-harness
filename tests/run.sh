@@ -1147,6 +1147,53 @@ V="$(verify_project pkg '' '' '"Packages/Core"')"
 mkdir -p "$V/Packages/Core"
 expect_verify "verify.sh: existing package with passing tests passes" 0 'verify fast: PASS' "$(run_verify "$V")"
 
+# With several test targets the one that fails can finish first: the last lines of `swift test`
+# then hold only suites that passed (#187, and the 1.11 field report). What failed is read from
+# the whole output and shown again just before the result, where the Stop hook reads: the last
+# 60 lines.
+SWF="$TMP/fakes-swift-fails"
+mkdir -p "$SWF"
+cp "$FAKES/xcodebuild" "$FAKES/swiftlint" "$SWF/"
+cat >"$SWF/swift" <<'FAKE'
+#!/bin/bash
+# fake swift test: a target that fails first, then a long one that passes
+case "${FAKE_SWIFT_OUTPUT:-both}" in
+  both)
+    echo "$PWD/Packages/Core/Tests/ATests/ATests.swift:8: error: -[ATests.OldStyleTests testDoublingTwo] : XCTAssertEqual failed: (\"4\") is not equal to (\"5\")"
+    echo "Test Case '-[ATests.OldStyleTests testDoublingTwo]' failed (0.085 seconds)."
+    echo '✘ Test doublingThreeGivesSix() recorded an issue at ATests.swift:5:38: Expectation failed: double(3) == 7'
+    ;;
+  names) echo "Test Case '-[ATests.OldStyleTests testOnlyNamed]' failed (0.085 seconds)." ;;
+  many) i=0; while [ "$i" -lt 45 ]; do echo "✘ Test broken$i() recorded an issue at ATests.swift:$i:1: Expectation failed"; i=$((i + 1)); done ;;
+esac
+i=0
+while [ "$i" -lt 150 ]; do echo "✔ Test passes$i() passed after 0.001 seconds."; i=$((i + 1)); done
+echo 'Note: Some test targets reported failures:'
+exit 1
+FAKE
+chmod +x "$SWF/swift"
+swift_fails() { # prints "exit=<code>" then the last 60 lines of verify.sh fast: what the Stop hook shows
+  local out code
+  out="$(PATH="$SWF:/usr/bin:/bin" "$V/scripts/verify.sh" fast 2>&1)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$(tail -n 60 <<<"$out")"
+}
+out="$(swift_fails)"
+expect_result "verify.sh: an XCTest failure early in swift test is in the last 60 lines, relative to the project" 1 \
+  '^Packages/Core: Packages/Core/Tests/ATests/ATests\.swift:8: error: -\[ATests\.OldStyleTests testDoublingTwo\] : XCTAssertEqual failed' "$out" "$V/Packages"
+expect_result "verify.sh: ... and so is a Swift Testing issue" 1 '^Packages/Core: ✘ Test doublingThreeGivesSix\(\) recorded an issue at ATests\.swift:5:38: Expectation failed' "$out"
+expect_result "verify.sh: ... each failure once, under a line that says where it comes from" 1 'what failed in swift test, from its whole output \(2 line\(s\)\):' "$out"
+if [ "$(tail -n 1 <<<"$out")" = 'swift-harness-result/1: failed; checked: macOS; tested: macOS; not checked: none' ]; then ok "verify.sh: ... and the result line is still the last one"
+else nok "verify.sh: ... and the result line is still the last one" "$(tail -n 3 <<<"$out")"; fi
+expect_result "verify.sh: with no error line, the lines that name a failed test are shown" 1 "^Packages/Core: Test Case '-\[ATests\.OldStyleTests testOnlyNamed\]' failed" "$(FAKE_SWIFT_OUTPUT=names swift_fails)"
+out="$(FAKE_SWIFT_OUTPUT=many swift_fails)"
+expect_result "verify.sh: many failures are cut at 30, with the number left out" 1 '^\.\.\. and 15 more: run swift test' "$out" 'broken30\(\)'
+expect_result "verify.sh: ... and the first ones are still in the last 60 lines" 1 '^Packages/Core: ✘ Test broken0\(\)' "$out"
+expect_verify "verify.sh: a passing swift test shows no list of failures" 0 'verify fast: PASS' "$(run_verify "$V")"
+if grep -q 'what failed' <<<"$(run_verify "$V")"; then nok "verify.sh: ... not even its heading"; else ok "verify.sh: ... not even its heading"; fi
+if ! grep -qF '| tail -40' "$TEMPLATE"; then ok "verify.sh: swift test is not read through tail alone"
+else nok "verify.sh: swift test is not read through tail alone"; fi
+
 V="$(verify_project build-fails '-project App.xcodeproj' App '')"
 expect_verify "verify.sh: failing build fails" 1 'verify fast: FAIL' "$(FAKE_XCODEBUILD_EXIT=65 run_verify "$V")"
 
@@ -2404,6 +2451,21 @@ expect_row "doctor: guardCommitIdentity must be true or false" "$(doctor "$P")" 
 rm "$P/.claude/swift-harness.json"
 git -C "$P" config --unset user.email
 expect_commit_allowed "$P" "git commit -m x" "commit identity: a project without swift-harness.json is left alone"
+
+# The generated verify.sh through the Stop hook: the test that failed first is in what Claude
+# reads at the end of the turn (the "Done when" of the field report, item 6).
+SV="$(new_project stop-swift-fails)"
+sed -e 's|{{XCODE_CONTAINER_FLAG}}||' -e 's|{{SCHEME}}||' -e 's|{{LOCAL_PACKAGES}}|"Packages/Core"|' -e 's|{{PLATFORMS}}|"macOS"|' -e 's|{{IOS_SIMULATOR}}||' "$TEMPLATE" >"$SV/scripts/verify.sh"
+mkdir -p "$SV/Packages/Core"
+echo '// swift-tools-version:5.9' >"$SV/Packages/Core/Package.swift"
+set_config "$SV" '{"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast"}}'
+git -C "$SV" add -A && git -C "$SV" commit -qm "the generated verify script"
+approve "$SV" >/dev/null
+hook session-start.sh "$SV" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$SV/Sources/App.swift"
+out="$(jq -nc --arg cwd "$SV" '{cwd: $cwd, session_id: "test"}' | PATH="$SWF:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$SV" "$SCRIPTS/stop-verify.sh" 2>&1)"
+expect_result "stop: a test that failed before a long passing target is in what Claude reads" 2 'error: -\[ATests\.OldStyleTests testDoublingTwo\]' "exit=$?
+$out"
 
 # ---------- security settings (#32) ----------
 

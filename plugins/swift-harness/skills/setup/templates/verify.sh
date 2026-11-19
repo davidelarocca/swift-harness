@@ -143,6 +143,20 @@ note_platform() { # $1 list name (checked or failed_on), $2 platform: adds it on
   case " $list " in *" $2 "*) ;; *) printf -v "$1" '%s' "${list:+$list }$2" ;; esac
 }
 
+# What failed in a `swift test` run, read from its whole output and shown again just before the
+# result, where the Stop hook reads: with several test targets the one that fails can finish
+# first, and the last lines then hold only the suites that passed. Build errors, XCTest
+# failures ("error: -[Suite test] : ..."), Swift Testing issues ("recorded an issue at ...") and
+# crashes; when none of those is found, the lines that name a failed test.
+swift_failures=""
+package_failures() { # $1 package, $2 the whole output of its swift test
+  local found
+  found="$(grep -E '(^|[^[:alnum:]_])error:|recorded an issue|Fatal error|[Ee]xited with (unexpected )?signal' "$2")" ||
+    found="$(grep -E '✘ Test |Test Case .* failed' "$2")" || return 0
+  swift_failures="$swift_failures$(printf '%s\n' "$found" | sed -e "s|$(pwd -P)/||g" -e "s|$(pwd)/||g" | awk -v p="$1" '!seen[$0]++ { print p ": " $0 }')
+"
+}
+
 # ${PACKAGES[@]+...} keeps an empty list working under set -u in macOS bash 3.2.
 for pkg in ${PACKAGES[@]+"${PACKAGES[@]}"}; do
   step "swift test: $pkg"
@@ -154,8 +168,16 @@ for pkg in ${PACKAGES[@]+"${PACKAGES[@]}"}; do
   ran=$((ran + 1))
   note_platform checked macOS
   note_platform tested macOS
-  swift test --package-path "$pkg" 2>&1 | tail -40
-  [ "${PIPESTATUS[0]}" -eq 0 ] || { fail=1; note_platform failed_on macOS; }
+  log="$(mktemp "${TMPDIR:-/tmp}/verify-swift-test.XXXXXX")" || { fail=1; continue; }
+  swift test --package-path "$pkg" >"$log" 2>&1
+  code=$?
+  tail -40 "$log"
+  if [ "$code" -ne 0 ]; then
+    fail=1
+    note_platform failed_on macOS
+    package_failures "$pkg" "$log"
+  fi
+  rm -f "$log"
 done
 
 if [ -n "$SCHEME" ]; then
@@ -201,6 +223,12 @@ result_line() { # $1 outcome, $2 platforms not checked
 }
 
 if [ "$fail" -ne 0 ]; then
+  if [ -n "$swift_failures" ]; then
+    count="$(printf '%s' "$swift_failures" | grep -c .)"
+    printf '\nwhat failed in swift test, from its whole output (%s line(s)):\n' "$count"
+    printf '%s' "$swift_failures" | head -30
+    [ "$count" -le 30 ] || printf '... and %s more: run swift test --package-path <package> for all of them.\n' "$((count - 30))"
+  fi
   printf '\nverify %s: FAIL%s\n' "$MODE" "${failed_on:+ (failed on: ${failed_on// /, })}"
   result_line failed
   exit 1
