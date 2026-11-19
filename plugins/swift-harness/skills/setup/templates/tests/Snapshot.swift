@@ -29,6 +29,12 @@
 // image is not compared and the test says so on its output ("not compared"); it does not fail
 // and it does not count as a match. Compare on the machine the baselines were made on.
 //
+// Two settings of the Mac change an image and are neither pinned nor recorded yet. Without
+// `locale:` the view keeps the Mac's locale, so numbers and dates follow it ("0.3" or "0,3"):
+// pass `locale:` for a view that shows them. And `Color.accentColor`, with the selection and
+// focus colors that follow it, is the accent color of System Settings: a baseline that shows
+// one depends on the Mac that made it.
+//
 // A pixel differs when a color channel changes by more than `channelTolerance`; `tolerance:`
 // is the fraction of pixels allowed to differ (default 0).
 

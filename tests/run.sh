@@ -2164,6 +2164,12 @@ for f in "$TEMPLATES"/tests/*.swift; do
 done
 if [ -z "$bad" ]; then ok "templates: every test helper turns SwiftFormat and swift-format off for itself"
 else nok "templates: every test helper turns SwiftFormat and swift-format off for itself" "$bad"; fi
+# What a baseline depends on and the helper does not pin yet is said where baselines are made.
+if grep -qF 'neither pinned nor recorded yet' "$TEMPLATES/tests/Snapshot.swift" && grep -qF 'Color.accentColor' "$TEMPLATES/tests/Snapshot.swift" &&
+  grep -qF 'pass `locale:`' "$TEMPLATES/tests/Snapshot.swift"; then
+  ok "snapshots: the helper says that the locale and the accent color are not pinned"
+else nok "snapshots: the helper says that the locale and the accent color are not pinned"; fi
+
 # Where the component tests go when screens and design system are separate packages: one answer,
 # the same in the two skills that speak of it, and what the contract check sees of a test target.
 if grep -qF '**Where the helpers go.**' "$SKILLS/setup/SKILL.md" && grep -qF 'Tests/DesignSystemTests/' "$SKILLS/setup/SKILL.md" &&
