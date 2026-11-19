@@ -19,7 +19,7 @@ Packages/DesignSystem/
 │   ├── Modifiers/       shared ViewModifiers (hover, card, selection)
 │   ├── Resources/       Colors.xcassets
 │   └── Gallery/         GalleryView listing every component in every state
-└── Tests/DesignSystemTests/   snapshot gallery (Snapshot.swift from the setup templates)
+└── Tests/DesignSystemTests/   snapshot gallery and keyboard tests, with their own copies of the setup helpers
 ```
 
 `Package.swift`: platforms `.macOS(.v14)` or higher, plus `.iOS(.v17)` or higher when the app runs on iOS (match the app's targets), resources `.process("Resources")`. Snapshot tests need no package dependency. Add the package to the app once in Xcode (File > Add Package Dependencies > Add Local). After that, new files inside the package never need project edits.
@@ -66,7 +66,7 @@ A `GalleryView` in the package lists every component in every state, in light an
 
 ## Snapshot tests
 
-See `references/SnapshotTest.swift`. It uses `Snapshot.verify` from the setup templates (`tests/Snapshot.swift`, with `LayoutContract.swift` and `Screenshot.swift` in the same test target). Snapshot, screenshot and layout tests are macOS only: they draw in an `NSWindow`. A component that also builds for macOS is compared there; one that builds only for iOS has no snapshot yet. Notes for macOS:
+See `references/SnapshotTest.swift`. It uses `Snapshot.verify` from the setup templates (`tests/Snapshot.swift`, with `LayoutContract.swift` and `Screenshot.swift` in the same test target). The component tests live here, in the design system's own test target, also when the screens are another package with their own copies of the helpers for layout tests and screenshots: the helpers are made to be copied, and a copy needs no dependency. Do not make one package's tests depend on the other package to share a copy; a new dependency needs the user's agreement first, and the contract check sees a test target only when the contract lists it. Snapshot, screenshot and layout tests are macOS only: they draw in an `NSWindow`. A component that also builds for macOS is compared there; one that builds only for iOS has no snapshot yet. Notes for macOS:
 
 - It renders in a real offscreen window. `NSHostingView` with `cacheDisplay` (what image snapshot libraries use for `NSView`) drops SwiftUI text and draws placeholders for `List`.
 - Baselines are approved images in `snapshots/`, pinned to the macOS version and display scale they were made on. A test never writes one: a missing or different image fails and waits for `/swift-harness:approve-snapshots`. On another macOS version the images are reported as not compared.

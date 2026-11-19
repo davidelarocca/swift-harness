@@ -2164,6 +2164,20 @@ for f in "$TEMPLATES"/tests/*.swift; do
 done
 if [ -z "$bad" ]; then ok "templates: every test helper turns SwiftFormat and swift-format off for itself"
 else nok "templates: every test helper turns SwiftFormat and swift-format off for itself" "$bad"; fi
+# Where the component tests go when screens and design system are separate packages: one answer,
+# the same in the two skills that speak of it, and what the contract check sees of a test target.
+if grep -qF '**Where the helpers go.**' "$SKILLS/setup/SKILL.md" && grep -qF 'Tests/DesignSystemTests/' "$SKILLS/setup/SKILL.md" &&
+  grep -qF "the design system package's tests for shared components" "$SKILLS/setup/SKILL.md" &&
+  grep -qF 'with their own copies of the setup helpers' "$SKILLS/design-system/SKILL.md" &&
+  ! grep -qF '| `tests/Snapshot.swift` | the same test target as `LayoutContract.swift` (see step 7) |' "$SKILLS/setup/SKILL.md"; then
+  ok "skills: setup and design-system put the component tests in the same place"
+else nok "skills: setup and design-system put the component tests in the same place"; fi
+if [ "$(grep -lF 'a new dependency needs the user' "$SKILLS/design-system/SKILL.md" | wc -l | tr -d ' ')" = 1 ] &&
+  grep -qF 'test targets are checked only when the contract lists them' "$SKILLS/setup/SKILL.md" &&
+  grep -qF 'Test targets are checked only when the contract lists them' "$TEMPLATES/rules/architecture.md"; then
+  ok "skills: the limit of the contract check on test targets is said where a dependency is decided"
+else nok "skills: the limit of the contract check on test targets is said where a dependency is decided"; fi
+
 # Formatting does not rename tests: the generated config turns the rule off, the setup says so,
 # and the doctor names a swiftformat too old to know the rule. The real formatter runs in
 # tests/format-helpers.sh.
