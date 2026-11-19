@@ -2213,6 +2213,74 @@ out="$(doctor "$S")"
 expect_row "doctor: a baselines folder outside the project fails the config" "$out" FAIL Config 'snapshots.path must be a folder inside the project'
 expect_row "doctor: an unknown snapshots key warns" "$out" WARN 'Config keys' 'snapshots.pth'
 
+# The metadata beside a baseline never names the test file by its absolute path: the folder is
+# committed, and that path holds the account name and the folders of the Mac that ran the test.
+if ! grep -qF '"test": "\(file)"' "$TEMPLATES/tests/Snapshot.swift" "$TEMPLATES/tests/Screenshot.swift" &&
+  grep -qF '"test": test,' "$TEMPLATES/tests/Snapshot.swift" && grep -qF '"test": test,' "$TEMPLATES/tests/Screenshot.swift" &&
+  grep -qF 'static func testPath' "$TEMPLATES/tests/Screenshot.swift"; then
+  ok "snapshots: the helpers write the test file relative to the project"
+else nok "snapshots: the helpers write the test file relative to the project"; fi
+if ! grep -lE '"test": "/' "$HERE"/fixtures/visual/snapshots/*.json >/dev/null; then ok "snapshots: the fixture's own baselines hold no absolute path"
+else nok "snapshots: the fixture's own baselines hold no absolute path"; fi
+
+S="$(new_project snapshot-paths)"
+mkdir -p "$S/Tests/AppTests"
+echo '// tests' >"$S/Tests/AppTests/SnapTests.swift"
+git -C "$S" add -A && git -C "$S" commit -qm tests
+ELSEWHERE="/elsewhere/app" # the project root on the Mac that made a baseline
+meta() { # $1 project, $2 image name, $3 test path: the metadata an older helper left
+  printf '{"os": "%s", "scale": 2, "test": "%s"}\n' "$THIS_OS" "$3" >"$1/.build/swift-harness/snapshots/$2.json"
+}
+candidate "$S" Here-macos-80-light missing a
+meta "$S" Here-macos-80-light "$S/Tests/AppTests/SnapTests.swift"
+candidate "$S" Elsewhere-macos-80-light missing b
+meta "$S" Elsewhere-macos-80-light "$ELSEWHERE/Tests/AppTests/SnapTests.swift"
+candidate "$S" Gone-macos-80-light missing c
+meta "$S" Gone-macos-80-light "$ELSEWHERE/Tests/OldTests/GoneTests.swift"
+candidate "$S" Relative-macos-80-light missing d
+meta "$S" Relative-macos-80-light "Tests/AppTests/SnapTests.swift"
+candidate "$S" NoTest-macos-80-light missing e
+out="$(snap --approve "$(snap_digest "$S")" --project "$S")"
+tests_of() { for n in "$@"; do jq -r '.test // "none"' "$S/snapshots/$n-macos-80-light.json"; done | paste -sd' ' -; }
+if [ "$(tests_of Here Elsewhere Gone Relative NoTest)" = "Tests/AppTests/SnapTests.swift Tests/AppTests/SnapTests.swift GoneTests.swift Tests/AppTests/SnapTests.swift none" ]; then
+  ok "snapshots: an approval makes the test path relative (under the project, from another Mac, a file that is gone)"
+else nok "snapshots: an approval makes the test path relative (under the project, from another Mac, a file that is gone)" "$(tests_of Here Elsewhere Gone Relative NoTest)
+$out"; fi
+if ! grep -rqE "$S|\"/" "$S/snapshots" && jq -e '.approved and .os and .approvedFrom == "missing"' "$S/snapshots/Here-macos-80-light.json" >/dev/null; then
+  ok "snapshots: a fresh approval leaves no absolute path in the baselines folder"
+else nok "snapshots: a fresh approval leaves no absolute path in the baselines folder" "$(grep -rE "$S|\"/" "$S/snapshots")"; fi
+expect_row "doctor: baselines with relative test paths pass" "$(doctor "$S")" PASS 'Snapshot metadata' 'no absolute path in snapshots/'
+
+# Baselines approved with an older helper: reported, and made relative only by the approval script.
+for n in Here Elsewhere; do
+  jq --arg t "$ELSEWHERE/Tests/AppTests/SnapTests.swift" '.test = $t' "$S/snapshots/$n-macos-80-light.json" >"$TMP/sj" && mv "$TMP/sj" "$S/snapshots/$n-macos-80-light.json"
+done
+git -C "$S" add -A && git -C "$S" commit -qm "baselines from an older helper"
+hook session-start.sh "$S" '{"source":"startup"}' >/dev/null
+png_before="$(shasum "$S"/snapshots/*.png)"
+expect_row "doctor: a baseline made by an older helper is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '2 file\(s\) in snapshots/ name the test file by its absolute path.*first: snapshots/Elsewhere-macos-80-light\.json.*approve-snapshots'
+expect_result "snapshots: status counts the metadata with an absolute path" 0 '^2 metadata file\(s\) in snapshots/ hold the absolute path.*--relative-paths' "$(snap --status --project "$S")"
+expect_result "snapshots: --relative-paths takes no image name" 2 'usage:' "$(snap --relative-paths --project "$S" Here-macos-80-light)"
+out="$(snap --relative-paths --project "$S")"
+expect_result "snapshots: --relative-paths rewrites the test field of each file" 0 'Made relative: snapshots/Elsewhere-macos-80-light\.json \(test: Tests/AppTests/SnapTests\.swift\)' "$out"
+expect_result "snapshots: --relative-paths says what to commit" 0 'only the "test" field of 2 metadata file\(s\) changed' "$out"
+if [ "$png_before" = "$(shasum "$S"/snapshots/*.png)" ] && ! grep -rqE '"/' "$S/snapshots" &&
+  [ "$(git -C "$S" diff --numstat | awk '{ a += $1; d += $2 } END { print NR, a, d }')" = "2 2 2" ]; then
+  ok "snapshots: --relative-paths changes one line in each file and no image"
+else nok "snapshots: --relative-paths changes one line in each file and no image" "$(git -C "$S" diff --stat)"; fi
+expect_result "snapshot-watch: paths made relative by the script are not reported" 0 '^exit=0$' "$(swatch "$S")"
+expect_result "snapshots: --relative-paths with nothing to do says so" 0 'Nothing changed' "$(snap --relative-paths --project "$S")"
+expect_row "doctor: after --relative-paths the metadata passes" "$(doctor "$S")" PASS 'Snapshot metadata'
+expect_result "snapshots: status says nothing about metadata when it is clean" 0 'No new images wait' "$(snap --status --project "$S")" 'absolute path'
+# Screenshots are not committed by default; a folder set in the config can be.
+mkdir -p "$S/review/shots"
+printf '{"os": "27.0", "test": "%s/Tests/AppTests/ShotTests.swift"}\n' "$ELSEWHERE" >"$S/review/shots/Main-macos-600x400-light.json"
+set_config "$S" '{"screenshots":{"path":"review/shots"}}'
+expect_row "doctor: screenshot metadata with an absolute path is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '1 file\(s\) in review/shots/.*run the tests that capture again'
+set_config "$S" '{}'
+if grep -qF -- '--relative-paths' "$SKILLS/approve-snapshots/SKILL.md"; then ok "snapshots: the approval skill makes old metadata relative"
+else nok "snapshots: the approval skill makes old metadata relative"; fi
+
 # ---------- security settings (#32) ----------
 
 sec() { CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/security.sh" "$@"; }

@@ -5,22 +5,29 @@
 #   snapshots.sh --status [--project DIR]                    list the images waiting, and a digest
 #   snapshots.sh --approve DIGEST [--project DIR] [NAME...]  copy them into the baselines folder,
 #                                                            only if DIGEST is still current
+#   snapshots.sh --relative-paths [--project DIR]            in the metadata of the baselines,
+#                                                            make an absolute test path relative
 #
 # The project's tests (templates/tests/Snapshot.swift) never write a baseline: a missing or
 # different image leaves <name>.png, .json, .diff.png and .result.json in
 # .build/swift-harness/snapshots/. Approving copies the image and its metadata into
 # `snapshots.path` (default snapshots/) and records it, so the end-of-turn notice
 # (snapshot-watch.sh) does not report it as changed without approval.
+#
+# The metadata names the test file relative to the project. A Snapshot.swift older than 1.12.0
+# wrote its absolute path, with the account name and the folders of the Mac that ran the test:
+# an approval makes it relative, and --relative-paths does the same for the baselines already
+# approved. Only that field changes; no check reads it.
 
 usage() {
-  echo "usage: snapshots.sh --status [--project DIR] | --approve DIGEST [--project DIR] [NAME...]" >&2
+  echo "usage: snapshots.sh --status [--project DIR] | --approve DIGEST [--project DIR] [NAME...] | --relative-paths [--project DIR]" >&2
   exit 2
 }
 
 action="${1:-}"
 digest=""
 case "$action" in
-  --status) shift ;;
+  --status | --relative-paths) shift ;;
   --approve)
     digest="${2:-}"
     [ -n "$digest" ] || usage
@@ -34,7 +41,7 @@ if [ "${1:-}" = "--project" ]; then
   dir="$2"
   shift 2
 fi
-[ "$action" = "--status" ] && [ $# -gt 0 ] && usage
+[ "$action" != "--approve" ] && [ $# -gt 0 ] && usage
 
 if [ -z "${CLAUDE_PLUGIN_DATA:-}" ]; then
   echo "swift-harness: CLAUDE_PLUGIN_DATA is not set. Run this through /swift-harness:approve-snapshots." >&2
@@ -63,6 +70,58 @@ candidates="$SH_ROOT/$SH_SNAPSHOT_CANDIDATES"
 
 sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
 
+# A test file for the metadata: $1 as it is when relative. An absolute path under the project
+# loses the root; one from another folder or another Mac keeps its longest tail that is a file
+# here, else its name alone.
+relative_test() {
+  local p="$1" real tail
+  case "$p" in /*) ;; *) printf '%s' "$p"; return 0 ;; esac
+  real="$(cd "$SH_ROOT" 2>/dev/null && pwd -P)"
+  case "$p" in
+    "$SH_ROOT"/*) printf '%s' "${p#"$SH_ROOT"/}"; return 0 ;;
+    "${real:-$SH_ROOT}"/*) printf '%s' "${p#"$real"/}"; return 0 ;;
+  esac
+  tail="${p#/}"
+  while [[ "$tail" == */* ]]; do
+    tail="${tail#*/}"
+    [ -f "$SH_ROOT/$tail" ] && { printf '%s' "$tail"; return 0; }
+  done
+  printf '%s' "${p##*/}"
+}
+# The metadata in file $1 with a relative test path, on stdout. $2 and $3: the time and the
+# status of an approval, to add.
+relative_meta() {
+  local test
+  test="$(relative_test "$(jq -r 'if (.test | type) == "string" then .test else "" end' "$1" 2>/dev/null)")"
+  jq --arg test "$test" --arg now "${2:-}" --arg status "${3:-}" '
+    (if $now != "" then . + {approved: $now, approvedFrom: $status} else . end)
+    | if (.test | type) == "string" then .test = $test else . end' "$1"
+}
+
+if [ "$action" = "--relative-paths" ]; then
+  absolute="$(sh_snapshot_absolute "$baselines")"
+  if [ -z "$absolute" ]; then
+    echo "No baseline metadata in $baselines/ holds an absolute path. Nothing changed."
+    exit 0
+  fi
+  count=0
+  while IFS= read -r rel; do
+    json="$SH_ROOT/$rel"
+    if ! relative_meta "$json" >"$json.tmp" || ! mv "$json.tmp" "$json"; then
+      rm -f "$json.tmp"
+      echo "swift-harness: cannot write $json. Stopped after the files listed above." >&2
+      exit 1
+    fi
+    # Recorded as approved for every open session: the end-of-turn notice stays quiet.
+    printf '%s %s\n' "$(sha "$json")" "$rel" | sh_sessions_append "$state" snapshots-approved snapshots-start
+    printf 'Made relative: %s (test: %s)\n' "$rel" "$(jq -r .test "$json")"
+    count=$((count + 1))
+  done <<<"$absolute"
+  sh_catch "snapshot baselines" approved "$count metadata file(s): absolute test path made relative"
+  echo "Commit $baselines/: only the \"test\" field of $count metadata file(s) changed, the images are the same. A commit already made keeps the old path in the history."
+  exit 0
+fi
+
 # Images waiting: one line "<name>\t<status>\t<reason>" for each result that is not a match
 # and still has its new image.
 pending() {
@@ -88,6 +147,8 @@ list="$(pending)"
 
 if [ "$action" = "--status" ]; then
   printf 'Project: %s\nBaselines: %s/\n' "$SH_ROOT" "$baselines"
+  absolute="$(sh_snapshot_absolute "$baselines" | grep -c .)"
+  [ "$absolute" -eq 0 ] || printf '%s metadata file(s) in %s/ hold the absolute path of the test file on the Mac that made them (an older Snapshot.swift wrote it). Make them relative: snapshots.sh --relative-paths\n' "$absolute" "$baselines"
   if [ -z "$list" ]; then
     echo "No new images wait for approval. Run the snapshot tests first: a missing or different image leaves one in $SH_SNAPSHOT_CANDIDATES/."
     exit 0
@@ -135,7 +196,7 @@ for name in "${names[@]}"; do
   png="$SH_ROOT/$baselines/$name.png"
   json="$SH_ROOT/$baselines/$name.json"
   if ! cp "$candidates/$name.png" "$png" ||
-    ! jq --arg now "$now" --arg status "$status" '. + {approved: $now, approvedFrom: $status}' "$candidates/$name.json" >"$json.tmp" ||
+    ! relative_meta "$candidates/$name.json" "$now" "$status" >"$json.tmp" ||
     ! mv "$json.tmp" "$json"; then
     rm -f "$json.tmp"
     echo "swift-harness: cannot write $png. Stopped after the images listed above." >&2

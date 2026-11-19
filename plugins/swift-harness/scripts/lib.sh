@@ -514,6 +514,16 @@ sh_snapshot_list() {
     sed 's/  / /' | LC_ALL=C sort
 }
 
+# Metadata files under a baselines folder ($1, relative to the project) whose "test" is an
+# absolute path, as project-relative paths. A Snapshot.swift older than 1.12.0 wrote the test
+# file as the Mac that made the image saw it, account name included, and the folder is committed.
+sh_snapshot_absolute() {
+  [ -d "$SH_ROOT/$1" ] || return 0
+  (cd "$SH_ROOT" && find "$1" -type f -name '*.json' -exec \
+    jq -r 'select(type == "object" and (.test | type) == "string" and (.test | startswith("/"))) | input_filename' {} + 2>/dev/null) |
+    LC_ALL=C sort
+}
+
 # "<sha256> <path>" for every file under the protected paths, sorted, for protected-watch.sh
 # (#11). Placeholders and paths that do not exist are skipped.
 sh_protected_list() {

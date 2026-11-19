@@ -21,7 +21,8 @@
 // (with a diff image, changed pixels in red) is saved under .build/swift-harness/snapshots/.
 // The user looks at it and approves it with /swift-harness:approve-snapshots, which copies it
 // into the baselines folder: `snapshots.path` in .claude/swift-harness.json, default
-// `snapshots/` at the project root. Commit that folder.
+// `snapshots/` at the project root. Commit that folder: the metadata beside each image names
+// the test file relative to the project root, never by its absolute path.
 //
 // Baselines are pinned to the macOS version (major.minor) and display scale they were made on:
 // text and controls draw differently on other versions. On a Mac or runner that differs, the
@@ -82,6 +83,7 @@ enum Snapshot {
 
         _ = NSApplication.shared
         let content = Screenshot.localized(make(), locale)
+        let test = Screenshot.testPath(file)
         var problems: [String] = []
         for size in plan.sizes {
             for dark in [false, true] {
@@ -107,7 +109,7 @@ enum Snapshot {
                     "os": osVersion,
                     "osBuild": ProcessInfo.processInfo.operatingSystemVersionString,
                     "source": plan.source,
-                    "test": "\(file)",
+                    "test": test,
                     "captured": ISO8601DateFormatter().string(from: Date()),
                 ]
                 let outcome = check(image, info: info, base: base, baselines: baselineFolder, candidates: candidateFolder, tolerance: tolerance)

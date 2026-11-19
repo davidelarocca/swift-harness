@@ -11,7 +11,7 @@
   "size": "360x420",
   "source": "Sources/Screens/ArtistsView.swift",
   "state": "",
-  "test": "/private/tmp/sh-fx/Tests/ScreensTests/SnapshotTests.swift",
+  "test": "Tests/ScreensTests/SnapshotTests.swift",
   "approved": "2026-11-06T18:20:09Z",
   "approvedFrom": "missing"
 }

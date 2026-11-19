@@ -195,6 +195,7 @@ Un componente condiviso cambiato per una schermata può spostare tutte le altre 
 - Un test non scrive mai una baseline. Un'immagine mancante o diversa fallisce e indica la zona cambiata ("85 of 151200 pixels differ, within x 96-110, y 118-126 pt"); la nuova immagine e una copia con i pixel cambiati in rosso restano in `.build/swift-harness/snapshots/`. Le guardi e le approvi con `/swift-harness:approve-snapshots`, che le copia in `snapshots/` da committare.
 - Claude non può sostituire una baseline in silenzio: il guard chiede conferma prima di un Edit o Write in `snapshots/`, e a fine turno vieni avvisato delle baseline cambiate senza approvazione, anche tramite comandi shell. In sessioni reali Claude ha lasciato l'approvazione all'utente anche quando gli è stato chiesto di aggiornare le baseline ([risultati](tests/smoke/RESULTS.md)).
 - Le baseline sono legate alla versione di macOS e alla scala del display su cui sono state fatte. Su un'altra versione un'immagine risulta non confrontata, mai uguale.
+- Il `.json` accanto a ogni baseline viene committato con lei, quindi indica il file di test con un percorso relativo al progetto, mai con quello assoluto sul tuo Mac. Le baseline approvate prima della 1.12.0 contengono quel percorso: il doctor le segnala, e `/swift-harness:approve-snapshots` lo rende relativo senza toccare le immagini.
 
 </details>
 

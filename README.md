@@ -211,6 +211,7 @@ A shared component changed for one screen can shift every other screen that uses
 - A test never writes a baseline. A missing or different image fails and names the region that changed ("85 of 151200 pixels differ, within x 96-110, y 118-126 pt"); the new image and a diff with the changed pixels in red wait in `.build/swift-harness/snapshots/`. You look at them and approve with `/swift-harness:approve-snapshots`, which copies them into `snapshots/` to commit.
 - Claude cannot replace a baseline quietly: the guard asks before an Edit or Write in `snapshots/`, and at the end of a turn you are told about baselines changed without approval, shell commands included. In real sessions, Claude handed the approval back to the user even when asked to update the baselines ([results](tests/smoke/RESULTS.md)).
 - Baselines are pinned to the macOS version and display scale they were made on. On another version an image is reported as not compared, never as a match.
+- The `.json` beside each baseline is committed with it, so it names the test file relative to the project, never by its absolute path on your Mac. Baselines approved before 1.12.0 hold that path: the doctor reports them, and `/swift-harness:approve-snapshots` makes them relative without touching the images.
 
 </details>
 

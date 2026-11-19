@@ -538,6 +538,24 @@ else
   fi
 fi
 
+# Metadata that names the test file by its absolute path: written by a Snapshot.swift or
+# Screenshot.swift older than 1.12.0, it holds the account name and the folders of the Mac that
+# ran the test. The baselines folder is committed; the screenshots folder is when it is set to
+# one that git tracks.
+absolute_meta="$(sh_snapshot_absolute "$snapshots")"
+shots="$(sh_cfg '.screenshots.path' '')"
+shots="${shots#./}"
+shots="${shots%/}"
+absolute_shots=""
+case "/$shots/" in // | //* | */../*) ;; *) absolute_shots="$(sh_snapshot_absolute "$shots")" ;; esac
+if [ -n "$absolute_meta" ]; then
+  row WARN "Snapshot metadata" "$(printf '%s\n' "$absolute_meta" | grep -c .) file(s) in $snapshots/ name the test file by its absolute path on the Mac that made them, account name included (first: $(printf '%s\n' "$absolute_meta" | head -1)): committing them publishes it. Fix: update tests/Snapshot.swift and tests/Screenshot.swift from the setup templates, then type /swift-harness:approve-snapshots, which makes the paths relative without touching the images"
+elif [ -n "$absolute_shots" ]; then
+  row WARN "Snapshot metadata" "$(printf '%s\n' "$absolute_shots" | grep -c .) file(s) in $shots/ name the test file by its absolute path on the Mac that made them, account name included (first: $(printf '%s\n' "$absolute_shots" | head -1)). Fix: update tests/Screenshot.swift from the setup templates and run the tests that capture again"
+elif [ -d "$SH_ROOT/$snapshots" ] && [ -n "$(find "$SH_ROOT/$snapshots" -type f -name '*.json' | head -1)" ]; then
+  row PASS "Snapshot metadata" "no absolute path in $snapshots/: the test file is named relative to the project"
+fi
+
 # ---------- other build systems (#177) ----------
 # Code the app builds from another language or tool is not a build input by default: a turn that
 # changes only it ends with nothing checked. Read from the files git lists and from the root of
