@@ -4942,6 +4942,11 @@ case " ${FAKE_SWIFT_FAIL:-} " in
     printf '%s/Sources/DSP/Denormals.swift:4:3: error: cannot find '"'"'fegetenv'"'"' in scope\n' "$PWD"
     echo "error: Build failed"; exit 1 ;;
 esac
+case " ${FAKE_SWIFT_LINK:-} " in
+  *" $target "*)
+    printf '%s/Sources/Net/n.swift:2:5: error: not concurrency-safe [\033]8;;https://docs.swift.org/x\033\\#MutableGlobalVariable\033]8;;\033\\]\n' "$PWD"
+    echo "error: Build failed"; exit 1 ;;
+esac
 case " ${FAKE_SWIFT_C:-} " in
   *" $target "*) # the new build system writes a C error as "error: path:line:col message"
     printf 'error: %s/Sources/IO/io.c:3:10 '"'"'IOKit/a.h'"'"' file not found\n' "$PWD"
@@ -5180,6 +5185,63 @@ $out"
 set_config "$RT" '{"format":"none","lint":"none","verify":{"enabled":false},"porting":{"ratchet":"plans/ios.tsv"}}'
 expect_result "ratchet: porting.ratchet moves the file" 0 'plans/ios\.tsv' "$(ratchet --record --module Sources/Core)"
 expect_result "ratchet: ... and the check reads it there" 0 '^exit=0$' "$(ratchet)"
+
+# ---------- porting: APIs common in Mac apps (#173) ----------
+
+out="$(FAKE_SWIFT_LINK="Net" bc "$BC" --target Net)"
+expect_result "build-check: a terminal hyperlink in an error keeps its text, not its escape codes" 0 'n\.swift:2:5: not concurrency-safe \[#MutableGlobalVariable\]' "$out" $'\x1b|8;;'
+
+CA="$TMP/common-apis"
+mkdir -p "$CA/Sources/Tools" "$CA/Sources/Guarded" "$CA/Sources/UI"
+printf '// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "X", targets: [])\n' >"$CA/Package.swift"
+cat >"$CA/Sources/Tools/Tools.swift" <<'SWIFT'
+import Foundation
+import CoreGraphics
+func run() throws { let p = Process(); try p.run() }
+let script = NSAppleScript(source: "")
+let home = FileManager.default.homeDirectoryForCurrentUser
+let center = DistributedNotificationCenter.default()
+let note = NSUserNotification()
+let xpc = NSXPCConnection(machServiceName: "a", options: [])
+let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID)
+let trusted = AXIsProcessTrusted()
+let host = Host.current().name
+// Process() and NSAppleScript in a comment
+let text = "Host.current() in a string"
+let info = ProcessInfo.processInfo
+SWIFT
+cat >"$CA/Sources/Guarded/Guarded.swift" <<'SWIFT'
+#if os(macOS)
+import Foundation
+let p = Process()
+let host = Host.current()
+#endif
+SWIFT
+cat >"$CA/Sources/UI/App.swift" <<'SWIFT'
+import SwiftUI
+struct Docs: App { var body: some Scene { DocumentGroup(newDocument: Doc()) { _ in Text("") } } }
+struct Open: View {
+  @Environment(\.openWindow) private var openWindow
+  var body: some View { Table(rows) { TableColumn("Name", value: \.name) } }
+}
+SWIFT
+git -C "$CA" init -q
+cascan="$("$SCRIPTS/porting.sh" scan "$CA" 2>&1)"
+for row in '3	Process' '4	AppleScript' '5	home folder of the user' '6	distributed notifications' '7	NSUserNotification' '8	XPC to a Mach service' '9	Core Graphics window' '10	accessibility automation' '11	Host'; do
+  n="${row%%	*}"; what="${row#*	}"
+  expect_result "porting: $what blocks iOS, with its line (checked by a real iOS build)" 0 "blocks	Sources/Tools	Sources/Tools/Tools\.swift:$n	$what" "exit=0
+$cascan"
+done
+expect_result "porting: ... not in comments, strings or ProcessInfo" 0 'Tools' "exit=0
+$cascan" 'Tools\.swift:(12|13|14)	'
+expect_result "porting: Process and Host inside #if os(macOS) are guarded" 0 'guarded	Sources/Guarded	Sources/Guarded/Guarded\.swift:3	Process' "exit=0
+$cascan" 'blocks	Sources/Guarded'
+expect_result "porting: DocumentGroup is an adaptation" 0 'adapt	Sources/UI	Sources/UI/App\.swift:2	document app' "exit=0
+$cascan"
+expect_result "porting: openWindow is an adaptation" 0 'adapt	Sources/UI	Sources/UI/App\.swift:4	several windows' "exit=0
+$cascan"
+expect_result "porting: Table is an adaptation" 0 'adapt	Sources/UI	Sources/UI/App\.swift:5	Table \(one column' "exit=0
+$cascan"
 
 # ---------- summary ----------
 

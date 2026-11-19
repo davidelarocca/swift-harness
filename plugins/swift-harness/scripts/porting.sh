@@ -162,6 +162,16 @@ scan() { # $1, optional: folders, one per line; only the files under them are re
       if (line ~ /(^|[^A-Za-z0-9_])(fenv_t|fegetenv|fesetenv|feholdexcept|feupdateenv)([^A-Za-z0-9_]|$)/) hit("blocks", "floating-point environment, fenv (not visible to Swift on iOS)")
       if (line ~ /\.(withSecurityScope|securityScopeAllowOnlyReadAccess)([^A-Za-z0-9_]|$)/) hit("blocks", "security-scoped bookmark option (macOS only)")
       if (line ~ /\.loadInProcess([^A-Za-z0-9_]|$)/) hit("blocks", ".loadInProcess (audio unit option, macOS only)")
+      # APIs many Mac apps use that iOS does not have (#173).
+      if (line ~ /(^|[^A-Za-z0-9_.])(Process[ \t]*\([ \t]*\)|Process\.(run|launchedProcess)[ \t]*\(|NSTask)([^A-Za-z0-9_]|$)/ || line ~ /:[ \t]*Process[ \t]*[=,){]/) hit("blocks", "Process (no child processes on iOS)")
+      if (line ~ /(^|[^A-Za-z0-9_])(NSAppleScript|NSUserAppleScriptTask|NSUserUnixTask|NSUserAutomatorTask)([^A-Za-z0-9_]|$)/) hit("blocks", "AppleScript and user scripts (macOS only)")
+      if (line ~ /(^|[^A-Za-z0-9_])(homeDirectoryForCurrentUser|NSHomeDirectoryForUser)([^A-Za-z0-9_]|$)/ || line ~ /homeDirectory[ \t]*\([ \t]*forUser:/) hit("blocks", "home folder of the user (macOS only; the app container on iOS)")
+      if (line ~ /(^|[^A-Za-z0-9_])(DistributedNotificationCenter|NSDistributedNotificationCenter)([^A-Za-z0-9_]|$)/) hit("blocks", "distributed notifications (macOS only)")
+      if (line ~ /(^|[^A-Za-z0-9_])(NSUserNotification|NSUserNotificationCenter)([^A-Za-z0-9_]|$)/) hit("blocks", "NSUserNotification (macOS only; UserNotifications on both)")
+      if (line ~ /NSXPCConnection[ \t]*\([ \t]*machServiceName:/) hit("blocks", "XPC to a Mach service (macOS only)")
+      if (line ~ /(^|[^A-Za-z0-9_])(CGWindowList[A-Za-z]*|CGEvent[A-Za-z]*|CGDisplay[A-Za-z]*|CGMainDisplayID)([^A-Za-z0-9_]|$)/) hit("blocks", "Core Graphics window, event or display API (macOS only)")
+      if (line ~ /(^|[^A-Za-z0-9_])(AXUIElement[A-Za-z]*|AXIsProcessTrusted[A-Za-z]*|AXObserver[A-Za-z]*)([^A-Za-z0-9_]|$)/) hit("blocks", "accessibility automation, AXUIElement (macOS only)")
+      if (line ~ /(^|[^A-Za-z0-9_])Host\.current[ \t]*\(/) hit("blocks", "Host (macOS only)")
       # On macOS AudioToolbox brings CoreAudio with it; on iOS it does not, and the buffer list
       # pointer lives there. An import inside a branch iOS does not compile does not count.
       if (active() && line ~ /^[ \t]*(@[A-Za-z_]+[ \t]+)*import[ \t]+(CoreAudio|AVFAudio|AVFoundation)([ \t.;]|$)/) coreaudio = 1
@@ -175,6 +185,9 @@ scan() { # $1, optional: folders, one per line; only the files under them are re
       if (line ~ /\.(onDrop|dropDestination|draggable|onDrag)[ \t]*\(/) hit("adapt", "drag and drop")
       if (line ~ /\.popover[ \t]*\(/) hit("adapt", "popover (a sheet on iPhone)")
       if (line ~ /\.fileImporter[ \t]*\(|\.fileExporter[ \t]*\(/) hit("adapt", "file access (document picker on iOS)")
+      if (line ~ /(^|[^A-Za-z0-9_])DocumentGroup[ \t]*\(/) hit("adapt", "document app (a document browser on iOS)")
+      if (line ~ /(^|[^A-Za-z0-9_])openWindow([^A-Za-z0-9_]|$)/) hit("adapt", "several windows (one on iPhone, scenes on iPad)")
+      if (line ~ /(^|[^A-Za-z0-9_.])Table[ \t]*[({<]/) hit("adapt", "Table (one column in compact width)")
     }'
   )
 }
@@ -216,7 +229,8 @@ first_errors() { # $1 compiler output -> "module<TAB>file:line:col: message" for
   # error lines "path:line:col: error: message", the path read as the module that holds the file.
   # Also "path:line:col: fatal error: message" (a missing C header) and the new build system's
   # "error: path:line:col message".
-  printf '%s\n' "$1" | sed $'s/\x1b\\[[0-9;]*m//g' | awk -v copy="$copy/" '
+  # Colors and terminal hyperlinks (OSC 8, ending in ESC \ or BEL) are removed; a link keeps its text.
+  printf '%s\n' "$1" | sed -E $'s/\x1b\\[[0-9;]*m//g; s/\x1b[]]8;[^;\x1b\x07]*;[^\x1b\x07]*(\x1b[\\]|\x07)//g' | awk -v copy="$copy/" '
     /^\/.*:[0-9]+:[0-9]+: fatal error: / { sub(/: fatal error: /, ": error: ") }
     /^error: \/.*:[0-9]+:[0-9]+ / { l = substr($0, 8); if (match(l, /:[0-9]+:[0-9]+ /)) $0 = substr(l, 1, RSTART + RLENGTH - 2) ": error: " substr(l, RSTART + RLENGTH) }
     /^\/.*:[0-9]+:[0-9]+: error: / {
