@@ -579,6 +579,11 @@ sh_dirty_list() {
 # excluded. In the layout contract: the Min of each Screens row. In the registry: each
 # Components row ("ID Name") and each Retired ID. Text only: lines that start as a comment are
 # not counted, except for swiftlint:disable, which is one.
+# The test helpers the setup copies carry a swiftlint:disable line of their own, and one skips
+# with a reason when the Mac cannot run it (XCTSkip): in a file named as a helper, a line that
+# is the template's, character for character, is not counted, so copying a helper as shipped
+# is not a check made weaker. A rule added to that line, another line in the file, or the same
+# line in a file of another name is counted.
 sh_weaken_list() {
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -586,16 +591,26 @@ sh_weaken_list() {
     cd "$SH_ROOT" || exit 0
     git -c core.quotepath=off ls-files -c -o --exclude-standard -z -- '*.swift' 2>/dev/null |
       while IFS= read -r -d '' f; do [ -f "$f" ] && printf '%s\0' "$f"; done |
-      xargs -0 awk '
-        FNR == 1 { istest[FILENAME] = (FILENAME ~ /(^|\/)[^\/]*Tests?\// || FILENAME ~ /Tests?\.swift$/) }
-        /swiftlint:disable/ { l = $0; lint[FILENAME] += gsub(/swiftlint:disable/, "", l) }
+      SH_SHIPPED_HELPERS="$(printf '%s\n' "$here"/../skills/setup/templates/tests/*.swift)" xargs -0 awk '
+        BEGIN {
+          count = split(ENVIRON["SH_SHIPPED_HELPERS"], helpers, "\n")
+          for (i = 1; i <= count; i++) {
+            helper = helpers[i]; base = helper; sub(/.*\//, "", base)
+            if (helper == "") continue
+            while ((getline line < helper) > 0) if (line ~ /swiftlint:disable|XCTSkip|\.disabled[ \t]*\(|^[ \t]*#if[ \t]+false/) shipped[base SUBSEP line] = 1
+            close(helper)
+          }
+        }
+        FNR == 1 { istest[FILENAME] = (FILENAME ~ /(^|\/)[^\/]*Tests?\// || FILENAME ~ /Tests?\.swift$/); name = FILENAME; sub(/.*\//, "", name) }
+        { own = ((name SUBSEP $0) in shipped) }
+        /swiftlint:disable/ && !own { l = $0; lint[FILENAME] += gsub(/swiftlint:disable/, "", l) }
         !istest[FILENAME] { next }
         { l = $0; sub(/^[ \t]+/, "", l) }
         l ~ /^(\/\/|\/\*|\*)/ { next }
-        l ~ /^#if[ \t]+false([ \t]|$)/ { skips[FILENAME]++ }
+        l ~ /^#if[ \t]+false([ \t]|$)/ && !own { skips[FILENAME]++ }
         l ~ /(^|[^A-Za-z0-9_])func[ \t]+test[A-Za-z0-9_]*[ \t]*\(/ || l ~ /^@Test([ \t(]|$)/ { tests[FILENAME]++ }
         { a = l; asserts[FILENAME] += gsub(/XCTAssert[A-Za-z]*[ \t]*\(|XCTFail[ \t]*\(|XCTUnwrap[ \t]*\(|#expect[ \t]*\(|#require[ \t]*\(/, "", a)
-          a = l; skips[FILENAME] += gsub(/XCTSkip|\.disabled[ \t]*\(/, "", a)
+          a = l; if (!own) skips[FILENAME] += gsub(/XCTSkip|\.disabled[ \t]*\(/, "", a)
           a = l
           while (match(a, /tolerance:[ \t]*[0-9][0-9._]*/)) {
             v = substr(a, RSTART, RLENGTH); sub(/^tolerance:[ \t]*/, "", v); gsub(/_/, "", v)

@@ -3797,6 +3797,28 @@ if jq -e '.hooks.Stop[].hooks[] | select(.command | endswith("weaken-watch.sh\""
   ok "weakened: the notice runs at the end of every turn"
 else nok "weakened: the notice runs at the end of every turn"; fi
 
+# The plugin's own test helpers carry a swiftlint:disable line: a helper copied as shipped is
+# not a check made weaker. What the project adds to it still is.
+WH="$(new_project weaken-helpers)"
+mkdir -p "$WH/Tests/AppTests"
+echo 'import XCTest' >"$WH/Tests/AppTests/AppTests.swift"
+git -C "$WH" add -A && git -C "$WH" commit -qm tests
+hook session-start.sh "$WH" '{"source":"startup"}' >/dev/null
+weaken_helpers() { local o c; o="$(hook weaken-watch.sh "$WH" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+cp "$TEMPLATES"/tests/*.swift "$WH/Tests/AppTests/"
+expect_result "weakened: the helpers copied as shipped are not reported" 0 '^exit=0$' "$(weaken_helpers)" 'swift-harness'
+sed -i '' 's|^// swiftlint:disable line_length$|// swiftlint:disable line_length force_cast|' "$WH/Tests/AppTests/Screenshot.swift"
+expect_result "weakened: a rule added to a helper's own line is reported" 0 'Tests/AppTests/Screenshot\.swift: 1 swiftlint:disable added \(0 -> 1\)' "$(weaken_helpers)" 'Snapshot\.swift|KeyboardCheck\.swift'
+printf '// swiftlint:disable:next force_cast\nlet extra = 1\n' >>"$WH/Tests/AppTests/Snapshot.swift"
+expect_result "weakened: another swiftlint:disable in a helper is reported" 0 'Tests/AppTests/Snapshot\.swift: 1 swiftlint:disable added \(0 -> 1\)' "$(weaken_helpers)"
+printf '        throw XCTSkip("not today")\n' >>"$WH/Tests/AppTests/FocusOrder.swift"
+expect_result "weakened: a skip added to a helper is reported, the helper's own is not" 0 'Tests/AppTests/FocusOrder\.swift: 1 skip added \(0 -> 1\)' "$(weaken_helpers)"
+printf '// swiftlint:disable line_length\nlet other = 1\n' >"$WH/Tests/AppTests/OtherTests.swift"
+expect_result "weakened: a helper's line in a file of another name is reported" 0 'Tests/AppTests/OtherTests\.swift: 1 swiftlint:disable added' "$(weaken_helpers)"
+mkdir -p "$WH/Sources/Extra"
+printf '// swiftlint:disable force_cast\nlet mine = 1\n' >"$WH/Sources/Extra/KeyboardCheck.swift"
+expect_result "weakened: a file named as a helper, with a line of its own, is reported" 0 'Sources/Extra/KeyboardCheck\.swift: 1 swiftlint:disable added' "$(weaken_helpers)"
+
 # ---------- adoption audit (#104) ----------
 
 AD="$TMP/adopt"
