@@ -149,6 +149,29 @@ sh_same_or_under() { # $1 resolved path, $2 protected path
   done
 }
 
+# Why a commit made in the folder $1 would carry git's automatic identity; nothing when the
+# identity is set (#2 of the 1.11 field report). Without user.email git signs with the account
+# and the host name of the machine (<account>@<host name>, on a Mac ending in .local), and
+# without user.name with the full name of the account. Once pushed, that leaves a repository
+# only by rewriting its history. Nothing either where git refuses a commit by itself
+# (user.useConfigOnly, or a host name it cannot build an address from): sh_git_refuses tells.
+# The text names no value: it can end in a report pasted somewhere public.
+sh_git_refuses() { ! git -C "$1" var GIT_COMMITTER_IDENT >/dev/null 2>&1; }
+sh_git_identity() {
+  local dir="$1" ident email
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  ident="$(git -C "$dir" var GIT_COMMITTER_IDENT 2>/dev/null)" || return 0
+  email="${ident#*<}"
+  email="${email%%>*}"
+  if [ -z "$(git -C "$dir" config user.email 2>/dev/null)" ] && [ -z "${GIT_COMMITTER_EMAIL:-}${EMAIL:-}" ]; then
+    printf 'user.email is not set, so git signs commits with the account and the host name of this Mac (<account>@<host name>)'
+  elif [[ "$email" == *.local || "$email" == *.localdomain || "$email" == *"(none)" ]]; then
+    printf 'the email of the git identity ends in .%s: it is a host name of this Mac, not an address' "${email##*.}"
+  elif [ -z "$(git -C "$dir" config user.name 2>/dev/null)" ] && [ -z "${GIT_COMMITTER_NAME:-}" ]; then
+    printf 'user.name is not set, so git signs commits with the full name of the account on this Mac'
+  fi
+}
+
 # Read a value from the project config, with a default.
 sh_cfg() {
   local value

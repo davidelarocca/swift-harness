@@ -2281,6 +2281,95 @@ set_config "$S" '{}'
 if grep -qF -- '--relative-paths' "$SKILLS/approve-snapshots/SKILL.md"; then ok "snapshots: the approval skill makes old metadata relative"
 else nok "snapshots: the approval skill makes old metadata relative"; fi
 
+# ---------- guard-bash.sh: a commit with git's automatic identity ----------
+
+# With no user.email git signs a commit as <account>@<host name>, and with no user.name with
+# the full name of the account: once pushed, that leaves only by rewriting history. The guard
+# denies a command that writes a commit while the identity is that one.
+
+# The environment of a Mac where git was never configured: no global or system config, no
+# identity in the environment. The project's own config stays.
+bare_git() { env -u EMAIL -u GIT_COMMITTER_EMAIL -u GIT_COMMITTER_NAME -u GIT_AUTHOR_EMAIL -u GIT_AUTHOR_NAME HOME="$TMP/no-home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$@"; }
+mkdir -p "$TMP/no-home"
+commit_guard() { # $1 project, $2 command, $3 the session's folder (default: the project)
+  jq -nc --arg cwd "${3:-$1}" --arg c "$2" '{cwd: $cwd, session_id: "test", tool_name: "Bash", tool_input: {command: $c}}' |
+    bare_git env CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$1" "$SCRIPTS/guard-bash.sh"
+}
+expect_commit_denied() { # $1 project, $2 command, $3 test name, $4 regex on the reason, $5 folder
+  local out
+  out="$(commit_guard "$1" "$2" "${5:-}" 2>&1)"
+  if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$out" 2>/dev/null)" = deny ] && grep -qE -- "${4:-.}" <<<"$out"; then ok "$3"
+  else nok "$3" "not denied: $2
+$out"; fi
+}
+expect_commit_allowed() { # $1 project, $2 command, $3 test name, $4 folder
+  local out
+  out="$(commit_guard "$1" "$2" "${4:-}" 2>&1)"
+  if [ -z "$out" ]; then ok "$3"; else nok "$3" "unexpected output for: $2
+$out"; fi
+}
+
+P="$(new_project commit-identity)"
+expect_commit_allowed "$P" "git commit -m x" "commit identity: a commit with user.name and user.email set goes through"
+
+git -C "$P" config --unset user.email
+if bare_git git -C "$P" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+  # git builds an address from the account and the host name: the automatic identity.
+  expect_commit_denied "$P" "git commit -m x" "commit identity: a commit with no user.email is denied before it exists" 'user\.email is not set'
+  expect_commit_denied "$P" "git add -A && git commit -m \"a message\"" "commit identity: ... also after another command"
+  expect_commit_denied "$P" "git -C $P commit -m x" "commit identity: ... also with git -C" '' "$TMP"
+  expect_commit_denied "$P" "cd .. && git commit -m x" "commit identity: ... also after a cd, from a subfolder" '' "$P/Sources"
+  for sub in "merge feature" "pull" "cherry-pick abc123" "revert HEAD" "rebase main" "am patch.mbox"; do
+    expect_commit_denied "$P" "git $sub" "commit identity: git ${sub%% *} writes commits too"
+  done
+  out="$(commit_guard "$P" "git commit -m x")"
+  if grep -qF 'git config --global user.email' <<<"$out" && grep -qF 'do not give an identity yourself' <<<"$out" && grep -qF '"guardCommitIdentity\": false' <<<"$out" &&
+    ! grep -qF "$(bare_git git -C "$P" var GIT_COMMITTER_IDENT | sed -E 's/.*<(.*)>.*/\1/')" <<<"$out"; then
+    ok "commit identity: the reason names the fix and the switch, and prints no account or host name"
+  else nok "commit identity: the reason names the fix and the switch, and prints no account or host name" "$out"; fi
+  if grep -rqs '"check":"commit identity","kind":"blocked"' "$TMP/data/state"; then
+    ok "commit identity: the denied commit is in the catch log"
+  else nok "commit identity: the denied commit is in the catch log"; fi
+  out="$(bare_git env PATH="$PEFAKES:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)"
+  expect_row "doctor: no user.email is a warning that names the fix" "$out" WARN 'Git identity' 'user\.email is not set.*git config --global user\.email.*user\.useConfigOnly'
+  if ! grep -qF "$(bare_git git -C "$P" var GIT_COMMITTER_IDENT | sed -E 's/.*<(.*)>.*/\1/')" <<<"$out"; then ok "doctor: the automatic identity itself is not printed"
+  else nok "doctor: the automatic identity itself is not printed" "$out"; fi
+  set_config "$P" '{"guardCommitIdentity":false}'
+  expect_commit_allowed "$P" "git commit -m x" "commit identity: guardCommitIdentity false turns the check off"
+  set_config "$P" '{}'
+  git -C "$P" config user.useConfigOnly true
+  expect_commit_allowed "$P" "git commit -m x" "commit identity: where git refuses by itself (user.useConfigOnly) the guard says nothing"
+  expect_row "doctor: ... and the doctor says git refuses until the identity is set" \
+    "$(bare_git env PATH="$PEFAKES:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)" INFO 'Git identity' 'git refuses to commit without one'
+  git -C "$P" config --unset user.useConfigOnly
+else
+  # No host name to build an address from: git itself refuses the commit.
+  expect_commit_allowed "$P" "git commit -m x" "commit identity: where git cannot build an identity it refuses by itself, and the guard says nothing"
+fi
+expect_commit_allowed "$P" "git status" "commit identity: a command that writes no commit goes through"
+expect_commit_allowed "$P" "git log --grep commit" "commit identity: the word commit as an argument is not a commit"
+expect_commit_allowed "$P" "git commit-graph write" "commit identity: commit-graph is not a commit"
+expect_commit_allowed "$P" "git -c user.name=a -c user.email=a@example.com commit -m x" "commit identity: an identity given in the command goes through"
+expect_commit_allowed "$P" "GIT_COMMITTER_EMAIL=a@example.com GIT_AUTHOR_EMAIL=a@example.com git commit -m x" "commit identity: ... also given in the environment"
+expect_commit_allowed "$P" "git -C \"\$OTHER\" commit -m x" "commit identity: a folder known only at run time is not asked"
+
+# An address that is the host name: what a config copied from the automatic identity holds.
+git -C "$P" config user.email someone@some-mac.local
+expect_commit_denied "$P" "git commit -m x" "commit identity: an address ending in .local is denied" 'ends in \.local'
+expect_row "doctor: an address ending in .local is a warning" \
+  "$(bare_git env PATH="$PEFAKES:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)" WARN 'Git identity' 'ends in \.local'
+git -C "$P" config user.email test@example.com
+git -C "$P" config --unset user.name
+expect_commit_denied "$P" "git commit -m x" "commit identity: no user.name is denied" 'user\.name is not set'
+git -C "$P" config user.name test
+expect_row "doctor: an identity that is set passes" \
+  "$(bare_git env PATH="$PEFAKES:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)" PASS 'Git identity' 'user\.name and user\.email are set'
+set_config "$P" '{"guardCommitIdentity":"no"}'
+expect_row "doctor: guardCommitIdentity must be true or false" "$(doctor "$P")" FAIL Config 'guardCommitIdentity must be true or false'
+rm "$P/.claude/swift-harness.json"
+git -C "$P" config --unset user.email
+expect_commit_allowed "$P" "git commit -m x" "commit identity: a project without swift-harness.json is left alone"
+
 # ---------- security settings (#32) ----------
 
 sec() { CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/security.sh" "$@"; }

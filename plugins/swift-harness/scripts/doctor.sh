@@ -54,6 +54,19 @@ else
   row FAIL Git "$SH_ROOT is not a git repository: the end-of-turn check needs git to see what changed. Fix: git init"
 fi
 
+# The identity commits are signed with (#2 of the 1.11 field report). No value is printed: a
+# doctor report is often pasted into an issue.
+if [ "$in_git" = true ]; then
+  identity="$(sh_git_identity "$SH_ROOT")"
+  if [ -n "$identity" ]; then
+    row WARN "Git identity" "$identity: every commit made here publishes it once pushed, and it leaves only by rewriting history. Fix: git config --global user.name \"<name>\" and git config --global user.email \"<address>\" (on GitHub, the noreply address in Settings > Emails keeps your own private); git config --global user.useConfigOnly true makes git itself refuse a commit without them"
+  elif sh_git_refuses "$SH_ROOT"; then
+    row INFO "Git identity" "not set, and git refuses to commit without one here (user.useConfigOnly, or no host name to build an address from). Set it before the first commit: git config --global user.name \"<name>\" and git config --global user.email \"<address>\""
+  else
+    row PASS "Git identity" "user.name and user.email are set: commits are not signed with the account and the host name of this Mac"
+  fi
+fi
+
 if [ ! -f "$SH_CONFIG" ]; then
   row FAIL Config "no .claude/swift-harness.json: the hooks are off in this project. Fix: run /swift-harness:setup"
   exit 1
@@ -64,7 +77,7 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance", "porting"])[],
+  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "guardCommitIdentity", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance", "porting"])[],
   (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed", "watch"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
@@ -99,6 +112,7 @@ problems="$(jq -r '
   check(["guardPbxproj"]; type == "boolean"; "guardPbxproj must be true or false"),
   check(["protectedPaths"]; type == "array" and all(.[]; type == "string"); "protectedPaths must be a list of paths"),
   check(["guardBash"]; type == "boolean"; "guardBash must be true or false"),
+  check(["guardCommitIdentity"]; type == "boolean"; "guardCommitIdentity must be true or false"),
   check(["verify"]; type == "object"; "verify must be an object"),
   (if (.verify | type) == "object" then
     check(["verify", "enabled"]; type == "boolean"; "verify.enabled must be true or false"),
