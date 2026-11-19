@@ -2,21 +2,28 @@
 
 Where swift-harness is going, and why. Live status is in the [milestones](https://github.com/davidelarocca/swift-harness/milestones) and [issues](https://github.com/davidelarocca/swift-harness/issues). This page is updated with every release.
 
-_Last updated: 18 November 2026, after v1.10.0 (rules that name the check enforcing them, and the first porting checks on a real app: builds and tests for the iOS Simulator, on a copy). The porting has started on a real app, so v1.11.0 now makes it safe to carry on day by day, and perception in motion moves to v1.12.0._
+_Last updated: 19 November 2026, after v1.10.0 (rules that name the check enforcing them, and the first porting checks on a real app: builds and tests for the iOS Simulator, on a copy). The next release is v2.0.0: assisted porting for Mac apps in general, checked on two real apps of different shapes. Perception in motion follows as v2.1.0._
 
 **Guiding principle:** every check the harness claims to run must actually run, and must be backed by a test. New features come after the existing gates are reliable, and claims about impact come with measurements. A new method earns its place by beating a simple baseline on held-out data, not by being clever.
 
-## Now: v1.11.0, porting every day
+## Now: v2.0.0, assisted macOS to iOS porting
 
-1.10.0 brought the shared modules of a real Mac app to the iOS Simulator. The port now goes on next to daily Mac work, by several sessions at once, towards the audio and the screens of the iPhone app. These keep what is already ported from breaking, and cover the parts where an audio app breaks on iPhone.
+For any Mac app, SwiftPM or Xcode project: what it takes to reach iOS, built and tested on a copy, then ported a module and a feature at a time without breaking the Mac app, with daily Mac work unable to undo what is ported. It has started on one real app, whose shared modules build and pass their tests on the iOS Simulator since 1.10.0. It ships when a first real feature works on iPhone and the tools have been checked on a second real app of a different shape.
 
 | | What you get | Issue |
 |---|---|---|
+| 🍎➡️📱 | **Porting in verified slices.** After you accept the plan and the target structure: shared domain first, adapters for platform APIs, then one feature at a time, each built and tested on iOS and on the Mac, with results per platform. Checked on a real port. | [#48](https://github.com/davidelarocca/swift-harness/issues/48) |
 | 🔒 | **Porting ratchet.** A module that builds for iOS keeps building: new macOS-only API in a ported module fails at the end of the turn, not weeks later. | [#73](https://github.com/davidelarocca/swift-harness/issues/73) |
-| 🎧 | **Audio apps.** Audio session, interruptions and background audio in the porting audit. | [#75](https://github.com/davidelarocca/swift-harness/issues/75) |
+| 🛠️ | **Xcode projects.** The iOS Simulator build and test checks of 1.10.0 for apps and frameworks in an Xcode project, not only packages. | [#171](https://github.com/davidelarocca/swift-harness/issues/171) |
+| 🔐 | **Privacy for iOS.** Usage descriptions and the privacy manifest the App Store needs, compared with the APIs the code uses. | [#172](https://github.com/davidelarocca/swift-harness/issues/172) |
+| 🔎 | **A wider scan.** macOS-only APIs common in any app: processes, AppleScript, the home folder, distributed notifications, window and event APIs. | [#173](https://github.com/davidelarocca/swift-harness/issues/173) |
+| 🌙 | **Background and interruptions.** Audio session, background modes, long work and app lifecycle in the porting audit. | [#75](https://github.com/davidelarocca/swift-harness/issues/75) |
+| 📐 | **iPad, Mac Catalyst and visionOS** as destinations in the plan, the scan and the build checks. | [#174](https://github.com/davidelarocca/swift-harness/issues/174) |
 | 🚦 | **Shared machine.** UI tests and simulators ask first, take a lock, build only what is ported. | [#74](https://github.com/davidelarocca/swift-harness/issues/74) |
+| 📱 | **iOS checked on a real app.** The iOS-aware checks of 1.5.0 used on a real iOS port: the README says iOS once it passes. | [#40](https://github.com/davidelarocca/swift-harness/issues/40) |
+| 🧪 | **Checked on a second real app**, an open-source Xcode project, with what each tool found and missed. | [#175](https://github.com/davidelarocca/swift-harness/issues/175) |
 
-## Next: v1.12.0, perception in motion
+## Next: v2.1.0, perception in motion
 
 Today every check on the running app looks at one state at one size. These look at flows, time and a hostile environment. Test isolation, which they need, shipped in 1.7.0. They need a real app with UI tests to be worth anything, and the evals need paid sessions, so they start when both are available.
 
@@ -44,15 +51,6 @@ Methods from other fields, studied as hypotheses before any becomes a feature. E
 | 🌳 | **Baselines of the accessibility tree, as text**: pixel snapshots are "not compared" on another macOS version, so on most CI runners. Does an approved text baseline of roles, labels and hierarchy catch regressions there, and read well in a diff? | Pixel snapshots on the machine they were made on; LayoutAudit | hypothesis |
 | 🧮 | **Allocation budgets**: virtual machines count no instructions, so performance budgets are "not compared" on CI. Is the number of allocations of an operation stable enough there to catch the same regressions? | The instruction budget on a real Mac, on the same planted regressions | hypothesis |
 | 🧰 | **Xcode as a host**: do the hooks run inside Xcode's own agent, and would the same engine behind an MCP server reach the agents that have no hooks? | `check.sh` called from the agent's rules | to measure first |
-
-## Then: v2.0.0, assisted macOS to iOS porting
-
-Being checked on a real port of a macOS app: its shared modules build and pass their tests on the iOS Simulator since 1.10.0. It ships when a first real feature of that app works on iPhone.
-
-| | What you get | Issue |
-|---|---|---|
-| 🍎➡️📱 | **Porting in verified slices.** After you accept the plan and the target structure: shared domain first, adapters for platform APIs, then one feature at a time, each built and tested on iOS and on the Mac, with results per platform. Checked on a real port. | [#48](https://github.com/davidelarocca/swift-harness/issues/48) |
-| 📱 | **iOS checked on a real app.** The iOS-aware checks of 1.5.0 used on a real iOS port: the README says iOS once it passes. | [#40](https://github.com/davidelarocca/swift-harness/issues/40) |
 
 ## Later
 
