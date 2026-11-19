@@ -193,6 +193,16 @@ case "$format" in
   swiftformat)
     if command -v swiftformat >/dev/null 2>&1; then
       row PASS Formatter "swiftformat $(swiftformat --version 2>/dev/null | head -1)"
+      # A rule or an option this swiftformat does not know stops it on every file: the generated
+      # config turns off a rule (swiftTestingTestCaseNames) that older versions do not have.
+      if [ -f "$SH_ROOT/.swiftformat" ]; then
+        config_error="$(printf 'let a = 1\n' | (cd "$SH_ROOT" && swiftformat stdin --config .swiftformat --quiet 2>&1 >/dev/null) | grep -m1 '^error:')"
+        if [ -n "$config_error" ]; then
+          row WARN "Formatter config" ".swiftformat is refused by this swiftformat (${config_error#error: }): no edited file is formatted. Fix: brew upgrade swiftformat, or remove from .swiftformat the rule or option it does not know"
+        else
+          row PASS "Formatter config" ".swiftformat"
+        fi
+      fi
     else
       row WARN Formatter "swiftformat not installed: edited files are not formatted. Fix: brew install swiftformat"
     fi

@@ -5,6 +5,9 @@
 # be compared with them: with the generated .swiftformat, and with the generated .swift-format,
 # a formatter must leave every one of them as it is. Both the whole-project run
 # (`swiftformat .`) and the one-file run of the post-edit hook are checked.
+#
+# With the generated .swiftformat, formatting does not rename a Swift Testing test: a commit
+# meant as "formatting only" must not change the names the reports and the filters use.
 # Usage: tests/format-helpers.sh
 # Exit: 0 all as expected, 1 a formatter would change something, 2 a tool is missing (nothing
 # is reported as checked).
@@ -73,6 +76,26 @@ cp "$P/Tests/AppTests/Own.swift" "$TMP/own-before.swift"
 (cd "$P" && swiftformat --quiet Tests/AppTests/Own.swift >/dev/null 2>&1)
 if ! cmp -s "$P/Tests/AppTests/Own.swift" "$TMP/own-before.swift"; then ok "swiftformat still formats the project's own files"
 else nok "swiftformat still formats the project's own files"; fi
+
+# Swift Testing names: swiftformat can rewrite `@Test func aName()` as a raw identifier
+# with spaces between backticks, from --swiftversion 6.2 on.
+for version in 6.0 6.2; do
+  P="$TMP/names-$version"
+  project "$P" "$version"
+  cat >"$P/Tests/AppTests/NamingTests.swift" <<'SWIFT'
+import Testing
+
+struct WindowTests {
+    @Test func mainWindowDeclaresItsMinimumSize() {
+        #expect(1 + 1 == 2)
+    }
+}
+SWIFT
+  (cd "$P" && swiftformat --quiet Tests/AppTests/NamingTests.swift >/dev/null 2>&1)
+  if grep -qF '@Test func mainWindowDeclaresItsMinimumSize()' "$P/Tests/AppTests/NamingTests.swift"; then
+    ok "swiftformat keeps the name of a Swift Testing test (--swiftversion $version)"
+  else nok "swiftformat keeps the name of a Swift Testing test (--swiftversion $version)" "$(grep -n '@Test' "$P/Tests/AppTests/NamingTests.swift")"; fi
+done
 
 echo
 if [ "$failed" -eq 0 ]; then echo "format-helpers: all passed ($(swiftformat --version), $("${apple[@]}" --version 2>/dev/null | head -1))"; exit 0; fi

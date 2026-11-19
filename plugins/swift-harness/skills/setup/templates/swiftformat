@@ -9,3 +9,8 @@
 --importgrouping testable-bottom
 --commas always
 --exclude .build,DerivedData
+# Formatting does not rename tests. From --swiftversion 6.2 this rule rewrites every Swift
+# Testing name, `@Test func savesTheDraft()`, as a raw identifier with spaces between backticks.
+# A swiftformat too old to know the rule stops with "Unknown rule": remove the line there
+# (the doctor says so).
+--disable swiftTestingTestCaseNames

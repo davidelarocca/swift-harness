@@ -343,6 +343,12 @@ TOOLLOG="$TMP/tools.log"
 mkdir -p "$PEFAKES" "$NOLINT"
 cat >"$PEFAKES/swiftformat" <<'FAKE'
 #!/bin/bash
+# The doctor's check of the config: `swiftformat stdin --config .swiftformat --quiet`.
+if [ "$1" = stdin ]; then
+  [ "${FAKE_FMT_CONFIG:-ok}" = unknown ] && { echo "error: Unknown rule 'swiftTestingTestCaseNames'." >&2; exit 70; }
+  cat
+  exit 0
+fi
 for f; do :; done
 echo "swiftformat $f" >>"$FAKE_TOOL_LOG"
 case "${FAKE_FMT:-ok}" in
@@ -2111,6 +2117,20 @@ for f in "$TEMPLATES"/tests/*.swift; do
 done
 if [ -z "$bad" ]; then ok "templates: every test helper turns SwiftFormat and swift-format off for itself"
 else nok "templates: every test helper turns SwiftFormat and swift-format off for itself" "$bad"; fi
+# Formatting does not rename tests: the generated config turns the rule off, the setup says so,
+# and the doctor names a swiftformat too old to know the rule. The real formatter runs in
+# tests/format-helpers.sh.
+if grep -qxF -- '--disable swiftTestingTestCaseNames' "$TEMPLATES/swiftformat" && grep -qF 'swiftTestingTestCaseNames' "$SKILLS/setup/SKILL.md" &&
+  grep -qF 'swiftformat --rules' "$SKILLS/setup/SKILL.md"; then
+  ok "templates: the generated .swiftformat does not rename Swift Testing tests, and setup says so"
+else nok "templates: the generated .swiftformat does not rename Swift Testing tests, and setup says so"; fi
+P="$(new_project formatter-config)"
+set_config "$P" '{"format":"swiftformat"}'
+if grep -q 'Formatter config' <<<"$(doctor "$P")"; then nok "doctor: no .swiftformat, no Formatter config row"; else ok "doctor: no .swiftformat, no Formatter config row"; fi
+sed 's/{{SWIFT_VERSION}}/6.2/' "$TEMPLATES/swiftformat" >"$P/.swiftformat"
+expect_row "doctor: a .swiftformat the formatter accepts passes" "$(doctor "$P")" PASS 'Formatter config' '\.swiftformat'
+expect_row "doctor: a .swiftformat with a rule this swiftformat does not know is named" "$(FAKE_FMT_CONFIG=unknown doctor "$P")" WARN 'Formatter config' "refused by this swiftformat \(Unknown rule 'swiftTestingTestCaseNames'\.\).*brew upgrade swiftformat"
+
 if grep -qF 'swiftformat:disable all' "$SKILLS/setup/SKILL.md" && [ -x "$HERE/format-helpers.sh" ]; then ok "templates: setup says the helpers are left alone by the formatters"
 else nok "templates: setup says the helpers are left alone by the formatters"; fi
 if [ "$(readlink "$HERE/fixtures/visual/Tests/ScreensTests/Snapshot.swift")" = "../../../../../plugins/swift-harness/skills/setup/templates/tests/Snapshot.swift" ]; then

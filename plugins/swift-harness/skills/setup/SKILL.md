@@ -109,10 +109,12 @@ For each template, if the target file does not exist, create it with placeholder
 | `tests/PerformanceBudget.swift` | a package test target of the code it measures, so `fast` runs it (see step 7, performance budget) |
 | `docs/adr/0000-template.md` | `docs/adr/0000-template.md` |
 | `swiftlint.yml` | `.swiftlint.yml` |
-| `swiftformat` | `.swiftformat` (only if swiftformat was chosen) |
+| `swiftformat` | `.swiftformat` (only if swiftformat was chosen; see the note on test names below) |
 | `swift-format` | `.swift-format` (only if swift-format was chosen; without it swift-format uses 2-space indentation and reformats every edited file) |
 | `verify.sh` | `scripts/verify.sh` (then `chmod +x`) |
 | `swift-harness.json` | `.claude/swift-harness.json` (this file switches the plugin hooks on for this project) |
+
+The generated `.swiftformat` turns off `swiftTestingTestCaseNames`: with `--swiftversion 6.2` or later that rule rewrites every Swift Testing name (`@Test func savesTheDraft()`) as a raw identifier with spaces between backticks, so a commit meant as formatting only would rename every test. Say it in the summary, with the other rule that touches tests and stays on (`redundantSwiftTestingSuite` removes a bare `@Suite`), so a project that wants the new names can remove the line. Run `swiftformat --rules`: if `swiftTestingTestCaseNames` is not listed, the installed swiftformat is older than the rule and stops at a name it does not know, so remove the `--disable` line and tell the user.
 
 The files under `tests/` are helpers kept as shipped: copy them unchanged, header included, so a later version of the plugin can be compared with them. Each one turns the formatters off for itself (`// swiftformat:disable all`, `// swift-format-ignore-file`), so `swiftformat .` and the format-on-edit hook leave it alone: do not add them to `--exclude`, and do not reformat them by hand.
 
