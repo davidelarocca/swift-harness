@@ -4967,15 +4967,16 @@ bcbefore="$(snapshot "$BC")"
 out="$(FAKE_SWIFT_FAIL="DSP Domain" bc "$BC")"
 expect_result "build-check: a target that builds is a PASS, a failing one a FAIL with its errors" 0 '- PASS Core.*- FAIL DSP: 2 error\(s\).*Sources/DSP/Denormals\.swift:3:11: cannot find .fenv_t. in scope' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
-expect_result "build-check: the same error twice is counted once, colours are gone" 0 'FAIL DSP: 2 error' "$out" $'\x1b'
-expect_result "build-check: a target behind a failing one shows the other's errors, and says why" 0 'FAIL Domain: 2 error\(s\)' "$out"
+expect_result "build-check: the same error twice is counted once, colours are gone" 1 'FAIL DSP: 2 error' "$out" $'\x1b'
+expect_result "build-check: a target behind a failing one shows the other's errors, and says why" 1 'FAIL Domain: 2 error\(s\)' "$out"
 expect_result "build-check: names the module the error came from only for a dependency" 0 'Domain: 2 error.*\(in DSP, a dependency\)' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
 expect_result "build-check: ... and the DSP's own errors carry no such note" 0 'FAIL DSP: 2 error\(s\) +Sources/DSP/Denormals\.swift:3:11: cannot find .fenv_t. in scope +Sources/DSP/Denormals\.swift:4:3: cannot find .fegetenv. in scope +(- |A target)' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
-expect_result "build-check: it says a dependency's errors hide the target's own" 0 'behind a failing dependency' "$out"
-expect_result "build-check: it says it is a build only" 0 '1 built, 2 failed\. This is a build only: nothing was tested' "$out"
-expect_result "build-check: it names the SDK and the iOS version it used" 0 'iOS 27\.0, SDK 27\.2' "$out"
+expect_result "build-check: it says a dependency's errors hide the target's own" 1 'behind a failing dependency' "$out"
+expect_result "build-check: it says it is a build only" 1 '1 built, 2 failed\. This is a build only: nothing was tested' "$out"
+expect_result "build-check: exits 1 when a target failed" 1 'FAIL DSP' "$out"
+expect_result "build-check: it names the SDK and the iOS version it used" 1 'iOS 27\.0, SDK 27\.2' "$out"
 if grep -q -- '--triple [a-z0-9_]*-apple-ios27.0-simulator' "$TMP/bc-swift.log" && grep -q -- "--sdk $TMP/bc-sdk" "$TMP/bc-swift.log"; then ok "build-check: builds each target for the simulator triple with the simulator SDK"
 else nok "build-check: builds each target for the simulator triple with the simulator SDK" "$(cat "$TMP/bc-swift.log")"; fi
 if [ "$(grep -c -- '--target' "$TMP/bc-swift.log")" = 3 ]; then ok "build-check: one build per folder of Sources/"; else nok "build-check: one build per folder of Sources/" "$(cat "$TMP/bc-swift.log")"; fi
@@ -5095,7 +5096,9 @@ expect_result "test-check: tests that do not build show the compiler's errors, o
 $(printf '%s' "$out" | tr '\n' ' ')" $'\x1b'
 expect_result "test-check: a result bundle it cannot read is not called a build failure" 0 'result bundle could not be read.*TEST SUCCEEDED' "exit=0
 $(printf '%s' "$(tcrun "$TC")" | tr '\n' ' ')" 'did not build'
-expect_result "test-check: a failure with no error line shows xcodebuild's own" 0 'did not run: xcodebuild: error: The project does not contain a scheme' "$(FAKE_XCB=noscheme tcrun "$TC")"
+expect_result "test-check: a failure with no error line shows xcodebuild's own" 1 'did not run: xcodebuild: error: The project does not contain a scheme' "$(FAKE_XCB=noscheme tcrun "$TC")"
+expect_result "test-check: exits 0 when tests ran and none failed" 0 '10 passed, 0 failed' "$(FAKE_SUMMARY="$TMP/tc-pass.json" tcrun "$TC" --target CoreTests)"
+expect_result "test-check: exits 1 when a test failed" 1 '1 failed' "$(FAKE_XCB=fail FAKE_SUMMARY="$TMP/tc-fail.json" tcrun "$TC" --target CoreTests)"
 expect_result "test-check: an unknown --device says so" 1 'no available iOS simulator called .iPad Mini.' "$(tcrun "$TC" --device "iPad Mini")"
 printf '{"devices": {}}\n' >"$TMP/tc-nosims.json"
 expect_result "test-check: no iPhone simulator says how to get one" 1 'no iPhone simulator' "$(FAKE_SIMS="$TMP/tc-nosims.json" tcrun "$TC")"
@@ -5189,7 +5192,7 @@ expect_result "ratchet: ... and the check reads it there" 0 '^exit=0$' "$(ratche
 # ---------- porting: APIs common in Mac apps (#173) ----------
 
 out="$(FAKE_SWIFT_LINK="Net" bc "$BC" --target Net)"
-expect_result "build-check: a terminal hyperlink in an error keeps its text, not its escape codes" 0 'n\.swift:2:5: not concurrency-safe \[#MutableGlobalVariable\]' "$out" $'\x1b|8;;'
+expect_result "build-check: a terminal hyperlink in an error keeps its text, not its escape codes" 1 'n\.swift:2:5: not concurrency-safe \[#MutableGlobalVariable\]' "$out" $'\x1b|8;;'
 
 CA="$TMP/common-apis"
 mkdir -p "$CA/Sources/Tools" "$CA/Sources/Guarded" "$CA/Sources/UI"
@@ -5242,6 +5245,96 @@ expect_result "porting: openWindow is an adaptation" 0 'adapt	Sources/UI	Sources
 $cascan"
 expect_result "porting: Table is an adaptation" 0 'adapt	Sources/UI	Sources/UI/App\.swift:5	Table \(one column' "exit=0
 $cascan"
+
+# ---------- porting: Xcode projects (#171) ----------
+
+XP="$TMP/xc-project"
+mkdir -p "$XP/App.xcodeproj" "$XP/App" "$XP/Shared"
+echo '// pbx' >"$XP/App.xcodeproj/project.pbxproj"
+echo 'import SwiftUI' >"$XP/App/App.swift"
+echo 'secret' >"$XP/Secrets.xcconfig"
+echo 'key' >"$XP/AuthKey_1.p8"
+printf 'machine x login y password z\n' >"$XP/.netrc"
+ln -s ../../outside-shared.swift "$XP/Shared/Linked.swift"
+ln -s ../nowhere.swift "$XP/Shared/Broken.swift"
+echo 'let shared = 1' >"$TMP/outside-shared.swift"
+git -C "$XP" init -q
+cat >"$BF/xcodebuild" <<'FAKE'
+#!/bin/bash
+# fake xcodebuild for Xcode projects: -list -json, and build/test per scheme from FAKE_XC_SCHEMES
+# ("Name:pass Name:fail Name:noios").
+echo "xcodebuild $*" >>"$FAKE_SWIFT_LOG"
+ls -a "$PWD" | tr '\n' ' ' >>"$FAKE_SWIFT_LOG"; echo >>"$FAKE_SWIFT_LOG"
+[ -f "$PWD/Shared/Linked.swift" ] && [ ! -L "$PWD/Shared/Linked.swift" ] && echo "linked file copied" >>"$FAKE_SWIFT_LOG"
+case "$*" in
+  "-list -json"*)
+    names="$(for x in ${FAKE_XC_SCHEMES:-}; do printf '"%s",' "${x%%:*}"; done)"
+    printf '{"project": {"name": "App", "schemes": [%s], "targets": ["App"]}}\n' "${names%,}"; exit 0 ;;
+esac
+scheme=""; bundle=""
+while [ $# -gt 0 ]; do
+  [ "$1" = -scheme ] && scheme="$2"
+  [ "$1" = -resultBundlePath ] && bundle="$2"
+  shift
+done
+case " ${FAKE_XC_SCHEMES:-} " in
+  *" $scheme:pass "*) [ -z "$bundle" ] || mkdir -p "$bundle"; echo "** BUILD SUCCEEDED **"; exit 0 ;;
+  *" $scheme:noios "*) echo "xcodebuild: error: Unable to find a destination matching the provided destination specifier:"; exit 70 ;;
+  *" $scheme:fail "*)
+    printf '%s/App/App.swift:3:8: error: Unable to resolve module dependency: '"'"'AppKit'"'"'\n' "${PWD#/private}"
+    echo "** BUILD FAILED **"; exit 65 ;;
+esac
+echo "xcodebuild: error: The project does not contain a scheme named $scheme."; exit 66
+FAKE
+chmod +x "$BF/xcodebuild"
+xbefore="$(snapshot "$XP")"
+: >"$TMP/bc-swift.log"
+out="$(FAKE_XC_SCHEMES="App:pass MacTool:noios Broken:fail" bc "$XP")"
+expect_result "build-check: an Xcode project builds every scheme xcodebuild lists" 1 '- PASS App' "$out"
+expect_result "build-check: a scheme with no iOS destination is NOT iOS, not a failure" 1 '- NOT iOS MacTool: the scheme has no iOS destination yet' "$out"
+expect_result "build-check: a failing scheme shows its first error, with a path inside the project" 1 '- FAIL Broken: 1 error\(s\)' "$out"
+expect_result "build-check: ... even when xcodebuild drops /private from the copy's path" 1 '^    App/App\.swift:3:8: Unable to resolve module dependency' "$out" 'swift-harness-port'
+expect_result "build-check: the Xcode summary counts the three kinds" 1 '1 built, 1 failed, 1 with no iOS destination\. This is a build only' "$out"
+expect_result "build-check: a broken link is named and the rest is copied" 1 'Note: not copied \(the build sees the rest\): .*Shared/Broken\.swift' "$out"
+expect_result "build-check: only NOT iOS and PASS exit 0" 0 '- NOT iOS MacTool' "$(FAKE_XC_SCHEMES="App:pass MacTool:noios" bc "$XP")"
+if grep -q -- "-project App.xcodeproj -scheme App -destination generic/platform=iOS Simulator .*CODE_SIGNING_ALLOWED=NO" "$TMP/bc-swift.log"; then ok "build-check: each scheme builds for the generic iOS Simulator, without signing"
+else nok "build-check: each scheme builds for the generic iOS Simulator, without signing" "$(grep xcodebuild "$TMP/bc-swift.log")"; fi
+if ! grep -qE '(^| )(\.git|Secrets\.xcconfig|AuthKey_1\.p8|\.netrc)( |$)' "$TMP/bc-swift.log" && grep -q 'App.xcodeproj' "$TMP/bc-swift.log"; then ok "build-check: the Xcode copy keeps the project, without .git or secrets"
+else nok "build-check: the Xcode copy keeps the project, without .git or secrets" "$(grep App.xcodeproj "$TMP/bc-swift.log" | head -2)"; fi
+if grep -q 'linked file copied' "$TMP/bc-swift.log"; then ok "build-check: a link to a file outside the project is copied as a file"
+else nok "build-check: a link to a file outside the project is copied as a file"; fi
+if [ "$xbefore" = "$(snapshot "$XP")" ]; then ok "build-check: the Xcode project is unchanged"; else nok "build-check: the Xcode project is unchanged"; fi
+: >"$TMP/bc-swift.log"
+out="$(FAKE_XC_SCHEMES="App:pass MacTool:noios" bc "$XP" --scheme App)"
+if [ "$(grep -c -- '-scheme ' "$TMP/bc-swift.log")" = 1 ] && ! grep -q -- '-list' "$TMP/bc-swift.log"; then ok "build-check: --scheme builds only that scheme"
+else nok "build-check: --scheme builds only that scheme" "$(grep xcodebuild "$TMP/bc-swift.log")"; fi
+expect_result "build-check: --target is for packages, not Xcode projects" 2 '--scheme' "$(bc "$XP" --target App)"
+expect_result "build-check: an Xcode project with no scheme says so" 1 'no scheme found in App\.xcodeproj' "$(FAKE_XC_SCHEMES="" bc "$XP")"
+mkdir -p "$XP/Other.xcodeproj"
+expect_result "build-check: several projects ask for --project" 1 'several Xcode workspaces or projects .*App\.xcodeproj, Other\.xcodeproj.*--project' "$(FAKE_XC_SCHEMES="App:pass" bc "$XP")"
+expect_result "build-check: --project picks one" 0 '- PASS App' "$(FAKE_XC_SCHEMES="App:pass" bc "$XP" --project App.xcodeproj)"
+expect_result "build-check: --project outside the root is a usage error" 2 'usage' "$(bc "$XP" --project ../x.xcodeproj)"
+mkdir -p "$XP/App.xcworkspace"
+: >"$TMP/bc-swift.log"
+FAKE_XC_SCHEMES="App:pass" bc "$XP" --scheme App >/dev/null
+if grep -q -- '-workspace App.xcworkspace -scheme App' "$TMP/bc-swift.log"; then ok "build-check: a workspace is preferred to its projects"
+else nok "build-check: a workspace is preferred to its projects" "$(grep xcodebuild "$TMP/bc-swift.log")"; fi
+rm -rf "$XP/App.xcworkspace" "$XP/Other.xcodeproj"
+expect_result "build-check: no Package.swift and no Xcode project says so" 1 'no Package\.swift and no Xcode project' "$(bc "$BN")"
+
+# test-check on an Xcode project: the fakes of test-check, with the scheme named.
+cp "$BF/xcodebuild" "$TF/xcodebuild-xc"
+xtc() { local out code; out="$(PATH="$TF:$PATH" TMPDIR="$TMP/tc-tmp" FAKE_SIMS="$TMP/tc-sims.json" FAKE_TC_LOG="$TMP/tc.log" FAKE_SWIFT_LOG="$TMP/tc.log" "$SCRIPTS/porting.sh" test-check "$@" 2>&1 </dev/null)"; code=$?; printf 'exit=%s\n%s' "$code" "$out"; }
+mv "$TF/xcodebuild" "$TF/xcodebuild-pkg"; cp "$TF/xcodebuild-xc" "$TF/xcodebuild"
+expect_result "test-check: an Xcode project needs the test scheme named" 1 'name the test scheme of App\.xcodeproj with --scheme' "$(xtc "$XP")"
+: >"$TMP/tc.log"
+out="$(FAKE_XC_SCHEMES="App:pass" FAKE_SUMMARY="$TMP/tc-pass.json" xtc "$XP" --scheme App)"
+expect_result "test-check: an Xcode scheme's counts come from its result bundle" 0 'App\.xcodeproj.*Scheme App:.*12 test\(s\): 10 passed, 0 failed, 2 skipped' "exit=0
+$(printf '%s' "$out" | tr '\n' ' ')"
+if grep -q -- 'xcodebuild test -project App.xcodeproj -scheme App -destination platform=iOS Simulator,id=NEW-1 .*CODE_SIGNING_ALLOWED=NO' "$TMP/tc.log"; then ok "test-check: runs the scheme on the picked simulator, without signing"
+else nok "test-check: runs the scheme on the picked simulator, without signing" "$(grep xcodebuild "$TMP/tc.log")"; fi
+expect_result "test-check: a scheme with no iOS destination says so" 1 'not run: the scheme has no iOS destination yet' "$(FAKE_XC_SCHEMES="MacTool:noios" xtc "$XP" --scheme MacTool)"
+mv "$TF/xcodebuild-pkg" "$TF/xcodebuild"; rm -f "$TF/xcodebuild-xc"
 
 # ---------- summary ----------
 
