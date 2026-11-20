@@ -141,6 +141,13 @@ if [ "$(sh_cfg '.verify.enabled' 'true')" = "true" ] && [[ "$verify_bin" == */* 
   echo "swift-harness: verify command '$verify_bin' is missing or not executable. The Stop check will fail until it exists."
 fi
 
+# An older install of the plugin loaded while a newer one is installed for this project: its
+# hooks and approvals are the old ones, and fixes made since do not apply.
+newer="$(sh_newer_install)"
+if [ -n "$newer" ]; then
+  echo "swift-harness: this session runs swift-harness $(jq -r .version "$(dirname "$0")/../.claude-plugin/plugin.json"), but ${newer%%	*} is installed for this project (${newer#*	} scope): Claude Code loaded an older install, and its checks are the old ones. Tell the user at once: update the older install (/plugin, swift-harness, update, or uninstall it where the newer one is enough), then start a new session."
+fi
+
 # Guest mode (#71): say once per session that the project's own rules come first.
 if [ "$(sh_cfg '.guest' 'false')" = true ] && [ "$(sh_in '.source')" != compact ]; then
   echo "swift-harness: guest mode. This project's own agent rules and docs (CLAUDE.md, AGENTS.md and what they point to) are the source of truth; swift-harness adds only its end-of-turn checks. Do not add swift-harness files, templates or rules to the project unless the user asks."

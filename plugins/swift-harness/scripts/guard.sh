@@ -49,6 +49,24 @@ fi
 if [ -z "$reason" ] && [ -n "$rel" ]; then
   snapshots="$(sh_snapshots)"
   if [ -n "$snapshots" ] && { [ "$rel" = "$snapshots" ] || [[ "$rel" == "$snapshots"/* ]]; }; then
+    # Metadata that names the test by its absolute path, written by a Snapshot.swift older than
+    # 1.12.0: fixing it by hand asks the user once per file. snapshots.sh makes every path
+    # relative in one command, touching nothing else, so the edit is refused with that command.
+    absolute=""
+    [[ "$rel" == *.json ]] && absolute="$(sh_snapshot_absolute "$snapshots")"
+    if [ -n "$absolute" ] && printf '%s\n' "$absolute" | grep -qxF -- "$rel"; then
+      count="$(printf '%s\n' "$absolute" | grep -c .)"
+      script="$(cd "$(dirname "$0")" && pwd)/snapshots.sh"
+      sh_catch guard blocked "$rel: hand edit of snapshot metadata with an absolute path, sent to snapshots.sh --relative-paths"
+      jq -n --arg reason "swift-harness: do not edit the snapshot metadata by hand: each edit asks the user. $count metadata file(s) in $snapshots/ hold an absolute path; this command makes the \"test\" and \"source\" paths of all of them relative at once, changes nothing else (the images stay as they are) and asks nothing: CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA:-}\" \"$script\" --relative-paths --project \"$SH_ROOT\"" '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: $reason
+        }
+      }'
+      exit 0
+    fi
     reason="swift-harness: $snapshots/ holds the approved snapshot baselines. They change only when the user runs /swift-harness:approve-snapshots after looking at the new images. Approve this edit only if the user asked for it."
   fi
 fi

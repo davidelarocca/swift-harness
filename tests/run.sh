@@ -15,6 +15,9 @@ TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/swift-harness-tests.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 # The simulator lock (#74) of the tests, apart from the machine's own.
 export SWIFT_HARNESS_LOCK_DIR="$TMP/sim-lock"
+# Claude Code's list of installed plugins, read by session-start and the doctor: an empty one
+# here, so that the installs of the Mac running the tests change nothing.
+export CLAUDE_CONFIG_DIR="$TMP/claude-config"
 
 passed=0
 failed=0
@@ -2366,6 +2369,14 @@ png_before="$(shasum "$S"/snapshots/*.png)"
 expect_row "doctor: a baseline made by an older helper is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '2 file\(s\) in snapshots/ name the test or source file by its absolute path.*first: snapshots/Elsewhere-macos-80-light\.json.*approve-snapshots'
 expect_result "snapshots: status counts the metadata with an absolute path" 0 '^2 metadata file\(s\) in snapshots/ hold the absolute path.*--relative-paths' "$(snap --status --project "$S")"
 expect_result "snapshots: --relative-paths takes no image name" 2 'usage:' "$(snap --relative-paths --project "$S" Here-macos-80-light)"
+# An edit by hand of such metadata would ask the user once per file: it is refused with the one
+# command that fixes them all, which needs no question. The images still ask.
+out="$(hook guard.sh "$S" "$(edit_input "$S/snapshots/Here-macos-80-light.json")")"
+if jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null <<<"$out" &&
+  grep -qE '2 metadata file\(s\) in snapshots/ hold an absolute path.*CLAUDE_PLUGIN_DATA=\\"[^\\"]+\\" \\"[^\\"]*/snapshots\.sh\\" --relative-paths --project' <<<"$out"; then
+  ok "guard: a hand edit of metadata with an absolute path is sent to snapshots.sh --relative-paths"
+else nok "guard: a hand edit of metadata with an absolute path is sent to snapshots.sh --relative-paths" "$out"; fi
+expect_ask "$S" "$S/snapshots/Here-macos-80-light.png" "guard: ... while an image there still asks"
 out="$(snap --relative-paths --project "$S")"
 expect_result "snapshots: --relative-paths rewrites the test field of each file" 0 'Made relative: snapshots/Elsewhere-macos-80-light\.json \(test: Tests/AppTests/SnapTests\.swift\)' "$out"
 expect_result "snapshots: --relative-paths says what to commit" 0 'only the file paths \("test", "source"\) of 2 metadata file\(s\) changed' "$out"
@@ -2376,6 +2387,7 @@ else nok "snapshots: --relative-paths changes one line in each file and no image
 expect_result "snapshot-watch: paths made relative by the script are not reported" 0 '^exit=0$' "$(swatch "$S")"
 expect_result "snapshots: --relative-paths with nothing to do says so" 0 'Nothing changed' "$(snap --relative-paths --project "$S")"
 expect_row "doctor: after --relative-paths the metadata passes" "$(doctor "$S")" PASS 'Snapshot metadata'
+expect_ask "$S" "$S/snapshots/Here-macos-80-light.json" "guard: metadata with relative paths asks as before"
 expect_result "snapshots: status says nothing about metadata when it is clean" 0 'No new images wait' "$(snap --status --project "$S")" 'absolute path'
 # The source a test passes (source:) is committed too: an absolute one is caught the same way.
 jq --arg s "$ELSEWHERE/Sources/App.swift" '.source = $s' "$S/snapshots/Here-macos-80-light.json" >"$TMP/sj" && mv "$TMP/sj" "$S/snapshots/Here-macos-80-light.json"
@@ -3048,7 +3060,7 @@ out="$(FAKE_VERIFY_LOG="$WLOG" hook stop-verify.sh "$WC" 2>&1)"
 if [ -z "$out" ] && [ ! -s "$WLOG" ] && [ "$(jq -r '.checks[0].detail' "$(state_dir_of "$WC")/evidence.json")" = 'verify.when is commit: the checks run before a commit' ]; then
   ok "when commit: the end of a turn runs nothing, and the record says why"
 else nok "when commit: the end of a turn runs nothing, and the record says why" "$out $(cat "$WLOG") $(cat "$(state_dir_of "$WC")/evidence.json" 2>&1)"; fi
-expect_commit_denied "$WC" "git add -A && git commit -m x" "when commit: a commit before the checks passed is refused, naming check.sh" 'have not passed on this code yet.*check\.sh.{0,2} --project'
+expect_commit_denied "$WC" "git add -A && git commit -m x" "when commit: a commit before the checks passed is refused, naming check.sh" 'have not passed on this code yet.*CLAUDE_PLUGIN_DATA=.{0,2}[^ ]*/data.{0,2} .{0,2}[^ ]*check\.sh.{0,2} --project'
 expect_commit_allowed "$WC" "git push" "when commit: a push is not a commit"
 FAKE_VERIFY_LOG="$WLOG" FAKE_VERIFY_EXIT=1 CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$WC" --agent claude >/dev/null 2>&1
 expect_commit_denied "$WC" "git commit -m x" "when commit: after a failed check the commit is refused, saying it failed" 'the checks failed on this code'
@@ -3057,6 +3069,28 @@ FAKE_VERIFY_LOG="$WLOG" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --pro
 expect_commit_allowed "$WC" "git add -A && git commit -m x" "when commit: once check.sh passed on this code, the commit goes through"
 echo 'let app = 4' >"$WC/Sources/App.swift"
 expect_commit_denied "$WC" "git commit -am x" "when commit: an edit after the check needs it again" 'have not passed'
+
+# An older install of the plugin loaded while a newer one is installed for the project.
+mkdir -p "$CLAUDE_CONFIG_DIR/plugins"
+ours="$(jq -r .version "$SCRIPTS/../.claude-plugin/plugin.json")"
+installs() { jq -n --arg root "$1" --arg v "$2" --arg ours "$ours" '{version: 2, plugins: {"swift-harness@swift-harness": [
+  {scope: "user", installPath: "/x/\($ours)", version: $ours},
+  {scope: "project", projectPath: $root, installPath: "/x/\($v)", version: $v}]}}' >"$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"; }
+installs "$WC" 99.0.0
+out="$(hook session-start.sh "$WC" '{"source":"startup"}')"
+expect_result "install: an older install loaded while a newer one is installed for the project is said" 0 "this session runs swift-harness $ours, but 99\.0\.0 is installed for this project \(project scope\).*start a new session" "exit=0
+$out"
+expect_row "doctor: ... and the doctor warns" "$(doctor "$WC")" WARN 'Plugin install' "runs swift-harness $ours, but 99\.0\.0"
+installs "$TMP/elsewhere" 99.0.0
+expect_result "install: a newer install for another project is not this one" 0 '^exit=0' "exit=0
+$(hook session-start.sh "$WC" '{"source":"startup"}')" 'is installed for this project'
+installs "$WC" 1.0.0
+expect_result "install: an older install for the project is not a problem" 0 '^exit=0' "exit=0
+$(hook session-start.sh "$WC" '{"source":"startup"}')" 'is installed for this project'
+printf 'not json' >"$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"
+expect_result "install: a list that cannot be read says nothing" 0 '^exit=0' "exit=0
+$(hook session-start.sh "$WC" '{"source":"startup"}')" 'is installed for this project'
+rm -f "$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"
 
 # The recap: a line for the user at the end of each turn whose checks ran, and a file if asked.
 RC="$(new_project recap)"

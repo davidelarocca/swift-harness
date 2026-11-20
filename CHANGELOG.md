@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## swift-harness 1.13.1 (2026-11-20)
+
+- Fix: snapshot metadata made relative by hand asked the user once per file. Baselines approved with a `Snapshot.swift` older than 1.12.0 name the test file by its absolute path; an agent that fixed them with Edit got a question for every `.json`. The guard now refuses such an edit and names the one command that fixes all of them without a question (`snapshots.sh --relative-paths`); the images, and metadata with relative paths, still ask as before.
+- Fix: with `verify.when: "commit"`, the `check.sh` command named by the refused commit (and by `/swift-harness:configure` for a pre-commit hook) did not say where the plugin keeps its state, so the result it recorded was not the one the commit guard reads, and the commit stayed refused after the checks passed. The command now carries `CLAUDE_PLUGIN_DATA`.
+- New: a session that runs an older install of swift-harness while a newer one is installed for the project is told so at its start, and the doctor warns (`Plugin install`). Claude Code can load a user-scope install left at an older version while the project-scope one was updated, and the checks are then the old ones.
+
 ## swift-harness 1.13.0 (2026-11-20)
 
 - New: `/swift-harness:configure`, a guided configuration. A few questions, each written into `.claude/swift-harness.json` as the keys it stands for, by `scripts/configure.sh` (every other key stays): how strict (`light`: reported, never blocking; `normal`; `strict`: more attempts and SwiftLint errors block), when the checks run, snapshots that fail or wait, the snapshot tolerance, how often approvals ask, security moves, where the app goes, the docs check and a recap. Run it again to change an answer; a default answer removes its key.
