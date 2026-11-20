@@ -2383,6 +2383,95 @@ set_config "$S" '{}'
 if grep -qF -- '--relative-paths' "$SKILLS/approve-snapshots/SKILL.md"; then ok "snapshots: the approval skill makes old metadata relative"
 else nok "snapshots: the approval skill makes old metadata relative"; fi
 
+# The review page: the user approves images they have seen, not a description. --status writes
+# review.html next to the new images: per component the image that changed most, as approved,
+# as it is now and with the changed pixels in red.
+S="$(new_project snapshot-page)"
+RP="$S/.build/swift-harness/snapshots/review.html"
+full_meta() { # $1 image name, $2 screen, $3 state, $4 size, $5 appearance: the metadata the helper writes
+  printf '{"os": "%s", "scale": 2, "screen": "%s", "state": "%s", "locale": "", "contractSize": "%s", "size": "%s", "appearance": "%s"}\n' \
+    "$THIS_OS" "$2" "$3" "$4" "$4" "$5" >"$S/.build/swift-harness/snapshots/$1.json"
+}
+result() { # $1 image name, $2 status, $3 reason
+  jq -n --arg s "$2" --arg r "$3" '{status: $s, reason: $r}' >"$S/.build/swift-harness/snapshots/$1.result.json"
+}
+mkdir -p "$S/snapshots"
+for a in light dark; do
+  candidate "$S" "Card-macos-200x80-$a" failed new-card
+  full_meta "Card-macos-200x80-$a" Card "" 200x80 "$a"
+  printf 'old-card' >"$S/snapshots/Card-macos-200x80-$a.png"
+  printf '{"os": "%s", "scale": 2}\n' "$THIS_OS" >"$S/snapshots/Card-macos-200x80-$a.json"
+done
+result Card-macos-200x80-light failed "Card-macos-200x80-light: 85 of 151200 pixels differ (0.06%), within x 96-110, y 118-126 pt from the top left. The new image is /somewhere/Card.png, changes in red in /somewhere/Card.diff.png."
+result Card-macos-200x80-dark failed "Card-macos-200x80-dark: 4200 of 151200 pixels differ (2.78%), within x 10-110, y 18-126 pt from the top left. The new image is /somewhere/Card.png."
+candidate "$S" Pill-long-text-macos-120-light missing new-pill
+full_meta Pill-long-text-macos-120-light Pill long-text 120x24 light
+candidate "$S" Badge-macos-200-light failed new-badge
+full_meta Badge-macos-200-light Badge "" 200x64 light
+rm -f "$S/.build/swift-harness/snapshots/Badge-macos-200-light.diff.png"
+printf 'old-badge' >"$S/snapshots/Badge-macos-200-light.png"
+result Badge-macos-200-light failed "Badge-macos-200-light: the size changed from 200x48 to 200x64 pt. The new image is /somewhere/Badge.png."
+# A name with characters HTML reads: it comes from the project, so it is escaped.
+candidate "$S" 'Odd<b>&x-macos-80-light' missing odd
+out="$(snap --status --project "$S")"
+expect_result "snapshot page: status names the page to open, before the digest" 0 "Review page, to open for the user before asking what to approve: $RP.*Digest: [0-9a-f]{64}" "exit=0
+$(tail -n +2 <<<"$out" | tr '\n' ' ')"
+page="$(cat "$RP" 2>/dev/null)"
+if grep -qF '5 snapshot images wait for your approval, in 4 components' <<<"$page" && grep -qF 'must look like its <b>Now</b> image' <<<"$page"; then
+  ok "snapshot page: it says how many images wait and what approving means"
+else nok "snapshot page: it says how many images wait and what approving means" "$(grep -m1 '<h1>' <<<"$page")"; fi
+# The order: a size change, then pixel changes with the largest first, then new images.
+if [ "$(grep -o '<h2 id="g[0-9]*">[^<]*</h2>' <<<"$page" | sed -E 's/<[^>]*>//g' | paste -sd'|' -)" = 'Badge|Card|Odd&lt;b&gt;&amp;x-macos-80-light|Pill · long-text' ]; then
+  ok "snapshot page: the largest changes are first, and a name from the project is escaped"
+else nok "snapshot page: the largest changes are first, and a name from the project is escaped" "$(grep -o '<h2 id="g[0-9]*">[^<]*</h2>' <<<"$page")"; fi
+if grep -qF '<td>2.78% of pixels</td>' <<<"$page" && grep -qF '<td>200x48 to 200x64 pt</td>' <<<"$page" &&
+  grep -qF '· changed · 2.78% of pixels, within x 10-110, y 18-126 pt from the top left' <<<"$page"; then
+  ok "snapshot page: each component has the size of its largest change, and where to look"
+else nok "snapshot page: each component has the size of its largest change, and where to look" "$(grep '<td>' <<<"$page")"; fi
+card="$(awk '/<h2 id="g[0-9]*">Card</,/<h2 id="g[0-9]*">Odd/' <<<"$page")"
+if [ "$(grep -o '<h3>[^<]*' <<<"$card" | head -1)" = '<h3>200x80, dark ' ] && grep -qF '<details><summary>1 more image of this component: 200x80, light</summary>' <<<"$card"; then
+  ok "snapshot page: a component shows the variant that changed most, the others folded under it"
+else nok "snapshot page: a component shows the variant that changed most, the others folded under it" "$(grep -o '<h3>[^<]*\|<summary>[^<]*' <<<"$card")"; fi
+if grep -qF 'src="../../../snapshots/Card-macos-200x80-dark.png"' <<<"$card" && grep -qF 'src="Card-macos-200x80-dark.png"' <<<"$card" &&
+  grep -qF 'src="Card-macos-200x80-dark.diff.png"' <<<"$card" && grep -qF "Before (approved, made on macOS $THIS_OS)" <<<"$card"; then
+  ok "snapshot page: the approved image, the new one and the changed pixels are side by side"
+else nok "snapshot page: the approved image, the new one and the changed pixels are side by side" "$(grep -o 'src="[^"]*"' <<<"$card")"; fi
+pill="$(awk '/<h2 id="g[0-9]*">Pill/,0' <<<"$page")"
+if grep -qF 'new: no approved image yet' <<<"$pill" && ! grep -qF 'Before (approved' <<<"$pill" && ! grep -qF '.diff.png' <<<"$pill"; then
+  ok "snapshot page: a new image has no approved one and no diff beside it"
+else nok "snapshot page: a new image has no approved one and no diff beside it" "$pill"; fi
+if grep -qF 'src="Odd%3Cb%3E%26x-macos-80-light.png"' <<<"$page" && ! grep -qF '<b>&x' <<<"$page"; then ok "snapshot page: a path is encoded for the link, never written as HTML"
+else nok "snapshot page: a path is encoded for the link, never written as HTML" "$(grep -o 'src="Odd[^"]*"' <<<"$page")"; fi
+if ! grep -qiE '<script|https?://|javascript:' <<<"$page" && grep -qF "default-src 'none'" <<<"$page" && ! grep -qF "$S" <<<"$page"; then
+  ok "snapshot page: no script, nothing from outside, and no absolute path of this Mac"
+else nok "snapshot page: no script, nothing from outside, and no absolute path of this Mac" "$(grep -iE '<script|https?://|javascript:' <<<"$page"; grep -F "$S" <<<"$page")"; fi
+d="$(snap_digest "$S")"
+if [ "$d" = "$(snap_digest "$S")" ] && [ -f "$RP" ] && [ -z "$(ls "$S/.build/swift-harness/snapshots" | grep -v -e '\.png$' -e '\.json$' -e '^review\.html$')" ]; then
+  ok "snapshot page: writing the page does not change the digest, and leaves no other file"
+else nok "snapshot page: writing the page does not change the digest, and leaves no other file" "$(ls -a "$S/.build/swift-harness/snapshots")"; fi
+set_config "$S" '{"snapshots":{"path":"Tests/Baselines"}}'
+mkdir -p "$S/Tests/Baselines" && cp "$S/snapshots/Badge-macos-200-light.png" "$S/Tests/Baselines/"
+snap --status --project "$S" >/dev/null
+if grep -qF 'src="../../../Tests/Baselines/Badge-macos-200-light.png"' "$RP"; then ok "snapshot page: the approved images come from snapshots.path"
+else nok "snapshot page: the approved images come from snapshots.path" "$(grep -o 'src="[^"]*Badge[^"]*"' "$RP")"; fi
+set_config "$S" '{}'
+snap --approve "$(snap_digest "$S")" --project "$S" Badge-macos-200-light >/dev/null
+[ ! -e "$RP" ] && ok "snapshot page: an approval removes the page, which showed what waited before it" || nok "snapshot page: an approval removes the page, which showed what waited before it"
+# A link in the way could lead outside the project: no page, and the status goes on without it.
+mv "$S/.build/swift-harness/snapshots" "$TMP/moved-candidates" && ln -s "$TMP/moved-candidates" "$S/.build/swift-harness/snapshots"
+out="$(snap --status --project "$S")"
+expect_result "snapshot page: with a link in the way no page is written, and the status says so" 0 'No review page could be written in \.build/swift-harness/snapshots: show the user the image files listed above' "$out"
+[ ! -e "$TMP/moved-candidates/review.html" ] && ok "snapshot page: ... and nothing lands behind the link" || nok "snapshot page: ... and nothing lands behind the link"
+expect_result "snapshot page: ... while the digest is still given" 0 '^Digest: [0-9a-f]{64}$' "$out"
+rm "$S/.build/swift-harness/snapshots" && mv "$TMP/moved-candidates" "$S/.build/swift-harness/snapshots"
+if grep -qF 'open "<the path of the review page>"' "$SKILLS/approve-snapshots/SKILL.md" && grep -qF 'do not narrate every image' "$SKILLS/approve-snapshots/SKILL.md" &&
+  grep -qF 'an approved image is how the component must look from now on' "$SKILLS/approve-snapshots/SKILL.md"; then
+  ok "snapshot page: the skill opens it, keeps its own words short and says what approving means"
+else nok "snapshot page: the skill opens it, keeps its own words short and says what approving means"; fi
+if grep -qF 'opens a page with each image before, now and its changed pixels' "$TEMPLATES/tests/Snapshot.swift" && ! grep -qF 'Show it to the user' "$TEMPLATES/tests/Snapshot.swift"; then
+  ok "snapshot page: a failing snapshot test says what the approval command shows"
+else nok "snapshot page: a failing snapshot test says what the approval command shows"; fi
+
 # ---------- guard-bash.sh: a commit with git's automatic identity ----------
 
 # With no user.email git signs a commit as <account>@<host name>, and with no user.name with

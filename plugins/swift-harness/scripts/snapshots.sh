@@ -14,6 +14,11 @@
 # `snapshots.path` (default snapshots/) and records it, so the end-of-turn notice
 # (snapshot-watch.sh) does not report it as changed without approval.
 #
+# --status also writes a page for the user to look at, review.html in the same folder as the new
+# images, and prints its path: every image waiting with its approved one and the changed pixels
+# side by side, the largest changes first. An approval is given on what the user saw there, not
+# on a description. A static file: no script, nothing from outside the project.
+#
 # The metadata names the test file relative to the project. A Snapshot.swift older than 1.12.0
 # wrote its absolute path, with the account name and the folders of the Mac that ran the test:
 # an approval makes it relative, and --relative-paths does the same for the baselines already
@@ -145,6 +150,36 @@ current_digest() {
 
 list="$(pending)"
 
+# The review page. Prints its path, or nothing when it could not be written (a link in the way,
+# an unwritable folder): the status then goes on without it.
+review_page() {
+  local page="$candidates/review.html" tmp name status reason items path
+  # The scripts change no file outside the project, and a link could lead there.
+  for path in "$SH_ROOT/.build" "$SH_ROOT/.build/swift-harness" "$candidates" "$page"; do
+    [ ! -L "$path" ] || return 0
+  done
+  items="$(
+    while IFS=$'\t' read -r name status reason; do
+      [ -n "$name" ] || continue
+      jq -nc --arg name "$name" --arg status "$status" --arg reason "$reason" \
+        --slurpfile meta <(jq -c 'if type == "object" then . else {} end' "$candidates/$name.json" 2>/dev/null || echo '{}') \
+        --slurpfile baseline <(jq -c 'if type == "object" then {os, scale} else {} end' "$SH_ROOT/$baselines/$name.json" 2>/dev/null || echo '{}') \
+        --argjson diff "$([ -f "$candidates/$name.diff.png" ] && echo true || echo false)" \
+        --argjson old "$([ -f "$SH_ROOT/$baselines/$name.png" ] && echo true || echo false)" \
+        '{name: $name, status: $status, reason: $reason, meta: ($meta[0] // {}), baseline: ($baseline[0] // {}), diff: $diff, old: $old}'
+    done <<<"$list" | jq -sc .
+  )"
+  [ -n "$items" ] || return 0
+  # A temp file renamed over the page: a redirection would write through a hard link.
+  tmp="$candidates/.review.$$.html"
+  if jq -nr --argjson items "$items" --arg project "$(basename "$SH_ROOT")" --arg baselines "$baselines" --arg up "../../../" \
+    --arg made "$(date -u +%Y-%m-%dT%H:%M:%SZ)" -f "$(dirname "$0")/snapshots-page.jq" >"$tmp" 2>/dev/null && mv -f "$tmp" "$page"; then
+    printf '%s' "$page"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 if [ "$action" = "--status" ]; then
   printf 'Project: %s\nBaselines: %s/\n' "$SH_ROOT" "$baselines"
   absolute="$(sh_snapshot_absolute "$baselines" | grep -c .)"
@@ -163,6 +198,9 @@ if [ "$action" = "--status" ]; then
     fi
     printf '  New image made on macOS %s at scale %s\n' "$(jq -r '.os // "?"' "$candidates/$name.json" 2>/dev/null)" "$(jq -r '.scale // "?"' "$candidates/$name.json" 2>/dev/null)"
   done <<<"$list"
+  page="$(review_page)"
+  if [ -n "$page" ]; then printf '\nReview page, to open for the user before asking what to approve: %s\n' "$page"
+  else printf '\nNo review page could be written in %s: show the user the image files listed above.\n' "$SH_SNAPSHOT_CANDIDATES"; fi
   printf '\nDigest: %s\n' "$(current_digest)"
   exit 0
 fi
@@ -209,5 +247,6 @@ for name in "${names[@]}"; do
   printf 'Approved: %s/%s.png (%s)\n' "$baselines" "$name" "$status"
   sh_catch "snapshot baselines" approved "$name ($status)"
 done
+rm -f "$candidates/review.html" # it showed what waited before this approval
 echo "Commit $baselines/ with the change that made these images."
 exit 0

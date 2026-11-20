@@ -160,7 +160,7 @@ enum Snapshot {
         let candidatePNG = candidates.appendingPathComponent("\(base).png")
         let candidateJSON = candidates.appendingPathComponent("\(base).json")
         let diffPNG = candidates.appendingPathComponent("\(base).diff.png")
-        let approve = "Show it to the user; only they approve it, with /swift-harness:approve-snapshots. Do not copy it into \(baselines.lastPathComponent)/ yourself."
+        let approve = "Only the user approves it: /swift-harness:approve-snapshots opens a page with each image before, now and its changed pixels, and asks which to keep. Tell them so, and which change caused it. Do not copy it into \(baselines.lastPathComponent)/ yourself."
 
         func finish(_ status: Status, problem: String? = nil, note: String? = nil, diff: CGImage? = nil) -> Outcome {
             for url in [candidatePNG, candidateJSON, diffPNG] { try? files.removeItem(at: url) }
