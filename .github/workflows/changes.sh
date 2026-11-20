@@ -34,8 +34,9 @@ lib='^plugins/swift-harness/scripts/lib\.sh$'
 # Hook tests: any plugin, test or manifest file. Root docs (README, CHANGELOG, ROADMAP, docs/)
 # are not read by tests/run.sh.
 printf 'code=%s\n' "$(has "^(plugins|tests|\.claude-plugin)/|$ci")"
-# Swift fixtures, accessibility and layout audit: the fixtures and the helpers they link.
-printf 'swift=%s\n' "$(has "^tests/fixtures/|$tpl|$ci")"
+# Swift fixtures, accessibility and layout audit: the fixtures and the helpers they link, and
+# the formatters on those helpers (tests/format-helpers.sh).
+printf 'swift=%s\n' "$(has "^tests/(fixtures/|format-helpers\.sh$)|$tpl|$ci")"
 # iOS fixture: the generated verify.sh on a package, and the doctor.
 printf 'ios=%s\n' "$(has "^tests/(ios-fixture\.sh|fixtures/ios/)|^plugins/swift-harness/scripts/(verify|doctor)\.sh$|$lib|$tpl|$ci")"
 # Check sensitivity: mutate.sh with real builds of the fixtures.

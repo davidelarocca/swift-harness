@@ -18,6 +18,11 @@
 // system menu bar (see `isWindowChrome`). `check` skips exactly these by default and prints
 // each one it skips; pass `skipWindowChrome: false` to see them fail.
 
+// A helper kept as shipped, so that a later version can be compared with it: no formatter
+// rewrites it (SwiftFormat, swift-format).
+// swiftformat:disable all
+// swift-format-ignore-file
+
 import XCTest
 
 enum AccessibilityAudit {

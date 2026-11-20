@@ -23,7 +23,8 @@
 // Images go to .build/swift-harness/screenshots/ under the project root (the folder with
 // .claude/swift-harness.json, docs/LAYOUT_CONTRACT.md or .git), or `screenshots.path` in
 // .claude/swift-harness.json, or `output:`. Each PNG has a .json beside it: screen, state,
-// platform, size, appearance, scale, OS, source file, time. A test target hosted by a
+// platform, size, appearance, scale, OS, source file, test file, time. Paths in it are
+// relative to the project root, never absolute: the file can be committed. A test target hosted by a
 // sandboxed app can neither read the contract nor write to the project: capture in a test
 // target without a host app, or pass `sizes:`, `source:` and a writable `output:`.
 //
@@ -34,7 +35,11 @@
 // window, the image looks like an empty window and capture() reports it as blank. A view of
 // one color is saved like any other.
 
-// A helper kept as shipped, so its style rules are off here; the project's own rules still apply.
+// A helper kept as shipped, so that a later version can be compared with it: no formatter
+// rewrites it (SwiftFormat, swift-format) and its style rules are off here; the project's
+// other lint rules still apply.
+// swiftformat:disable all
+// swift-format-ignore-file
 // swiftlint:disable line_length
 
 #if os(macOS)
@@ -79,6 +84,7 @@ enum Screenshot {
 
         _ = NSApplication.shared
         let content = localized(make(), locale)
+        let test = testPath(file)
         var problems: [String] = []
         for size in sizes {
             for dark in [false, true] {
@@ -105,7 +111,7 @@ enum Screenshot {
                         "scale": points.width > 0 ? Double(image.width) / Double(points.width) : 1,
                         "os": ProcessInfo.processInfo.operatingSystemVersionString,
                         "source": source,
-                        "test": "\(file)",
+                        "test": test,
                         "captured": ISO8601DateFormatter().string(from: Date()),
                         "method": "offscreen window captured from the window server",
                     ]
@@ -160,6 +166,16 @@ enum Screenshot {
         }
         guard !sizes.isEmpty else { return .failure(Failure("\(screen): no size to capture.")) }
         return .success(Plan(sizes: sizes, source: source))
+    }
+
+    /// The test file as the metadata names it: relative to the project root, or its name alone
+    /// when it is outside one. Never the absolute path, which holds the account name and the
+    /// folders of the Mac that ran the test, and the metadata of a baseline is committed.
+    static func testPath(_ file: StaticString) -> String {
+        let url = URL(fileURLWithPath: "\(file)").standardizedFileURL
+        guard let (root, _) = root(from: url.deletingLastPathComponent()) else { return url.lastPathComponent }
+        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        return url.path.hasPrefix(prefix) ? String(url.path.dropFirst(prefix.count)) : url.lastPathComponent
     }
 
     /// The file name, without extension, of one image.

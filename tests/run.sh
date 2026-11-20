@@ -343,6 +343,12 @@ TOOLLOG="$TMP/tools.log"
 mkdir -p "$PEFAKES" "$NOLINT"
 cat >"$PEFAKES/swiftformat" <<'FAKE'
 #!/bin/bash
+# The doctor's check of the config: `swiftformat stdin --config .swiftformat --quiet`.
+if [ "$1" = stdin ]; then
+  [ "${FAKE_FMT_CONFIG:-ok}" = unknown ] && { echo "error: Unknown rule 'swiftTestingTestCaseNames'." >&2; exit 70; }
+  cat
+  exit 0
+fi
 for f; do :; done
 echo "swiftformat $f" >>"$FAKE_TOOL_LOG"
 case "${FAKE_FMT:-ok}" in
@@ -1140,6 +1146,53 @@ expect_verify "verify.sh: a listed package that does not exist fails" 1 'Package
 V="$(verify_project pkg '' '' '"Packages/Core"')"
 mkdir -p "$V/Packages/Core"
 expect_verify "verify.sh: existing package with passing tests passes" 0 'verify fast: PASS' "$(run_verify "$V")"
+
+# With several test targets the one that fails can finish first: the last lines of `swift test`
+# then hold only suites that passed (#187, and the 1.11 field report). What failed is read from
+# the whole output and shown again just before the result, where the Stop hook reads: the last
+# 60 lines.
+SWF="$TMP/fakes-swift-fails"
+mkdir -p "$SWF"
+cp "$FAKES/xcodebuild" "$FAKES/swiftlint" "$SWF/"
+cat >"$SWF/swift" <<'FAKE'
+#!/bin/bash
+# fake swift test: a target that fails first, then a long one that passes
+case "${FAKE_SWIFT_OUTPUT:-both}" in
+  both)
+    echo "$PWD/Packages/Core/Tests/ATests/ATests.swift:8: error: -[ATests.OldStyleTests testDoublingTwo] : XCTAssertEqual failed: (\"4\") is not equal to (\"5\")"
+    echo "Test Case '-[ATests.OldStyleTests testDoublingTwo]' failed (0.085 seconds)."
+    echo '✘ Test doublingThreeGivesSix() recorded an issue at ATests.swift:5:38: Expectation failed: double(3) == 7'
+    ;;
+  names) echo "Test Case '-[ATests.OldStyleTests testOnlyNamed]' failed (0.085 seconds)." ;;
+  many) i=0; while [ "$i" -lt 45 ]; do echo "✘ Test broken$i() recorded an issue at ATests.swift:$i:1: Expectation failed"; i=$((i + 1)); done ;;
+esac
+i=0
+while [ "$i" -lt 150 ]; do echo "✔ Test passes$i() passed after 0.001 seconds."; i=$((i + 1)); done
+echo 'Note: Some test targets reported failures:'
+exit 1
+FAKE
+chmod +x "$SWF/swift"
+swift_fails() { # prints "exit=<code>" then the last 60 lines of verify.sh fast: what the Stop hook shows
+  local out code
+  out="$(PATH="$SWF:/usr/bin:/bin" "$V/scripts/verify.sh" fast 2>&1)"
+  code=$?
+  printf 'exit=%s\n%s' "$code" "$(tail -n 60 <<<"$out")"
+}
+out="$(swift_fails)"
+expect_result "verify.sh: an XCTest failure early in swift test is in the last 60 lines, relative to the project" 1 \
+  '^Packages/Core: Packages/Core/Tests/ATests/ATests\.swift:8: error: -\[ATests\.OldStyleTests testDoublingTwo\] : XCTAssertEqual failed' "$out" "$V/Packages"
+expect_result "verify.sh: ... and so is a Swift Testing issue" 1 '^Packages/Core: ✘ Test doublingThreeGivesSix\(\) recorded an issue at ATests\.swift:5:38: Expectation failed' "$out"
+expect_result "verify.sh: ... each failure once, under a line that says where it comes from" 1 'what failed in swift test, from its whole output \(2 line\(s\)\):' "$out"
+if [ "$(tail -n 1 <<<"$out")" = 'swift-harness-result/1: failed; checked: macOS; tested: macOS; not checked: none' ]; then ok "verify.sh: ... and the result line is still the last one"
+else nok "verify.sh: ... and the result line is still the last one" "$(tail -n 3 <<<"$out")"; fi
+expect_result "verify.sh: with no error line, the lines that name a failed test are shown" 1 "^Packages/Core: Test Case '-\[ATests\.OldStyleTests testOnlyNamed\]' failed" "$(FAKE_SWIFT_OUTPUT=names swift_fails)"
+out="$(FAKE_SWIFT_OUTPUT=many swift_fails)"
+expect_result "verify.sh: many failures are cut at 30, with the number left out" 1 '^\.\.\. and 15 more: run swift test' "$out" 'broken30\(\)'
+expect_result "verify.sh: ... and the first ones are still in the last 60 lines" 1 '^Packages/Core: ✘ Test broken0\(\)' "$out"
+expect_verify "verify.sh: a passing swift test shows no list of failures" 0 'verify fast: PASS' "$(run_verify "$V")"
+if grep -q 'what failed' <<<"$(run_verify "$V")"; then nok "verify.sh: ... not even its heading"; else ok "verify.sh: ... not even its heading"; fi
+if ! grep -qF '| tail -40' "$TEMPLATE"; then ok "verify.sh: swift test is not read through tail alone"
+else nok "verify.sh: swift test is not read through tail alone"; fi
 
 V="$(verify_project build-fails '-project App.xcodeproj' App '')"
 expect_verify "verify.sh: failing build fails" 1 'verify fast: FAIL' "$(FAKE_XCODEBUILD_EXIT=65 run_verify "$V")"
@@ -2098,6 +2151,55 @@ expect_row "doctor: an unknown screenshots key warns" "$out" WARN 'Config keys' 
 
 if grep -qF '| `tests/Snapshot.swift` |' "$SKILLS/setup/SKILL.md"; then ok "snapshots: setup installs the snapshot helper"
 else nok "snapshots: setup installs the snapshot helper"; fi
+
+# The helpers are kept as shipped, so each one turns the formatters off for itself, before its
+# first line of code. The real formatters run on them in tests/format-helpers.sh (CI).
+bad=""
+for f in "$TEMPLATES"/tests/*.swift; do
+  code="$(grep -n -m1 -E '^(import|#if|@|enum|struct|final|class|func) ' "$f" | cut -d: -f1)"
+  for marker in '// swiftformat:disable all' '// swift-format-ignore-file'; do
+    line="$(grep -n -m1 -xF -- "$marker" "$f" | cut -d: -f1)"
+    [ -n "$line" ] && [ -n "$code" ] && [ "$line" -lt "$code" ] || bad="$bad $(basename "$f"):$marker"
+  done
+done
+if [ -z "$bad" ]; then ok "templates: every test helper turns SwiftFormat and swift-format off for itself"
+else nok "templates: every test helper turns SwiftFormat and swift-format off for itself" "$bad"; fi
+# What a baseline depends on and the helper does not pin yet is said where baselines are made.
+if grep -qF 'neither pinned nor recorded yet' "$TEMPLATES/tests/Snapshot.swift" && grep -qF 'Color.accentColor' "$TEMPLATES/tests/Snapshot.swift" &&
+  grep -qF 'pass `locale:`' "$TEMPLATES/tests/Snapshot.swift"; then
+  ok "snapshots: the helper says that the locale and the accent color are not pinned"
+else nok "snapshots: the helper says that the locale and the accent color are not pinned"; fi
+
+# Where the component tests go when screens and design system are separate packages: one answer,
+# the same in the two skills that speak of it, and what the contract check sees of a test target.
+if grep -qF '**Where the helpers go.**' "$SKILLS/setup/SKILL.md" && grep -qF 'Tests/DesignSystemTests/' "$SKILLS/setup/SKILL.md" &&
+  grep -qF "the design system package's tests for shared components" "$SKILLS/setup/SKILL.md" &&
+  grep -qF 'with their own copies of the setup helpers' "$SKILLS/design-system/SKILL.md" &&
+  ! grep -qF '| `tests/Snapshot.swift` | the same test target as `LayoutContract.swift` (see step 7) |' "$SKILLS/setup/SKILL.md"; then
+  ok "skills: setup and design-system put the component tests in the same place"
+else nok "skills: setup and design-system put the component tests in the same place"; fi
+if [ "$(grep -lF 'a new dependency needs the user' "$SKILLS/design-system/SKILL.md" | wc -l | tr -d ' ')" = 1 ] &&
+  grep -qF 'test targets are checked only when the contract lists them' "$SKILLS/setup/SKILL.md" &&
+  grep -qF 'Test targets are checked only when the contract lists them' "$TEMPLATES/rules/architecture.md"; then
+  ok "skills: the limit of the contract check on test targets is said where a dependency is decided"
+else nok "skills: the limit of the contract check on test targets is said where a dependency is decided"; fi
+
+# Formatting does not rename tests: the generated config turns the rule off, the setup says so,
+# and the doctor names a swiftformat too old to know the rule. The real formatter runs in
+# tests/format-helpers.sh.
+if grep -qxF -- '--disable swiftTestingTestCaseNames' "$TEMPLATES/swiftformat" && grep -qF 'swiftTestingTestCaseNames' "$SKILLS/setup/SKILL.md" &&
+  grep -qF 'swiftformat --rules' "$SKILLS/setup/SKILL.md"; then
+  ok "templates: the generated .swiftformat does not rename Swift Testing tests, and setup says so"
+else nok "templates: the generated .swiftformat does not rename Swift Testing tests, and setup says so"; fi
+P="$(new_project formatter-config)"
+set_config "$P" '{"format":"swiftformat"}'
+if grep -q 'Formatter config' <<<"$(doctor "$P")"; then nok "doctor: no .swiftformat, no Formatter config row"; else ok "doctor: no .swiftformat, no Formatter config row"; fi
+sed 's/{{SWIFT_VERSION}}/6.2/' "$TEMPLATES/swiftformat" >"$P/.swiftformat"
+expect_row "doctor: a .swiftformat the formatter accepts passes" "$(doctor "$P")" PASS 'Formatter config' '\.swiftformat'
+expect_row "doctor: a .swiftformat with a rule this swiftformat does not know is named" "$(FAKE_FMT_CONFIG=unknown doctor "$P")" WARN 'Formatter config' "refused by this swiftformat \(Unknown rule 'swiftTestingTestCaseNames'\.\).*brew upgrade swiftformat"
+
+if grep -qF 'swiftformat:disable all' "$SKILLS/setup/SKILL.md" && [ -x "$HERE/format-helpers.sh" ]; then ok "templates: setup says the helpers are left alone by the formatters"
+else nok "templates: setup says the helpers are left alone by the formatters"; fi
 if [ "$(readlink "$HERE/fixtures/visual/Tests/ScreensTests/Snapshot.swift")" = "../../../../../plugins/swift-harness/skills/setup/templates/tests/Snapshot.swift" ]; then
   ok "snapshots: the Swift fixture compares with the template helper itself"
 else nok "snapshots: the Swift fixture compares with the template helper itself"; fi
@@ -2213,6 +2315,178 @@ out="$(doctor "$S")"
 expect_row "doctor: a baselines folder outside the project fails the config" "$out" FAIL Config 'snapshots.path must be a folder inside the project'
 expect_row "doctor: an unknown snapshots key warns" "$out" WARN 'Config keys' 'snapshots.pth'
 
+# The metadata beside a baseline never names the test file by its absolute path: the folder is
+# committed, and that path holds the account name and the folders of the Mac that ran the test.
+if ! grep -qF '"test": "\(file)"' "$TEMPLATES/tests/Snapshot.swift" "$TEMPLATES/tests/Screenshot.swift" &&
+  grep -qF '"test": test,' "$TEMPLATES/tests/Snapshot.swift" && grep -qF '"test": test,' "$TEMPLATES/tests/Screenshot.swift" &&
+  grep -qF 'static func testPath' "$TEMPLATES/tests/Screenshot.swift"; then
+  ok "snapshots: the helpers write the test file relative to the project"
+else nok "snapshots: the helpers write the test file relative to the project"; fi
+if ! grep -lE '"test": "/' "$HERE"/fixtures/visual/snapshots/*.json >/dev/null; then ok "snapshots: the fixture's own baselines hold no absolute path"
+else nok "snapshots: the fixture's own baselines hold no absolute path"; fi
+
+S="$(new_project snapshot-paths)"
+mkdir -p "$S/Tests/AppTests"
+echo '// tests' >"$S/Tests/AppTests/SnapTests.swift"
+git -C "$S" add -A && git -C "$S" commit -qm tests
+ELSEWHERE="/elsewhere/app" # the project root on the Mac that made a baseline
+meta() { # $1 project, $2 image name, $3 test path: the metadata an older helper left
+  printf '{"os": "%s", "scale": 2, "test": "%s"}\n' "$THIS_OS" "$3" >"$1/.build/swift-harness/snapshots/$2.json"
+}
+candidate "$S" Here-macos-80-light missing a
+meta "$S" Here-macos-80-light "$S/Tests/AppTests/SnapTests.swift"
+candidate "$S" Elsewhere-macos-80-light missing b
+meta "$S" Elsewhere-macos-80-light "$ELSEWHERE/Tests/AppTests/SnapTests.swift"
+candidate "$S" Gone-macos-80-light missing c
+meta "$S" Gone-macos-80-light "$ELSEWHERE/Tests/OldTests/GoneTests.swift"
+candidate "$S" Relative-macos-80-light missing d
+meta "$S" Relative-macos-80-light "Tests/AppTests/SnapTests.swift"
+candidate "$S" NoTest-macos-80-light missing e
+out="$(snap --approve "$(snap_digest "$S")" --project "$S")"
+tests_of() { for n in "$@"; do jq -r '.test // "none"' "$S/snapshots/$n-macos-80-light.json"; done | paste -sd' ' -; }
+if [ "$(tests_of Here Elsewhere Gone Relative NoTest)" = "Tests/AppTests/SnapTests.swift Tests/AppTests/SnapTests.swift GoneTests.swift Tests/AppTests/SnapTests.swift none" ]; then
+  ok "snapshots: an approval makes the test path relative (under the project, from another Mac, a file that is gone)"
+else nok "snapshots: an approval makes the test path relative (under the project, from another Mac, a file that is gone)" "$(tests_of Here Elsewhere Gone Relative NoTest)
+$out"; fi
+if ! grep -rqE "$S|\"/" "$S/snapshots" && jq -e '.approved and .os and .approvedFrom == "missing"' "$S/snapshots/Here-macos-80-light.json" >/dev/null; then
+  ok "snapshots: a fresh approval leaves no absolute path in the baselines folder"
+else nok "snapshots: a fresh approval leaves no absolute path in the baselines folder" "$(grep -rE "$S|\"/" "$S/snapshots")"; fi
+expect_row "doctor: baselines with relative test paths pass" "$(doctor "$S")" PASS 'Snapshot metadata' 'no absolute path in snapshots/'
+
+# Baselines approved with an older helper: reported, and made relative only by the approval script.
+for n in Here Elsewhere; do
+  jq --arg t "$ELSEWHERE/Tests/AppTests/SnapTests.swift" '.test = $t' "$S/snapshots/$n-macos-80-light.json" >"$TMP/sj" && mv "$TMP/sj" "$S/snapshots/$n-macos-80-light.json"
+done
+git -C "$S" add -A && git -C "$S" commit -qm "baselines from an older helper"
+hook session-start.sh "$S" '{"source":"startup"}' >/dev/null
+png_before="$(shasum "$S"/snapshots/*.png)"
+expect_row "doctor: a baseline made by an older helper is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '2 file\(s\) in snapshots/ name the test file by its absolute path.*first: snapshots/Elsewhere-macos-80-light\.json.*approve-snapshots'
+expect_result "snapshots: status counts the metadata with an absolute path" 0 '^2 metadata file\(s\) in snapshots/ hold the absolute path.*--relative-paths' "$(snap --status --project "$S")"
+expect_result "snapshots: --relative-paths takes no image name" 2 'usage:' "$(snap --relative-paths --project "$S" Here-macos-80-light)"
+out="$(snap --relative-paths --project "$S")"
+expect_result "snapshots: --relative-paths rewrites the test field of each file" 0 'Made relative: snapshots/Elsewhere-macos-80-light\.json \(test: Tests/AppTests/SnapTests\.swift\)' "$out"
+expect_result "snapshots: --relative-paths says what to commit" 0 'only the "test" field of 2 metadata file\(s\) changed' "$out"
+if [ "$png_before" = "$(shasum "$S"/snapshots/*.png)" ] && ! grep -rqE '"/' "$S/snapshots" &&
+  [ "$(git -C "$S" diff --numstat | awk '{ a += $1; d += $2 } END { print NR, a, d }')" = "2 2 2" ]; then
+  ok "snapshots: --relative-paths changes one line in each file and no image"
+else nok "snapshots: --relative-paths changes one line in each file and no image" "$(git -C "$S" diff --stat)"; fi
+expect_result "snapshot-watch: paths made relative by the script are not reported" 0 '^exit=0$' "$(swatch "$S")"
+expect_result "snapshots: --relative-paths with nothing to do says so" 0 'Nothing changed' "$(snap --relative-paths --project "$S")"
+expect_row "doctor: after --relative-paths the metadata passes" "$(doctor "$S")" PASS 'Snapshot metadata'
+expect_result "snapshots: status says nothing about metadata when it is clean" 0 'No new images wait' "$(snap --status --project "$S")" 'absolute path'
+# Screenshots are not committed by default; a folder set in the config can be.
+mkdir -p "$S/review/shots"
+printf '{"os": "27.0", "test": "%s/Tests/AppTests/ShotTests.swift"}\n' "$ELSEWHERE" >"$S/review/shots/Main-macos-600x400-light.json"
+set_config "$S" '{"screenshots":{"path":"review/shots"}}'
+expect_row "doctor: screenshot metadata with an absolute path is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '1 file\(s\) in review/shots/.*run the tests that capture again'
+set_config "$S" '{}'
+if grep -qF -- '--relative-paths' "$SKILLS/approve-snapshots/SKILL.md"; then ok "snapshots: the approval skill makes old metadata relative"
+else nok "snapshots: the approval skill makes old metadata relative"; fi
+
+# ---------- guard-bash.sh: a commit with git's automatic identity ----------
+
+# With no user.email git signs a commit as <account>@<host name>, and with no user.name with
+# the full name of the account: once pushed, that leaves only by rewriting history. The guard
+# denies a command that writes a commit while the identity is that one.
+
+# The environment of a Mac where git was never configured: no global or system config, no
+# identity in the environment. The project's own config stays.
+bare_git() { env -u EMAIL -u GIT_COMMITTER_EMAIL -u GIT_COMMITTER_NAME -u GIT_AUTHOR_EMAIL -u GIT_AUTHOR_NAME HOME="$TMP/no-home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$@"; }
+mkdir -p "$TMP/no-home"
+commit_guard() { # $1 project, $2 command, $3 the session's folder (default: the project)
+  jq -nc --arg cwd "${3:-$1}" --arg c "$2" '{cwd: $cwd, session_id: "test", tool_name: "Bash", tool_input: {command: $c}}' |
+    bare_git env CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$1" "$SCRIPTS/guard-bash.sh"
+}
+expect_commit_denied() { # $1 project, $2 command, $3 test name, $4 regex on the reason, $5 folder
+  local out
+  out="$(commit_guard "$1" "$2" "${5:-}" 2>&1)"
+  if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$out" 2>/dev/null)" = deny ] && grep -qE -- "${4:-.}" <<<"$out"; then ok "$3"
+  else nok "$3" "not denied: $2
+$out"; fi
+}
+expect_commit_allowed() { # $1 project, $2 command, $3 test name, $4 folder
+  local out
+  out="$(commit_guard "$1" "$2" "${4:-}" 2>&1)"
+  if [ -z "$out" ]; then ok "$3"; else nok "$3" "unexpected output for: $2
+$out"; fi
+}
+
+P="$(new_project commit-identity)"
+expect_commit_allowed "$P" "git commit -m x" "commit identity: a commit with user.name and user.email set goes through"
+
+git -C "$P" config --unset user.email
+if bare_git git -C "$P" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+  # git builds an address from the account and the host name: the automatic identity.
+  expect_commit_denied "$P" "git commit -m x" "commit identity: a commit with no user.email is denied before it exists" 'user\.email is not set'
+  expect_commit_denied "$P" "git add -A && git commit -m \"a message\"" "commit identity: ... also after another command"
+  expect_commit_denied "$P" "git -C $P commit -m x" "commit identity: ... also with git -C" '' "$TMP"
+  expect_commit_denied "$P" "cd .. && git commit -m x" "commit identity: ... also after a cd, from a subfolder" '' "$P/Sources"
+  for sub in "merge feature" "pull" "cherry-pick abc123" "revert HEAD" "rebase main" "am patch.mbox"; do
+    expect_commit_denied "$P" "git $sub" "commit identity: git ${sub%% *} writes commits too"
+  done
+  out="$(commit_guard "$P" "git commit -m x")"
+  if grep -qF 'git config --global user.email' <<<"$out" && grep -qF 'do not give an identity yourself' <<<"$out" && grep -qF '"guardCommitIdentity\": false' <<<"$out" &&
+    ! grep -qF "$(bare_git git -C "$P" var GIT_COMMITTER_IDENT | sed -E 's/.*<(.*)>.*/\1/')" <<<"$out"; then
+    ok "commit identity: the reason names the fix and the switch, and prints no account or host name"
+  else nok "commit identity: the reason names the fix and the switch, and prints no account or host name" "$out"; fi
+  if grep -rqs '"check":"commit identity","kind":"blocked"' "$TMP/data/state"; then
+    ok "commit identity: the denied commit is in the catch log"
+  else nok "commit identity: the denied commit is in the catch log"; fi
+  out="$(bare_git env PATH="$PEFAKES:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)"
+  expect_row "doctor: no user.email is a warning that names the fix" "$out" WARN 'Git identity' 'user\.email is not set.*git config --global user\.email.*user\.useConfigOnly'
+  if ! grep -qF "$(bare_git git -C "$P" var GIT_COMMITTER_IDENT | sed -E 's/.*<(.*)>.*/\1/')" <<<"$out"; then ok "doctor: the automatic identity itself is not printed"
+  else nok "doctor: the automatic identity itself is not printed" "$out"; fi
+  set_config "$P" '{"guardCommitIdentity":false}'
+  expect_commit_allowed "$P" "git commit -m x" "commit identity: guardCommitIdentity false turns the check off"
+  set_config "$P" '{}'
+  git -C "$P" config user.useConfigOnly true
+  expect_commit_allowed "$P" "git commit -m x" "commit identity: where git refuses by itself (user.useConfigOnly) the guard says nothing"
+  expect_row "doctor: ... and the doctor says git refuses until the identity is set" \
+    "$(bare_git env PATH="$PEFAKES:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)" INFO 'Git identity' 'git refuses to commit without one'
+  git -C "$P" config --unset user.useConfigOnly
+else
+  # No host name to build an address from: git itself refuses the commit.
+  expect_commit_allowed "$P" "git commit -m x" "commit identity: where git cannot build an identity it refuses by itself, and the guard says nothing"
+fi
+expect_commit_allowed "$P" "git status" "commit identity: a command that writes no commit goes through"
+expect_commit_allowed "$P" "git log --grep commit" "commit identity: the word commit as an argument is not a commit"
+expect_commit_allowed "$P" "git commit-graph write" "commit identity: commit-graph is not a commit"
+expect_commit_allowed "$P" "git -c user.name=a -c user.email=a@example.com commit -m x" "commit identity: an identity given in the command goes through"
+expect_commit_allowed "$P" "GIT_COMMITTER_EMAIL=a@example.com GIT_AUTHOR_EMAIL=a@example.com git commit -m x" "commit identity: ... also given in the environment"
+expect_commit_allowed "$P" "git -C \"\$OTHER\" commit -m x" "commit identity: a folder known only at run time is not asked"
+
+# An address that is the host name: what a config copied from the automatic identity holds.
+git -C "$P" config user.email someone@some-mac.local
+expect_commit_denied "$P" "git commit -m x" "commit identity: an address ending in .local is denied" 'ends in \.local'
+expect_row "doctor: an address ending in .local is a warning" \
+  "$(bare_git env PATH="$PEFAKES:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)" WARN 'Git identity' 'ends in \.local'
+git -C "$P" config user.email test@example.com
+git -C "$P" config --unset user.name
+expect_commit_denied "$P" "git commit -m x" "commit identity: no user.name is denied" 'user\.name is not set'
+git -C "$P" config user.name test
+expect_row "doctor: an identity that is set passes" \
+  "$(bare_git env PATH="$PEFAKES:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/doctor.sh" "$P" 2>&1)" PASS 'Git identity' 'user\.name and user\.email are set'
+set_config "$P" '{"guardCommitIdentity":"no"}'
+expect_row "doctor: guardCommitIdentity must be true or false" "$(doctor "$P")" FAIL Config 'guardCommitIdentity must be true or false'
+rm "$P/.claude/swift-harness.json"
+git -C "$P" config --unset user.email
+expect_commit_allowed "$P" "git commit -m x" "commit identity: a project without swift-harness.json is left alone"
+
+# The generated verify.sh through the Stop hook: the test that failed first is in what Claude
+# reads at the end of the turn (the "Done when" of the field report, item 6).
+SV="$(new_project stop-swift-fails)"
+sed -e 's|{{XCODE_CONTAINER_FLAG}}||' -e 's|{{SCHEME}}||' -e 's|{{LOCAL_PACKAGES}}|"Packages/Core"|' -e 's|{{PLATFORMS}}|"macOS"|' -e 's|{{IOS_SIMULATOR}}||' "$TEMPLATE" >"$SV/scripts/verify.sh"
+mkdir -p "$SV/Packages/Core"
+echo '// swift-tools-version:5.9' >"$SV/Packages/Core/Package.swift"
+set_config "$SV" '{"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast"}}'
+git -C "$SV" add -A && git -C "$SV" commit -qm "the generated verify script"
+approve "$SV" >/dev/null
+hook session-start.sh "$SV" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$SV/Sources/App.swift"
+out="$(jq -nc --arg cwd "$SV" '{cwd: $cwd, session_id: "test"}' | PATH="$SWF:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$SV" "$SCRIPTS/stop-verify.sh" 2>&1)"
+expect_result "stop: a test that failed before a long passing target is in what Claude reads" 2 'error: -\[ATests\.OldStyleTests testDoublingTwo\]' "exit=$?
+$out"
+
 # ---------- security settings (#32) ----------
 
 sec() { CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/security.sh" "$@"; }
@@ -2321,6 +2595,20 @@ expect_row "security: doctor names what already weakens protection in it" "$out"
 out="$(sec --status --project "$P")"
 expect_result "security: approve-security lists an unreviewed baseline in full" 0 'recorded automatically.*app-sandbox = true.*weakening protection:.*allow-jit = true' "exit=0
 $(printf '%s' "$out" | tr '\n' ' ')"
+# The check's own switch is listed with the settings. With no security.enabled key in the config
+# its value is the default: the status says so, and the recorded line stays as it was approved.
+expect_result "security: a default shown with the settings is called the default" 0 '^  \.claude/swift-harness\.json: security\.enabled = true \(the default: the file has no security\.enabled key\)$' "exit=0
+$out"
+if [ "$(sec state --project "$P" | grep -F 'security.enabled')" = '.claude/swift-harness.json: security.enabled = true' ]; then ok "security: ... and the recorded line is unchanged"
+else nok "security: ... and the recorded line is unchanged" "$(sec state --project "$P" | grep -F 'security.enabled')"; fi
+before="$(printf '%s' "$out" | sed -n 's/^Digest: //p')"
+jq '. + {security: {enabled: true}}' "$P/.claude/swift-harness.json" >"$TMP/sj" && mv "$TMP/sj" "$P/.claude/swift-harness.json"
+out2="$(sec --status --project "$P")"
+expect_result "security: a value written in the config is not called the default" 0 '^  \.claude/swift-harness\.json: security\.enabled = true$' "exit=0
+$out2" 'the default'
+if [ "$before" = "$(printf '%s' "$out2" | sed -n 's/^Digest: //p')" ]; then ok "security: ... and the digest to approve is the same either way"
+else nok "security: ... and the digest to approve is the same either way"; fi
+git -C "$P" checkout -q -- .claude/swift-harness.json
 sec --approve "$(printf '%s' "$out" | sed -n 's/^Digest: //p')" --project "$P" >/dev/null
 expect_row "security: once reviewed, the baseline passes" "$(doctor "$P")" PASS 'Security settings' 'unchanged since approval'
 expect_result "security: marking the automatic baseline reviewed in a session is shown to the user" 0 'baseline was approved in this session.*marked as reviewed' "exit=0
@@ -3604,6 +3892,28 @@ expect_result "weakened: a smaller tolerance or a larger Min is not a weakening"
 if jq -e '.hooks.Stop[].hooks[] | select(.command | endswith("weaken-watch.sh\""))' "$PLUGIN/hooks/hooks.json" >/dev/null; then
   ok "weakened: the notice runs at the end of every turn"
 else nok "weakened: the notice runs at the end of every turn"; fi
+
+# The plugin's own test helpers carry a swiftlint:disable line: a helper copied as shipped is
+# not a check made weaker. What the project adds to it still is.
+WH="$(new_project weaken-helpers)"
+mkdir -p "$WH/Tests/AppTests"
+echo 'import XCTest' >"$WH/Tests/AppTests/AppTests.swift"
+git -C "$WH" add -A && git -C "$WH" commit -qm tests
+hook session-start.sh "$WH" '{"source":"startup"}' >/dev/null
+weaken_helpers() { local o c; o="$(hook weaken-watch.sh "$WH" 2>&1)"; c=$?; printf 'exit=%s\n%s' "$c" "$o"; }
+cp "$TEMPLATES"/tests/*.swift "$WH/Tests/AppTests/"
+expect_result "weakened: the helpers copied as shipped are not reported" 0 '^exit=0$' "$(weaken_helpers)" 'swift-harness'
+sed -i '' 's|^// swiftlint:disable line_length$|// swiftlint:disable line_length force_cast|' "$WH/Tests/AppTests/Screenshot.swift"
+expect_result "weakened: a rule added to a helper's own line is reported" 0 'Tests/AppTests/Screenshot\.swift: 1 swiftlint:disable added \(0 -> 1\)' "$(weaken_helpers)" 'Snapshot\.swift|KeyboardCheck\.swift'
+printf '// swiftlint:disable:next force_cast\nlet extra = 1\n' >>"$WH/Tests/AppTests/Snapshot.swift"
+expect_result "weakened: another swiftlint:disable in a helper is reported" 0 'Tests/AppTests/Snapshot\.swift: 1 swiftlint:disable added \(0 -> 1\)' "$(weaken_helpers)"
+printf '        throw XCTSkip("not today")\n' >>"$WH/Tests/AppTests/FocusOrder.swift"
+expect_result "weakened: a skip added to a helper is reported, the helper's own is not" 0 'Tests/AppTests/FocusOrder\.swift: 1 skip added \(0 -> 1\)' "$(weaken_helpers)"
+printf '// swiftlint:disable line_length\nlet other = 1\n' >"$WH/Tests/AppTests/OtherTests.swift"
+expect_result "weakened: a helper's line in a file of another name is reported" 0 'Tests/AppTests/OtherTests\.swift: 1 swiftlint:disable added' "$(weaken_helpers)"
+mkdir -p "$WH/Sources/Extra"
+printf '// swiftlint:disable force_cast\nlet mine = 1\n' >"$WH/Sources/Extra/KeyboardCheck.swift"
+expect_result "weakened: a file named as a helper, with a line of its own, is reported" 0 'Sources/Extra/KeyboardCheck\.swift: 1 swiftlint:disable added' "$(weaken_helpers)"
 
 # ---------- adoption audit (#104) ----------
 

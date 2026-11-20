@@ -1,5 +1,13 @@
 #!/bin/bash
-# PreToolUse (Bash), opt-in with "guardBash": true (#135): ask the user before a shell command
+# PreToolUse (Bash). Two checks on the text of a shell command.
+#
+# 1. The commit identity, on unless "guardCommitIdentity" is false: a command that writes a
+#    commit (git commit, merge, pull, cherry-pick, revert, rebase, am) is denied while the
+#    identity is git's automatic one, <account>@<host name> (lib.sh, sh_git_identity). The
+#    folder is the one of git -C, of a cd earlier in the command, or the session's. A command
+#    that gives the identity itself (-c user.email=..., GIT_COMMITTER_EMAIL=...) is let through.
+#
+# 2. Opt-in with "guardBash": true (#135): ask the user before a shell command
 # that writes to a protected path, as guard.sh does for the Edit, Write and MultiEdit tools.
 # The areas are guard.sh's: protectedPaths, project.pbxproj (unless guardPbxproj is false) and
 # the snapshot and performance baselines.
@@ -15,10 +23,55 @@
 
 . "$(dirname "$0")/lib.sh"
 sh_init || exit 0
-[ "$(sh_cfg '.guardBash' 'false')" = "true" ] || exit 0
 
 cmd="$(sh_in '.tool_input.command')"
 [ -n "$cmd" ] || exit 0
+
+# ---------- 1. the commit identity ----------
+
+# git, its options before the subcommand, and a subcommand that writes a commit.
+GIT_OPTION="[[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|--[a-z-]+(=[^[:space:]]+)?|-[a-zA-Z])"
+COMMITS="(^|[^[:alnum:]_.-])git($GIT_OPTION)*[[:space:]]+(commit|merge|pull|cherry-pick|revert|rebase|am)([[:space:];&|)]|\$)"
+GIVEN="(user[.]email=|GIT_COMMITTER_EMAIL=)"
+found=""
+[[ "$cmd" =~ $COMMITS ]] && found="${BASH_REMATCH[0]}"
+if [ -n "$found" ] && [ "$(sh_cfg '.guardCommitIdentity' 'true')" != "false" ] && ! [[ "$cmd" =~ $GIVEN ]]; then
+  before="${cmd%%"$found"*}"
+  dir=""
+  re="-C[[:space:]]+([^[:space:]]+)"
+  if [[ "$found" =~ $re ]]; then
+    dir="${BASH_REMATCH[1]}"
+  else
+    re="(^|[;&|({[:space:]])cd[[:space:]]+([^[:space:];&|)]+)"
+    [[ "$before" =~ $re ]] && dir="${BASH_REMATCH[2]}"
+  fi
+  dir="${dir#[\"\']}"
+  dir="${dir%[\"\']}"
+  dir="${dir/#\~/$HOME}"
+  here="$(sh_in '.cwd')"
+  [ -n "$here" ] || here="$SH_ROOT"
+  case "$dir" in "") dir="$here" ;; /*) ;; *) dir="$here/$dir" ;; esac
+  # A folder named through a variable, or one the command creates first, is not there to ask.
+  [ -d "$dir" ] || dir=""
+  why=""
+  [ -z "$dir" ] || why="$(sh_git_identity "$dir")"
+  if [ -n "$why" ]; then
+    reason="swift-harness: this command writes a commit, and $why. A commit keeps that for good: once pushed it leaves only by rewriting history. Do not run it, and do not give an identity yourself, in the command or in git config. Stop and tell the user to set theirs: git config --global user.name \"<name>\" and git config --global user.email \"<address>\" (on GitHub, the noreply address in Settings > Emails keeps their own private). To turn this check off: \"guardCommitIdentity\": false in .claude/swift-harness.json."
+    sh_catch "commit identity" blocked "a commit with git's automatic identity"
+    jq -n --arg reason "$reason" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: $reason
+      }
+    }'
+    exit 0
+  fi
+fi
+
+# ---------- 2. protected paths ----------
+
+[ "$(sh_cfg '.guardBash' 'false')" = "true" ] || exit 0
 
 # A path token: it starts the command or follows a space, a quote, = ( or / (an absolute path or
 # ./), and ends at a space, a quote, a separator or a slash (a file under a protected folder).

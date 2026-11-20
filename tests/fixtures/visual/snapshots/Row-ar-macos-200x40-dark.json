@@ -11,7 +11,7 @@
   "size": "200x40",
   "source": "",
   "state": "",
-  "test": "/private/tmp/sh-fx/Tests/ScreensTests/SnapshotTests.swift",
+  "test": "Tests/ScreensTests/SnapshotTests.swift",
   "approved": "2026-11-06T18:20:46Z",
   "approvedFrom": "missing"
 }

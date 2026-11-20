@@ -101,7 +101,7 @@ For each template, if the target file does not exist, create it with placeholder
 | `docs/LAYOUT_CONTRACT.md` | `docs/LAYOUT_CONTRACT.md` (see step 7) |
 | `tests/LayoutContract.swift` | a test target that can import SwiftUI and the screens, without a sandboxed host app (see step 7) |
 | `tests/Screenshot.swift` | the same test target as `LayoutContract.swift` (see step 7) |
-| `tests/Snapshot.swift` | the same test target as `LayoutContract.swift` (see step 7) |
+| `tests/Snapshot.swift` | the test target of what it draws: next to `LayoutContract.swift` for screens, the design system package's tests for shared components (see step 7, "Where the helpers go") |
 | `tests/AccessibilityAudit.swift` | a UI test target (XCUITest) of the app (see step 7, accessibility) |
 | `tests/KeyboardCheck.swift` | the same test target as `LayoutContract.swift`, or the design system package tests (see step 7, keyboard) |
 | `tests/FocusOrder.swift` | the UI test target, next to `AccessibilityAudit.swift` (see step 7, keyboard) |
@@ -109,10 +109,14 @@ For each template, if the target file does not exist, create it with placeholder
 | `tests/PerformanceBudget.swift` | a package test target of the code it measures, so `fast` runs it (see step 7, performance budget) |
 | `docs/adr/0000-template.md` | `docs/adr/0000-template.md` |
 | `swiftlint.yml` | `.swiftlint.yml` |
-| `swiftformat` | `.swiftformat` (only if swiftformat was chosen) |
+| `swiftformat` | `.swiftformat` (only if swiftformat was chosen; see the note on test names below) |
 | `swift-format` | `.swift-format` (only if swift-format was chosen; without it swift-format uses 2-space indentation and reformats every edited file) |
 | `verify.sh` | `scripts/verify.sh` (then `chmod +x`) |
 | `swift-harness.json` | `.claude/swift-harness.json` (this file switches the plugin hooks on for this project) |
+
+The generated `.swiftformat` turns off `swiftTestingTestCaseNames`: with `--swiftversion 6.2` or later that rule rewrites every Swift Testing name (`@Test func savesTheDraft()`) as a raw identifier with spaces between backticks, so a commit meant as formatting only would rename every test. Say it in the summary, with the other rule that touches tests and stays on (`redundantSwiftTestingSuite` removes a bare `@Suite`), so a project that wants the new names can remove the line. Run `swiftformat --rules`: if `swiftTestingTestCaseNames` is not listed, the installed swiftformat is older than the rule and stops at a name it does not know, so remove the `--disable` line and tell the user.
+
+The files under `tests/` are helpers kept as shipped: copy them unchanged, header included, so a later version of the plugin can be compared with them. Each one turns the formatters off for itself (`// swiftformat:disable all`, `// swift-format-ignore-file`), so `swiftformat .` and the format-on-edit hook leave it alone: do not add them to `--exclude`, and do not reformat them by hand.
 
 Rules for filling templates:
 
@@ -140,7 +144,7 @@ Rules for filling templates:
 Only when the code is split into SwiftPM packages with several targets. Offer to create `docs/architecture-contracts.json`, which makes the end-of-turn check fail when a target gains a dependency the contract does not allow:
 
 1. Read the current graph with `swift package dump-package` in each package folder (it runs `Package.swift`: ask before running it in a project you have not built).
-2. Propose one entry per non-test target, listing its current dependencies: local targets by name, products of other packages as `package/product`. Point out any dependency that looks like a boundary violation instead of copying it silently.
+2. Propose one entry per non-test target, listing its current dependencies (test targets are checked only when listed: list one when its dependencies are a boundary worth keeping, and say that the others are not checked): local targets by name, products of other packages as `package/product`. Point out any dependency that looks like a boundary violation instead of copying it silently.
 3. Write the file only after the user agrees, with `"version": 1` and package folders as keys (`"."` for the root package). Suggest adding it to `protectedPaths` so Claude asks before editing it.
 
 Skip this step for Xcode-only projects or a single target: there is nothing to check.
@@ -155,7 +159,9 @@ Offer it when the app has windows the user resizes. Fill `docs/LAYOUT_CONTRACT.m
 4. Copy `tests/LayoutContract.swift` into a test target that can import the screens and is not hosted by a sandboxed app (a sandboxed host cannot read `docs/`). Add one test per row, `LayoutContract.check("<View>") { <View>(...) }` and one for its Window, with the preview data the views need. Run them and report the result: a failing row is a real finding, not something to fix in the setup.
 5. List popovers, sheets and secondary windows opened from these screens under "Presented UI".
 6. Offer screenshots for review: copy `tests/Screenshot.swift` next to `LayoutContract.swift` and add one test per row, `Screenshot.capture("<View>") { <View>(...) }`. It saves PNG images at Min and Default, light and dark, to `.build/swift-harness/screenshots/` (add `.build/` to `.gitignore` if it is missing, or set `screenshots.path` in `.claude/swift-harness.json` to an ignored folder). The `ui-reviewer` agent looks at them; they are not compared with a baseline (item 7 does that). Each image takes about a third of a second: with many screens, capture the main ones. The generated `scripts/verify.sh fast` runs `swift test` for packages at the end of every turn, so captures in a package stay current; for an Xcode target it only builds, and the tests run in `full` mode. Put the captures (and the layout tests) in a package test target when you can, and say which case applies.
-7. Offer visual regression for shared components: copy `tests/Snapshot.swift` next to `Screenshot.swift` and add a gallery test file with one `Snapshot.verify("<Component>", sizes: ["<width>"], state: "<state>") { ... }` per component in `docs/COMPONENT_REGISTRY.md` and state: default, long text, a long language (`locale: "de"`) and right to left (`locale: "ar"`) where the component shows text. Run it once: every image fails as missing, which is expected. Tell the user to look at them and run `/swift-harness:approve-snapshots`, then commit `snapshots/`. Never copy the images into `snapshots/` yourself. Baselines are pinned to this Mac's macOS version: say that other Macs and CI runners report them as not compared.
+7. Offer visual regression for shared components: copy `tests/Snapshot.swift` into the test target of the components, with `LayoutContract.swift` and `Screenshot.swift` beside it (see "Where the helpers go" below), and add a gallery test file with one `Snapshot.verify("<Component>", sizes: ["<width>"], state: "<state>") { ... }` per component in `docs/COMPONENT_REGISTRY.md` and state: default, long text, a long language (`locale: "de"`) and right to left (`locale: "ar"`) where the component shows text. Run it once: every image fails as missing, which is expected. Tell the user to look at them and run `/swift-harness:approve-snapshots`, then commit `snapshots/`. Never copy the images into `snapshots/` yourself. Baselines are pinned to this Mac's macOS version: say that other Macs and CI runners report them as not compared.
+
+**Where the helpers go.** A test lives in the test target of the code it draws, and the helpers are copied there with it. Screens: the layout tests, the screenshots and the snapshots of whole screens go in a test target that can import the screens. Shared components: the snapshot gallery and the keyboard tests go in the design system's test target (`Tests/DesignSystemTests/` when it is a package, as the `design-system` skill lays it out). When screens and design system are separate packages, that means two copies of `LayoutContract.swift` and `Screenshot.swift` (and `Snapshot.swift` where both snapshot): the helpers are made to be copied, each copy is internal to its test target, and they are kept as shipped, so two copies cost nothing to keep in step. Do not add a dependency from one package's test target to the other package to share one copy: a new dependency between modules needs the user's agreement first, also for a test target, and the contract check does not see it there (test targets are checked only when the contract lists them). With one package, or with the design system in a folder of the app target, everything goes in the one test target.
 
 Skip items 1-6 for apps without resizable windows; item 7 applies to any app with shared components (it needs `LayoutContract.swift` and `Screenshot.swift` in the test target, not a contract). It can be done later by asking for a layout contract or snapshot tests.
 

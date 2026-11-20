@@ -149,6 +149,29 @@ sh_same_or_under() { # $1 resolved path, $2 protected path
   done
 }
 
+# Why a commit made in the folder $1 would carry git's automatic identity; nothing when the
+# identity is set (#2 of the 1.11 field report). Without user.email git signs with the account
+# and the host name of the machine (<account>@<host name>, on a Mac ending in .local), and
+# without user.name with the full name of the account. Once pushed, that leaves a repository
+# only by rewriting its history. Nothing either where git refuses a commit by itself
+# (user.useConfigOnly, or a host name it cannot build an address from): sh_git_refuses tells.
+# The text names no value: it can end in a report pasted somewhere public.
+sh_git_refuses() { ! git -C "$1" var GIT_COMMITTER_IDENT >/dev/null 2>&1; }
+sh_git_identity() {
+  local dir="$1" ident email
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  ident="$(git -C "$dir" var GIT_COMMITTER_IDENT 2>/dev/null)" || return 0
+  email="${ident#*<}"
+  email="${email%%>*}"
+  if [ -z "$(git -C "$dir" config user.email 2>/dev/null)" ] && [ -z "${GIT_COMMITTER_EMAIL:-}${EMAIL:-}" ]; then
+    printf 'user.email is not set, so git signs commits with the account and the host name of this Mac (<account>@<host name>)'
+  elif [[ "$email" == *.local || "$email" == *.localdomain || "$email" == *"(none)" ]]; then
+    printf 'the email of the git identity ends in .%s: it is a host name of this Mac, not an address' "${email##*.}"
+  elif [ -z "$(git -C "$dir" config user.name 2>/dev/null)" ] && [ -z "${GIT_COMMITTER_NAME:-}" ]; then
+    printf 'user.name is not set, so git signs commits with the full name of the account on this Mac'
+  fi
+}
+
 # Read a value from the project config, with a default.
 sh_cfg() {
   local value
@@ -514,6 +537,16 @@ sh_snapshot_list() {
     sed 's/  / /' | LC_ALL=C sort
 }
 
+# Metadata files under a baselines folder ($1, relative to the project) whose "test" is an
+# absolute path, as project-relative paths. A Snapshot.swift older than 1.12.0 wrote the test
+# file as the Mac that made the image saw it, account name included, and the folder is committed.
+sh_snapshot_absolute() {
+  [ -d "$SH_ROOT/$1" ] || return 0
+  (cd "$SH_ROOT" && find "$1" -type f -name '*.json' -exec \
+    jq -r 'select(type == "object" and (.test | type) == "string" and (.test | startswith("/"))) | input_filename' {} + 2>/dev/null) |
+    LC_ALL=C sort
+}
+
 # "<sha256> <path>" for every file under the protected paths, sorted, for protected-watch.sh
 # (#11). Placeholders and paths that do not exist are skipped.
 sh_protected_list() {
@@ -546,6 +579,11 @@ sh_dirty_list() {
 # excluded. In the layout contract: the Min of each Screens row. In the registry: each
 # Components row ("ID Name") and each Retired ID. Text only: lines that start as a comment are
 # not counted, except for swiftlint:disable, which is one.
+# The test helpers the setup copies carry a swiftlint:disable line of their own, and one skips
+# with a reason when the Mac cannot run it (XCTSkip): in a file named as a helper, a line that
+# is the template's, character for character, is not counted, so copying a helper as shipped
+# is not a check made weaker. A rule added to that line, another line in the file, or the same
+# line in a file of another name is counted.
 sh_weaken_list() {
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -553,16 +591,26 @@ sh_weaken_list() {
     cd "$SH_ROOT" || exit 0
     git -c core.quotepath=off ls-files -c -o --exclude-standard -z -- '*.swift' 2>/dev/null |
       while IFS= read -r -d '' f; do [ -f "$f" ] && printf '%s\0' "$f"; done |
-      xargs -0 awk '
-        FNR == 1 { istest[FILENAME] = (FILENAME ~ /(^|\/)[^\/]*Tests?\// || FILENAME ~ /Tests?\.swift$/) }
-        /swiftlint:disable/ { l = $0; lint[FILENAME] += gsub(/swiftlint:disable/, "", l) }
+      SH_SHIPPED_HELPERS="$(printf '%s\n' "$here"/../skills/setup/templates/tests/*.swift)" xargs -0 awk '
+        BEGIN {
+          count = split(ENVIRON["SH_SHIPPED_HELPERS"], helpers, "\n")
+          for (i = 1; i <= count; i++) {
+            helper = helpers[i]; base = helper; sub(/.*\//, "", base)
+            if (helper == "") continue
+            while ((getline line < helper) > 0) if (line ~ /swiftlint:disable|XCTSkip|\.disabled[ \t]*\(|^[ \t]*#if[ \t]+false/) shipped[base SUBSEP line] = 1
+            close(helper)
+          }
+        }
+        FNR == 1 { istest[FILENAME] = (FILENAME ~ /(^|\/)[^\/]*Tests?\// || FILENAME ~ /Tests?\.swift$/); name = FILENAME; sub(/.*\//, "", name) }
+        { own = ((name SUBSEP $0) in shipped) }
+        /swiftlint:disable/ && !own { l = $0; lint[FILENAME] += gsub(/swiftlint:disable/, "", l) }
         !istest[FILENAME] { next }
         { l = $0; sub(/^[ \t]+/, "", l) }
         l ~ /^(\/\/|\/\*|\*)/ { next }
-        l ~ /^#if[ \t]+false([ \t]|$)/ { skips[FILENAME]++ }
+        l ~ /^#if[ \t]+false([ \t]|$)/ && !own { skips[FILENAME]++ }
         l ~ /(^|[^A-Za-z0-9_])func[ \t]+test[A-Za-z0-9_]*[ \t]*\(/ || l ~ /^@Test([ \t(]|$)/ { tests[FILENAME]++ }
         { a = l; asserts[FILENAME] += gsub(/XCTAssert[A-Za-z]*[ \t]*\(|XCTFail[ \t]*\(|XCTUnwrap[ \t]*\(|#expect[ \t]*\(|#require[ \t]*\(/, "", a)
-          a = l; skips[FILENAME] += gsub(/XCTSkip|\.disabled[ \t]*\(/, "", a)
+          a = l; if (!own) skips[FILENAME] += gsub(/XCTSkip|\.disabled[ \t]*\(/, "", a)
           a = l
           while (match(a, /tolerance:[ \t]*[0-9][0-9._]*/)) {
             v = substr(a, RSTART, RLENGTH); sub(/^tolerance:[ \t]*/, "", v); gsub(/_/, "", v)

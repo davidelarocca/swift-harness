@@ -1,3 +1,4 @@
+import AppKit
 import Components
 import SwiftUI
 import Testing
@@ -60,6 +61,32 @@ struct KeyboardTests {
         defer { keys.close() }
         keys.press(.escape)
         #expect(closed.value)
+    }
+
+    // With "Keyboard navigation" off (the default, and the runners), a standard control does not
+    // take the focus: the helper says so, where a test would only see its assertion fail.
+    @Test func aStandardControlWithoutFocusIsSaid() {
+        let keys = KeyboardCheck.host { Slider(value: .constant(0.5), in: 0...1) }
+        defer { keys.close() }
+        #expect((keys.focusNote == nil) == keys.focused)
+        guard !NSApp.isFullKeyboardAccessEnabled else { return }
+        #expect(!keys.focused)
+        #expect(keys.focusNote?.contains("\"Keyboard navigation\" is off on this Mac") == true)
+        #expect(keys.focusNote?.contains(".focusable(interactions: .edit)") == true)
+        keys.press(.rightArrow) // prints the note once: read it in the test output
+        keys.press(.rightArrow)
+    }
+
+    @Test func aFocusableComponentHasTheFocusWhateverTheSetting() {
+        let pressed = Box(0)
+        let keys = KeyboardCheck.host {
+            Text("row").focusable().onKeyPress(.downArrow) { pressed.value += 1; return .handled }
+        }
+        defer { keys.close() }
+        #expect(keys.focused)
+        #expect(keys.focusNote == nil)
+        keys.press(.downArrow)
+        #expect(pressed.value == 1)
     }
 
     @Test func noKeyReachesAPointerOnlyAction() {

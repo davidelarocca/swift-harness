@@ -30,6 +30,10 @@ struct ScreenshotTests {
         #expect(info["appearance"] as? String == "dark")
         #expect(info["size"] as? String == "360x420")
         #expect(info["source"] as? String == "Sources/Screens/ArtistsView.swift")
+        // Relative to the project root: the metadata can be committed, so it never holds the
+        // absolute path of the test file on this Mac.
+        #expect(info["test"] as? String == "Tests/ScreensTests/ScreenshotTests.swift")
+        #expect(Screenshot.testPath("/no/project/above/here/SomeTests.swift") == "SomeTests.swift")
         let scale = try #require(info["scale"] as? Double)
         let image = try #require(NSImage(contentsOf: out.appendingPathComponent("ArtistsView-macos-360x420-dark.png")))
         let rep = try #require(image.representations.first)

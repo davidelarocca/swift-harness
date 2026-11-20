@@ -28,6 +28,8 @@ struct SnapshotTests {
         #expect(try result(out, "Badge-macos-120-light")["status"] as? String == "missing")
         let info = try json(out.appendingPathComponent("Badge-macos-120-light.json"))
         #expect(info["os"] as? String == Snapshot.osVersion)
+        // What an approval copies into the baselines folder, to be committed: no absolute path.
+        #expect(info["test"] as? String == "Tests/ScreensTests/SnapshotTests.swift")
     }
 
     @Test func anApprovedImageMatchesAndLeavesNoCandidate() throws {

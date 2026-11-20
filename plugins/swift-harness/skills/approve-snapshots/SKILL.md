@@ -19,6 +19,14 @@ Run from the project root:
 CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}/scripts/snapshots.sh" --status
 ```
 
+If the output says that metadata files hold an absolute path, tell the user: a `Snapshot.swift` older than 1.12.0 wrote the test file as this Mac sees it, account name included, into the `.json` beside each baseline, and the baselines folder is committed. With their agreement, make the paths relative. Only that field changes, no check reads it, and the images stay the same:
+
+```bash
+CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}/scripts/snapshots.sh" --relative-paths
+```
+
+Then say two things: commits already made keep the old path in their history, and `tests/Snapshot.swift` and `tests/Screenshot.swift` should be updated from the setup templates, so that new images are written with a relative path from the start (an approval makes the path relative in any case).
+
 If nothing waits, say so: the snapshot tests have to run first (`scripts/verify.sh full`, or the test target that holds them), and stop.
 
 ## 2. Show each image
