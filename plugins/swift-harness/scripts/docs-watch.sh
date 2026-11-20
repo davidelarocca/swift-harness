@@ -5,7 +5,8 @@
 # the verify approval and does not touch the verify fingerprint: editing docs never re-runs
 # the build. Problems already there when the session started are not new: doctor reports them,
 # the turn is not blocked. Blocks once per set of new problems; if Claude stops again without
-# fixing them, the user is told instead. The session-start list is taken by session-start.sh.
+# fixing them, the user is told instead. With docs.blocking false the user is told and the turn
+# is not blocked. The session-start list is taken by session-start.sh.
 
 . "$(dirname "$0")/lib.sh"
 sh_init || exit 0
@@ -49,6 +50,15 @@ $(printf '%s\n' "$lines" | head -20)" '{systemMessage: $msg}'
   exit 0
 fi
 
+# docs.blocking false: observed. The user is told once per set, the turn is not blocked.
+if ! sh_docs_blocking; then
+  [ "$sum" = "$(cat "$sess/docs-observed" 2>/dev/null)" ] && exit 0
+  printf '%s' "$sum" >"$sess/docs-observed"
+  sh_catch "docs references" observed "$(printf '%s\n' "$lines" | grep -c .) reference(s) broken in this session; not blocking (docs.blocking is false)"
+  jq -n --arg msg "swift-harness: references broken in this session (docs.blocking is false, so the turn was not stopped):
+$(printf '%s\n' "$lines" | head -20)" '{systemMessage: $msg}'
+  exit 0
+fi
 printf '%s' "$sum" >"$sess/docs-blocked"
 sh_catch "docs references" blocked "$(printf '%s\n' "$lines" | grep -c .) reference(s) broken in this session"
 {

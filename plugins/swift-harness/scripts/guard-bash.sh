@@ -1,5 +1,5 @@
 #!/bin/bash
-# PreToolUse (Bash). Three checks on the text of a shell command.
+# PreToolUse (Bash). Checks on the text of a shell command.
 #
 # 1. The commit identity, on unless "guardCommitIdentity" is false: a command that writes a
 #    commit (git commit, merge, pull, cherry-pick, revert, rebase, am) is denied while the
@@ -11,6 +11,10 @@
 #    repository while snapshot images wait for approval. Collected images do not fail their
 #    tests, so this is where the approval is asked, once for all of them. The user can approve
 #    them first (/swift-harness:approve-snapshots) or let the commit go on.
+#
+# 2b. With "verify": {"when": "commit"}: deny a `git commit` in this repository until the checks
+#    passed on the code it commits (the end of a turn runs nothing in that mode). The reason names
+#    check.sh, which runs them and records the result.
 #
 # 3. Opt-in with "guardBash": true (#135): ask the user before a shell command
 # that writes to a protected path, as guard.sh does for the Edit, Write and MultiEdit tools.
@@ -96,6 +100,31 @@ if [[ "$cmd" =~ $COMMIT ]] && sh_snapshots_collect; then
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "ask",
+        permissionDecisionReason: $reason
+      }
+    }'
+    exit 0
+  fi
+fi
+
+# ---------- 2b. verify.when "commit": the checks pass before a commit ----------
+
+if [[ "$cmd" =~ $COMMIT ]] && [ "$(sh_cfg '.verify.when' 'turn')" = commit ]; then
+  dir="$(commit_dir "${BASH_REMATCH[0]}")"
+  if [ -n "$dir" ] && [ "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(git -C "$SH_ROOT" rev-parse --show-toplevel 2>/dev/null)" ] &&
+    state="$(sh_state_path)" && fp="$(sh_identity)" && [ "$fp" != "$(cat "$state/passed" 2>/dev/null)" ]; then
+    check="$(cd "$(dirname "$0")" && pwd)/check.sh"
+    if [ "$fp" = "$(cat "$state/failed" 2>/dev/null)" ]; then
+      why="the checks failed on this code. Fix what they found, run them again"
+    else
+      why="the checks have not passed on this code yet (verify.when is \"commit\": they run before a commit, not at the end of each turn). Run them"
+    fi
+    reason="swift-harness: $why with: \"$check\" --project \"$SH_ROOT\" --agent claude, then commit again. If it says the verify command is not approved, stop and tell the user: only they approve it (/swift-harness:approve-verify)."
+    sh_catch "checks before a commit" blocked "a commit before the checks passed on its code"
+    jq -n --arg reason "$reason" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
         permissionDecisionReason: $reason
       }
     }'

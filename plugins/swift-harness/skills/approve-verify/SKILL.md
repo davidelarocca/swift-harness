@@ -37,6 +37,8 @@ Approving means trusting the project's build: `xcodebuild` runs the project's Ru
 
 ## 3. Approve
 
+If `approvals.ask` in `.claude/swift-harness.json` is `"always"`, the user chose to be asked every time: ask before approving, whatever the status says.
+
 The user typed this command: that is the decision to approve. If you flagged something new, ask the user to confirm before approving, naming it. Otherwise approve right away, in this turn, passing the `Digest:` value from step 1:
 
 ```bash

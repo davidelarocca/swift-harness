@@ -169,6 +169,14 @@ ev_failed() {
 # "name, ..." of the checks that passed this turn.
 ev_passed() { awk -F'\t' '$2 == "passed" || $2 == "partial" { printf "%s%s", (n++ ? ", " : ""), $1 }' "$ev_lines"; }
 
+# verify.when "commit": the checks run before a commit (guard-bash.sh asks for check.sh, which
+# runs this script with SH_CHECK_RUN=1), not at the end of each turn. The record says so.
+if [ "$(sh_cfg '.verify.when' 'turn')" = commit ] && [ "${SH_CHECK_RUN:-}" != 1 ]; then
+  ev "end-of-turn checks" "not run" "verify.when is commit: the checks run before a commit"
+  ev_write not-verified "verify.when is commit: the checks run before a commit, not at the end of a turn"
+  exit 0
+fi
+
 # Checks that cannot run this turn, from the settings and approvals alone.
 if [ "$verify_enabled" != "true" ]; then
   ev "$command_line" "not run" "verify.enabled is false in .claude/swift-harness.json"
@@ -300,9 +308,52 @@ warn_user() {
   jq -n --arg msg "$msg" '{systemMessage: $msg}'
 }
 # With no other message: tell the user once per code what was not checked, if anything.
+# The recap of a turn whose checks ran (the "recap" setting: "text", "md" or "html"; "off" by
+# default): one line for the user with every check and its result, and with "md" or "html" also
+# a file in .build/swift-harness/ that keeps it, whose path the line gives. The file is replaced
+# through a temp file and never written through a link. Prints the path, or nothing.
+recap_form() { case "$(sh_cfg '.recap' 'off')" in text) printf text ;; md) printf md ;; html) printf html ;; *) return 1 ;; esac; }
+recap_file() { # $1 outcome
+  local form dir file tmp
+  form="$(recap_form)" || return 0
+  [ "$form" != text ] || return 0
+  dir="$SH_ROOT/.build/swift-harness"
+  file="$dir/recap.$form"
+  for p in "$SH_ROOT/.build" "$dir" "$file"; do [ ! -L "$p" ] || return 0; done
+  mkdir -p "$dir" 2>/dev/null || return 0
+  tmp="$dir/.recap.$$"
+  jq -nr --arg form "$form" --arg outcome "$1" --arg time "$(date '+%Y-%m-%d %H:%M')" --arg project "$(basename "$SH_ROOT")" \
+    --rawfile lines "$ev_lines" '
+    ($lines | split("\n") | map(select(length > 0) | split("\t") | {name: .[0], result: .[1], detail: (.[2] // ""), seconds: (.[3] // "")})) as $checks
+    | if $form == "md" then
+        "# Checks at the end of the turn\n\n\($project), \($time): **\($outcome)**\n\n| Check | Result | Detail | Seconds |\n|---|---|---|---|\n"
+        + ($checks | map("| \(.name | gsub("\\|"; "\\|")) | \(.result) | \(.detail | gsub("\\|"; "\\|")) | \(.seconds) |") | join("\n"))
+      else
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src '"'"'none'"'"'; style-src '"'"'unsafe-inline'"'"'\"><title>Checks at the end of the turn</title>"
+        + "<style>body{font:14px/1.45 -apple-system,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px}td,th{text-align:left;padding:4px 12px 4px 0;border-bottom:1px solid #d2d2d7;vertical-align:top}@media(prefers-color-scheme:dark){body{background:#1c1c1e;color:#f5f5f7}td,th{border-color:#3a3a3c}}</style></head><body>"
+        + "<h1>Checks at the end of the turn</h1><p>\($project | @html), \($time | @html): <b>\($outcome | @html)</b></p><table><tr><th>Check</th><th>Result</th><th>Detail</th><th>Seconds</th></tr>"
+        + ($checks | map("<tr><td>\(.name | @html)</td><td>\(.result | @html)</td><td>\(.detail | @html)</td><td>\(.seconds | @html)</td></tr>") | join(""))
+        + "</table></body></html>"
+      end' >"$tmp" 2>/dev/null && mv -f "$tmp" "$file" && printf '%s' "$file"
+  rm -f "$tmp"
+}
+# The recap line, with the path of its file; nothing when the recap is off.
+recap_line() { # $1 outcome
+  local all file
+  recap_form >/dev/null || return 0
+  all="$(awk -F'\t' '{ printf "%s%s: %s", (n++ ? "; " : ""), $1, $2 }' "$ev_lines")"
+  file="$(recap_file "$1")"
+  printf 'swift-harness: checks this turn (%s): %s.%s' "$1" "${all:-none}" "${file:+ Recap: $file}"
+}
 notify_missing() {
-  local missing passed
+  local missing passed line
   missing="$(ev_missing)"
+  # With a recap, every turn whose checks ran says what they were; what did not run is in it.
+  if [ "$told" = false ] && line="$(recap_line "${recap_outcome:-passed}")" && [ -n "$line" ]; then
+    [ -z "$missing" ] || { printf '%s%s' "$fp" "$missing" >"$sess/missing-told"; ev_log_skipped; }
+    jq -n --arg msg "$line" '{systemMessage: $msg}'
+    return 0
+  fi
   [ -n "$missing" ] && [ "$told" = false ] || return 0
   [ "$fp$missing" = "$(cat "$sess/missing-told" 2>/dev/null)" ] && return 0
   printf '%s%s' "$fp" "$missing" >"$sess/missing-told"
@@ -526,6 +577,8 @@ if [ "$status" -eq 0 ]; then
         ev_write partial
         missing="$(ev_missing)"
         [ -z "$missing" ] || msg="$msg Not checked this turn either: $missing."
+        recap="$(recap_file partial)"
+        [ -z "$recap" ] || msg="$msg Recap: $recap"
         jq -n --arg user "swift-harness: $msg" --arg claude "swift-harness: $msg Nothing to fix for this; say so in your answer if it matters." \
           '{systemMessage: $user, hookSpecificOutput: {hookEventName: "Stop", additionalContext: $claude}}'
         exit 0
@@ -537,8 +590,9 @@ if [ "$status" -eq 0 ]; then
   printf '0' > "$sess/failures"
   rm -f "$state/failed" "$out"
   ev_log_end fixed "passed at the end of a later turn"
+  recap_outcome=passed
   if [ "$run_verify" = "true" ]; then ev_write passed
-  else ev_write checked "the checks that ran passed; the build and tests did not run"; fi
+  else recap_outcome=checked; ev_write checked "the checks that ran passed; the build and tests did not run"; fi
   warn_unapproved
   notify_missing
   exit 0

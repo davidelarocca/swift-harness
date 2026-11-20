@@ -33,6 +33,8 @@ The user typed this command: that is the decision to approve, so do not ask agai
 - `Nothing to decide: no change weakens protection.` Approve right away, in this turn.
 - `To decide: ...` Some change weakens protection, or the baseline was never reviewed and holds settings that do. Ask the user, once, whether to approve all the changes shown, naming the ones listed there.
 
+If `approvals.ask` in `.claude/swift-harness.json` is `"always"`, the user chose to be asked every time: ask before approving, whatever the status says.
+
 Approval is all or nothing: to keep only some, revert the others first and list again. Pass the `Digest:` value from step 1:
 
 ```bash

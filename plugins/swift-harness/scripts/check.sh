@@ -75,6 +75,8 @@ if [ -z "${CLAUDE_PLUGIN_DATA:-}" ]; then
 fi
 export CLAUDE_PLUGIN_DATA
 export SH_AGENT="$agent"
+# Run as the checks before a commit (verify.when "commit"), not as an end of turn.
+export SH_CHECK_RUN=1
 state="$CLAUDE_PLUGIN_DATA/state/$key"
 
 input="$(jq -nc --arg cwd "$root" --arg session "$session" '{cwd: $cwd, session_id: $session, hook_event_name: "Stop"}')"

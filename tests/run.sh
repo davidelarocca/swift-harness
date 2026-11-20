@@ -2991,6 +2991,114 @@ out="$(hook weaken-watch.sh "$Y" 2>&1)"
 expect_result "rename: a test file moved and edited is compared as one file" 0 'NewApp/Tests/PlayerTests\.swift: 1 test removed \(3 -> 2\)' "exit=0
 $out" 'file removed'
 
+# ---------- /swift-harness:configure, verify.when, recap ----------
+
+cfg() { local out code; out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/configure.sh" "$@" 2>&1)"; code=$?; printf 'exit=%s\n%s' "$code" "$out"; }
+CF="$(new_project configure)"
+out="$(cfg --show --project "$CF")"
+if [ "$(tail -n +2 <<<"$out" | paste -sd'|' -)" = 'strictness: normal|stop: turn|snapshots: fail|tolerance: 0|approvals: weakening|moves: approve|direction: mac|docs: blocking|recap: off' ]; then
+  ok "configure: --show gives the default answers for a fresh config"
+else nok "configure: --show gives the default answers for a fresh config" "$out"; fi
+out="$(cfg --apply --project "$CF" strictness=strict stop=commit snapshots=collect tolerance=.001 approvals=always moves=pass direction=porting docs=observed recap=md)"
+if jq -e '.lintBlocking == true and .verify.maxAttempts == 5 and .verify.when == "commit" and .verify.command == "scripts/verify.sh fast"
+    and .snapshots == {pending: "collect", tolerance: 0.001} and .approvals.ask == "always" and .security.moves == "pass"
+    and .porting.direction == "porting" and .docs == {blocking: false} and .recap == "md" and .protectedPaths == ["Sources/Audio/"]' "$CF/.claude/swift-harness.json" >/dev/null; then
+  ok "configure: each answer is written as its keys, and the other keys stay"
+else nok "configure: each answer is written as its keys, and the other keys stay" "$(cat "$CF/.claude/swift-harness.json")"; fi
+expect_result "configure: it says what it wrote" 0 '^  stop: commit$' "$out"
+expect_result "configure: ... and what follows, with the step left to the user" 0 'moves=pass weakens the security check.*approve-security' "$out"
+out="$(doctor "$CF")"
+expect_row "configure: the doctor knows every key it writes" "$out" PASS 'Config keys' 'all known'
+expect_row "doctor: verify.when commit is said" "$out" INFO 'Checks run' 'before a commit'
+expect_row "doctor: a port under way with no ratchet is a warning" "$out" WARN 'Porting ratchet' 'porting\.direction is "porting" but no module is recorded'
+cfg --apply --project "$CF" strictness=normal stop=turn snapshots=fail tolerance=0 approvals=weakening moves=approve direction=mac docs=blocking recap=off >/dev/null
+if jq -e '. == {verify: {command: "scripts/verify.sh fast"}, protectedPaths: ["Sources/Audio/"]}' "$CF/.claude/swift-harness.json" >/dev/null; then
+  ok "configure: default answers remove their keys, and empty objects go"
+else nok "configure: default answers remove their keys, and empty objects go" "$(cat "$CF/.claude/swift-harness.json")"; fi
+expect_result "configure: the same answers again change nothing" 0 'Nothing changed' "$(cfg --apply --project "$CF" stop=turn)"
+before="$(cat "$CF/.claude/swift-harness.json")"
+expect_result "configure: a wrong answer is refused" 2 "'later' is not an answer to stop" "$(cfg --apply --project "$CF" recap=md stop=later)"
+expect_result "configure: an unknown question is refused" 2 "no question named 'colour'" "$(cfg --apply --project "$CF" colour=blue)"
+expect_result "configure: a tolerance over 1 is refused" 2 'not an answer to tolerance' "$(cfg --apply --project "$CF" tolerance=2)"
+[ "$before" = "$(cat "$CF/.claude/swift-harness.json")" ] && ok "configure: a refused answer writes nothing, not even the valid ones" || nok "configure: a refused answer writes nothing, not even the valid ones" "$(cat "$CF/.claude/swift-harness.json")"
+for k in strictness=light approvals=always recap=text; do cfg --apply --project "$CF" "$k" >/dev/null; done
+expect_result "configure: --show reads the answers back" 0 'strictness: light' "$(cfg --show --project "$CF")"
+set_config "$CF" '{"verify":{"when":"sometimes"},"approvals":{"ask":"never"},"recap":"pdf","porting":{"direction":"android"}}'
+out="$(doctor "$CF")"
+for want in 'verify\.when must be' 'approvals\.ask must be' 'recap must be' 'porting\.direction must be'; do
+  expect_row "doctor: a wrong value is named ($want)" "$out" FAIL Config "$want"
+done
+if grep -qx 'disable-model-invocation: true' "$SKILLS/configure/SKILL.md" && grep -qF 'configure.sh" --apply' "$SKILLS/configure/SKILL.md"; then
+  ok "configure: only the user runs the skill, and it writes through the script"
+else nok "configure: only the user runs the skill, and it writes through the script"; fi
+missing=""
+for f in approve approve-security approve-verify approve-snapshots; do grep -qF '`approvals.ask`' "$SKILLS/$f/SKILL.md" || missing="$missing $f"; done
+[ -z "$missing" ] && ok "configure: every approval skill reads approvals.ask" || nok "configure: every approval skill reads approvals.ask" "$missing"
+
+# verify.when "commit": nothing at the end of a turn, and a commit waits for the checks.
+WC="$(new_project when-commit)"
+set_config "$WC" '{"verify":{"command":"scripts/verify.sh fast","when":"commit"},"format":"none","lint":"none"}'
+git -C "$WC" add -A && git -C "$WC" commit -qm when
+approve "$WC" >/dev/null
+hook session-start.sh "$WC" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$WC/Sources/App.swift"
+WLOG="$TMP/when-commit.log"
+: >"$WLOG"
+out="$(FAKE_VERIFY_LOG="$WLOG" hook stop-verify.sh "$WC" 2>&1)"
+if [ -z "$out" ] && [ ! -s "$WLOG" ] && [ "$(jq -r '.checks[0].detail' "$(state_dir_of "$WC")/evidence.json")" = 'verify.when is commit: the checks run before a commit' ]; then
+  ok "when commit: the end of a turn runs nothing, and the record says why"
+else nok "when commit: the end of a turn runs nothing, and the record says why" "$out $(cat "$WLOG") $(cat "$(state_dir_of "$WC")/evidence.json" 2>&1)"; fi
+expect_commit_denied "$WC" "git add -A && git commit -m x" "when commit: a commit before the checks passed is refused, naming check.sh" 'have not passed on this code yet.*check\.sh.{0,2} --project'
+expect_commit_allowed "$WC" "git push" "when commit: a push is not a commit"
+FAKE_VERIFY_LOG="$WLOG" FAKE_VERIFY_EXIT=1 CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$WC" --agent claude >/dev/null 2>&1
+expect_commit_denied "$WC" "git commit -m x" "when commit: after a failed check the commit is refused, saying it failed" 'the checks failed on this code'
+echo 'let app = 3' >"$WC/Sources/App.swift"
+FAKE_VERIFY_LOG="$WLOG" CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/check.sh" --project "$WC" --agent claude >/dev/null 2>&1
+expect_commit_allowed "$WC" "git add -A && git commit -m x" "when commit: once check.sh passed on this code, the commit goes through"
+echo 'let app = 4' >"$WC/Sources/App.swift"
+expect_commit_denied "$WC" "git commit -am x" "when commit: an edit after the check needs it again" 'have not passed'
+
+# The recap: a line for the user at the end of each turn whose checks ran, and a file if asked.
+RC="$(new_project recap)"
+set_config "$RC" '{"verify":{"command":"scripts/verify.sh fast"},"format":"none","lint":"none","recap":"text"}'
+git -C "$RC" add -A && git -C "$RC" commit -qm recap
+approve "$RC" >/dev/null
+hook session-start.sh "$RC" '{"source":"startup"}' >/dev/null
+echo 'let app = 2' >"$RC/Sources/App.swift"
+out="$(FAKE_VERIFY_LOG=/dev/null hook stop-verify.sh "$RC" 2>&1)"
+expect_result "recap: text gives every check and its result in one line" 0 'checks this turn \(passed\): scripts/verify\.sh fast: passed[;.]' "exit=$?
+$out" 'Recap: '
+set_config "$RC" '{"verify":{"command":"scripts/verify.sh fast"},"format":"none","lint":"none","recap":"md"}'
+echo 'let app = 3' >"$RC/Sources/App.swift"
+out="$(FAKE_VERIFY_LOG=/dev/null hook stop-verify.sh "$RC" 2>&1)"
+expect_result "recap: md gives the path of the file" 0 "Recap: $RC/\.build/swift-harness/recap\.md" "exit=$?
+$out"
+if grep -qF '| scripts/verify.sh fast | passed |' "$RC/.build/swift-harness/recap.md"; then ok "recap: ... which holds a table of the checks"
+else nok "recap: ... which holds a table of the checks" "$(cat "$RC/.build/swift-harness/recap.md" 2>&1)"; fi
+set_config "$RC" '{"verify":{"command":"scripts/verify.sh fast"},"format":"none","lint":"none","recap":"html"}'
+echo 'let app = 4' >"$RC/Sources/App.swift"
+FAKE_VERIFY_LOG=/dev/null hook stop-verify.sh "$RC" >/dev/null 2>&1
+if grep -qF '<td>scripts/verify.sh fast</td><td>passed</td>' "$RC/.build/swift-harness/recap.html" && ! grep -qiE '<script|https?://' "$RC/.build/swift-harness/recap.html"; then
+  ok "recap: html is a static page with the same table"
+else nok "recap: html is a static page with the same table" "$(cat "$RC/.build/swift-harness/recap.html" 2>&1)"; fi
+set_config "$RC" '{"verify":{"command":"scripts/verify.sh fast"},"format":"none","lint":"none"}'
+echo 'let app = 5' >"$RC/Sources/App.swift"
+expect_result "recap: off by default, a passing turn says nothing" 0 '^exit=0$' "exit=0
+$(FAKE_VERIFY_LOG=/dev/null hook stop-verify.sh "$RC" 2>&1)" 'checks this turn'
+
+# docs.blocking false now applies to the built-in docs check too.
+DO="$(new_project docs-observed)"
+printf '# App\n' >"$DO/CLAUDE.md"
+set_config "$DO" '{"verify":{"enabled":false},"format":"none","lint":"none","docs":{"blocking":false}}'
+git -C "$DO" add -A && git -C "$DO" commit -qm docs
+hook session-start.sh "$DO" '{"source":"startup"}' >/dev/null
+printf '# App\n\nSee [the plan](docs/PLAN.md).\n' >"$DO/CLAUDE.md"
+out="$(hook docs-watch.sh "$DO" 2>&1)"
+expect_result "docs observed: a broken reference is told, and the turn is not blocked" 0 'docs\.blocking is false, so the turn was not stopped' "exit=$?
+$out"
+expect_result "docs observed: ... once per set" 0 '^exit=0$' "exit=$?
+$(hook docs-watch.sh "$DO" 2>&1)" 'swift-harness'
+
 # ---------- concurrency escape hatches (#37) ----------
 # Real SwiftLint with the setup template: the rules are regexes, so test them as SwiftLint runs them.
 

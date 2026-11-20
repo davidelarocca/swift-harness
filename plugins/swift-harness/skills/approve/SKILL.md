@@ -39,6 +39,8 @@ Collect what needs the user's decision:
 - the security status ending with `To decide: ...`;
 - the snapshot images, unless the argument (`$ARGUMENTS`) is `all`; with `all`, only an image that looks like a defect.
 
+If `approvals.ask` in `.claude/swift-harness.json` is `"always"`, the user chose to be asked every time: ask before approving, whatever the status says.
+
 If nothing needs a decision, approve everything in this turn. Otherwise ask one question that names each point, and offer to approve the rest. Then approve, each with the `Digest:` from its status in step 1:
 
 ```bash
