@@ -2446,7 +2446,7 @@ if ! grep -qiE '<script|https?://|javascript:' <<<"$page" && grep -qF "default-s
   ok "snapshot page: no script, nothing from outside, and no absolute path of this Mac"
 else nok "snapshot page: no script, nothing from outside, and no absolute path of this Mac" "$(grep -iE '<script|https?://|javascript:' <<<"$page"; grep -F "$S" <<<"$page")"; fi
 d="$(snap_digest "$S")"
-if [ "$d" = "$(snap_digest "$S")" ] && [ -f "$RP" ] && [ -z "$(ls "$S/.build/swift-harness/snapshots" | grep -v -e '\.png$' -e '\.json$' -e '^review\.html$')" ]; then
+if [ "$d" = "$(snap_digest "$S")" ] && [ -f "$RP" ] && [ -z "$(find "$S/.build/swift-harness/snapshots" -type f ! -name '*.png' ! -name '*.json' ! -name review.html)" ]; then
   ok "snapshot page: writing the page does not change the digest, and leaves no other file"
 else nok "snapshot page: writing the page does not change the digest, and leaves no other file" "$(ls -a "$S/.build/swift-harness/snapshots")"; fi
 set_config "$S" '{"snapshots":{"path":"Tests/Baselines"}}'
