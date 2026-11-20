@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## swift-harness 1.13.0 (2026-11-20)
+
 - New: `/swift-harness:configure`, a guided configuration. A few questions, each written into `.claude/swift-harness.json` as the keys it stands for, by `scripts/configure.sh` (every other key stays): how strict (`light`: reported, never blocking; `normal`; `strict`: more attempts and SwiftLint errors block), when the checks run, snapshots that fail or wait, the snapshot tolerance, how often approvals ask, security moves, where the app goes, the docs check and a recap. Run it again to change an answer; a default answer removes its key.
 - New: the checks can run before a commit instead of at the end of each turn (`verify.when: "commit"`). The end of a turn then runs nothing, and a `git commit` made by Claude is refused until the checks pass on the code it commits; the refusal names `check.sh`, which runs them and records the result. A commit made outside Claude is not stopped: a git pre-commit hook that runs `check.sh` checks it too.
 - New: a recap of the checks at the end of each turn (`recap`: `text`, `md` or `html`; `off` by default). Each turn whose checks ran ends with one line for the user naming every check and its result; with `md` or `html` the recap is also kept in `.build/swift-harness/`, and the line gives its path.
