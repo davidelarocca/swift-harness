@@ -82,7 +82,7 @@ unknown="$(jq -r '
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
-  (if (.snapshots | type) == "object" then (.snapshots | keys - ["path"])[] | "snapshots." + . else empty end),
+  (if (.snapshots | type) == "object" then (.snapshots | keys - ["path", "pending", "tolerance"])[] | "snapshots." + . else empty end),
   (if (.security | type) == "object" then (.security | keys - ["enabled"])[] | "security." + . else empty end),
   (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget", "command", "blocking"])[] | "docs." + . else empty end),
   (("lint", "format") as $k | if (.[$k] | type) == "object" then (.[$k] | keys - ["command", "blocking"])[] | "\($k)." + . else empty end),
@@ -144,7 +144,11 @@ problems="$(jq -r '
   check(["snapshots"]; type == "object"; "snapshots must be an object"),
   (if (.snapshots | type) == "object" then
     check(["snapshots", "path"]; type == "string" and length > 0 and (startswith("/") | not) and (("/" + . + "/") | contains("/../") | not);
-      "snapshots.path must be a folder inside the project")
+      "snapshots.path must be a folder inside the project"),
+    check(["snapshots", "pending"]; . == "fail" or . == "collect";
+      "snapshots.pending must be \"fail\" (a new or different image fails its test) or \"collect\" (it waits, and the approval is asked before a commit)"),
+    check(["snapshots", "tolerance"]; type == "number" and . >= 0 and . < 1;
+      "snapshots.tolerance must be a number from 0 up to 1 (the fraction of pixels allowed to differ, e.g. 0.001)")
   else empty end),
   check(["security"]; type == "object"; "security must be an object"),
   (if (.security | type) == "object" then
@@ -550,7 +554,10 @@ else
     [ -f "$result" ] && [ -f "${result%.result.json}.png" ] && [ "$(jq -r .status "$result" 2>/dev/null)" != passed ] && waiting=$((waiting + 1))
   done
   waits=""
-  [ "$waiting" -gt 0 ] && waits="; $waiting new image(s) from the last test run wait for approval: /swift-harness:approve-snapshots"
+  if [ "$waiting" -gt 0 ]; then
+    waits="; $waiting new image(s) from the last test run wait for approval: /swift-harness:approve-snapshots"
+    sh_snapshots_collect && waits="$waits (snapshots.pending is collect: their tests passed, a commit asks first and scripts/verify.sh full fails until they are approved)"
+  fi
   if [ -z "$made" ]; then
     row WARN "Snapshot baselines" "$count image(s) in $snapshots/ without metadata: the tests cannot tell which macOS they were made on$waits"
   elif [ "$made" != "$this" ]; then

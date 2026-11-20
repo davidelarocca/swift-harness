@@ -55,6 +55,46 @@ struct SnapshotTests {
         #expect(Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out) { badge("New") } == [])
     }
 
+    // snapshots.pending = collect: a new or different image waits without failing its test, and
+    // is left for the approval exactly as a failing one is.
+    @Test func collectedImagesWaitWithoutFailingTheTest() throws {
+        let (baselines, out) = try folders()
+        #expect(Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out, collect: true) { badge("New") } == [])
+        #expect(try result(out, "Badge-macos-120x40-light")["status"] as? String == "missing")
+        #expect(FileManager.default.fileExists(atPath: out.appendingPathComponent("Badge-macos-120x40-light.png").path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: baselines.path).isEmpty)
+        try approve(out, baselines)
+        #expect(Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out, collect: true) { badge("Old") } == [])
+        #expect(try result(out, "Badge-macos-120x40-light")["status"] as? String == "failed")
+        #expect(FileManager.default.fileExists(atPath: out.appendingPathComponent("Badge-macos-120x40-light.diff.png").path))
+        // The same difference fails the test when nothing collects it.
+        #expect(Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out, collect: false) { badge("Old") }.count == 2)
+    }
+
+    @Test func aBaselineThatCannotBeReadFailsAlsoWhenCollecting() throws {
+        let (baselines, out) = try folders()
+        _ = Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out) { badge("New") }
+        try approve(out, baselines)
+        try Data("not an image".utf8).write(to: baselines.appendingPathComponent("Badge-macos-120x40-light.png"))
+        let problems = Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out, collect: true) { badge("New") }
+        #expect(problems.count == 1)
+        #expect(problems.first?.contains("cannot read the baseline") == true)
+    }
+
+    @Test func theProjectConfigTurnsCollectingOn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("collect-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(!Snapshot.collects(from: root))
+        try #"{"snapshots":{"pending":"collect"}}"#.write(to: root.appendingPathComponent(".claude/swift-harness.json"), atomically: true, encoding: .utf8)
+        #expect(Snapshot.collects(from: root.appendingPathComponent("Tests/AppTests")))
+        #expect(Snapshot.settings(from: root)["tolerance"] == nil)
+        try #"{"snapshots":{"pending":"collect","tolerance":0.001}}"#.write(to: root.appendingPathComponent(".claude/swift-harness.json"), atomically: true, encoding: .utf8)
+        #expect((Snapshot.settings(from: root)["tolerance"] as? NSNumber)?.doubleValue == 0.001)
+        try #"{"snapshots":{"pending":"fail"}}"#.write(to: root.appendingPathComponent(".claude/swift-harness.json"), atomically: true, encoding: .utf8)
+        #expect(!Snapshot.collects(from: root))
+    }
+
     @Test func aSizeChangeIsNamed() throws {
         let (baselines, out) = try folders()
         _ = Snapshot.verify("Badge", sizes: ["120"], baselines: baselines, output: out) { badge("New") }

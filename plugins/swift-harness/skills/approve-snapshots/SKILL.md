@@ -7,7 +7,7 @@ argument-hint: "[image name ...]"
 
 # Approve snapshot baselines
 
-The project's snapshot tests (`tests/Snapshot.swift` from the setup templates) compare each rendered component or screen with an approved image in the baselines folder (`snapshots.path` in `.claude/swift-harness.json`, default `snapshots/`). A missing or different image fails the test and waits in `.build/swift-harness/snapshots/`: the new image, a diff with the changed pixels in red, and its metadata. Nothing replaces a baseline until the user approves it here.
+The project's snapshot tests (`tests/Snapshot.swift` from the setup templates) compare each rendered component or screen with an approved image in the baselines folder (`snapshots.path` in `.claude/swift-harness.json`, default `snapshots/`). A missing or different image fails the test and waits in `.build/swift-harness/snapshots/`: the new image, a diff with the changed pixels in red, and its metadata. Nothing replaces a baseline until the user approves it here. With `"snapshots": {"pending": "collect"}` in the config, such an image does not fail its test: it waits all the same, a `git commit` asks the user first while any waits, and `scripts/verify.sh full` fails until they are approved, so they are approved here in one go.
 
 The user asked for this by typing the command. Do not run these scripts at any other time, and never on your own initiative.
 
@@ -37,7 +37,7 @@ The output of step 1 ends with `Review page, to open for the user ...` and a pat
 open "<the path of the review page>"
 ```
 
-The page shows what waits: a table of the components, then for each one the image that changed most, with the approved image, the new one and the changed pixels in red side by side, and its other sizes and appearances folded under it. The user decides on what they see there, not on a description, so do not narrate every image. Look at the new images yourself (and the diff and the baseline where there are any) and write a few lines, one per component at most:
+The page shows what waits: a table of the components, then for each one the image that changed most, with the approved image, the new one and the changed pixels in red side by side, and its other sizes and appearances: folded under it when they show the same change in the same place, open when they differ in another way. The user decides on what they see there, not on a description, so do not narrate every image. Look at the new images yourself (and the diff and the baseline where there are any) and write a few lines, one per component at most:
 
 - first, anything that needs their eyes: what looks like a defect rather than an intended change (clipped or overlapping text, wrong colors in dark mode, a layout that is not mirrored for a right-to-left locale), and any change you cannot tie to an edit of this session;
 - then the rest together: which edit caused it and how many images it accounts for ("the new padding of the badge: 6 images, as expected").

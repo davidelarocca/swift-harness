@@ -2429,9 +2429,12 @@ if grep -qF '<td>2.78% of pixels</td>' <<<"$page" && grep -qF '<td>200x48 to 200
   ok "snapshot page: each component has the size of its largest change, and where to look"
 else nok "snapshot page: each component has the size of its largest change, and where to look" "$(grep '<td>' <<<"$page")"; fi
 card="$(awk '/<h2 id="g[0-9]*">Card</,/<h2 id="g[0-9]*">Odd/' <<<"$page")"
-if [ "$(grep -o '<h3>[^<]*' <<<"$card" | head -1)" = '<h3>200x80, dark ' ] && grep -qF '<details><summary>1 more image of this component: 200x80, light</summary>' <<<"$card"; then
-  ok "snapshot page: a component shows the variant that changed most, the others folded under it"
-else nok "snapshot page: a component shows the variant that changed most, the others folded under it" "$(grep -o '<h3>[^<]*\|<summary>[^<]*' <<<"$card")"; fi
+# The light variant changed in another place than the dark one: folded, it could be approved
+# with "all" unseen, so it is shown open.
+# (The range ends on the next component's heading line, which holds its first <h3> too.)
+if [ "$(grep -o '<h3>[^<]*' <<<"$card" | head -2 | paste -sd'|' -)" = '<h3>200x80, dark |<h3>200x80, light ' ] && ! grep -qF '<details>' <<<"$card"; then
+  ok "snapshot page: a component shows the variant that changed most first, and one that changed elsewhere open"
+else nok "snapshot page: a component shows the variant that changed most first, and one that changed elsewhere open" "$(grep -o '<h3>[^<]*\|<summary>[^<]*' <<<"$card")"; fi
 if grep -qF 'src="../../../snapshots/Card-macos-200x80-dark.png"' <<<"$card" && grep -qF 'src="Card-macos-200x80-dark.png"' <<<"$card" &&
   grep -qF 'src="Card-macos-200x80-dark.diff.png"' <<<"$card" && grep -qF "Before (approved, made on macOS $THIS_OS)" <<<"$card"; then
   ok "snapshot page: the approved image, the new one and the changed pixels are side by side"
@@ -2445,6 +2448,13 @@ else nok "snapshot page: a path is encoded for the link, never written as HTML" 
 if ! grep -qiE '<script|https?://|javascript:' <<<"$page" && grep -qF "default-src 'none'" <<<"$page" && ! grep -qF "$S" <<<"$page"; then
   ok "snapshot page: no script, nothing from outside, and no absolute path of this Mac"
 else nok "snapshot page: no script, nothing from outside, and no absolute path of this Mac" "$(grep -iE '<script|https?://|javascript:' <<<"$page"; grep -F "$S" <<<"$page")"; fi
+# The same change in the same place: folded under the one shown.
+result Card-macos-200x80-light failed "Card-macos-200x80-light: 4000 of 151200 pixels differ (2.65%), within x 10-110, y 18-126 pt from the top left. The new image is /somewhere/Card.png."
+snap --status --project "$S" >/dev/null
+card="$(awk '/<h2 id="g[0-9]*">Card</,/<h2 id="g[0-9]*">Odd/' "$RP")"
+if [ "$(grep -o '<h3>200x80' <<<"$card" | grep -c .)" = 2 ] && grep -qF '<details><summary>1 more image of this component with the same change in the same place: 200x80, light</summary>' <<<"$card"; then
+  ok "snapshot page: a variant with the same change in the same place is folded under the one shown"
+else nok "snapshot page: a variant with the same change in the same place is folded under the one shown" "$(grep -o '<h3>[^<]*\|<summary>[^<]*' <<<"$card")"; fi
 d="$(snap_digest "$S")"
 if [ "$d" = "$(snap_digest "$S")" ] && [ -f "$RP" ] && [ -z "$(find "$S/.build/swift-harness/snapshots" -type f ! -name '*.png' ! -name '*.json' ! -name review.html)" ]; then
   ok "snapshot page: writing the page does not change the digest, and leaves no other file"
@@ -2575,6 +2585,93 @@ echo 'let app = 2' >"$SV/Sources/App.swift"
 out="$(jq -nc --arg cwd "$SV" '{cwd: $cwd, session_id: "test"}' | PATH="$SWF:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$SV" "$SCRIPTS/stop-verify.sh" 2>&1)"
 expect_result "stop: a test that failed before a long passing target is in what Claude reads" 2 'error: -\[ATests\.OldStyleTests testDoublingTwo\]' "exit=$?
 $out"
+
+# ---------- snapshots.pending "collect": images wait instead of failing ----------
+# A new or changed image does not fail its test (tests/Snapshot.swift); the approval is asked
+# once: before a commit, and by verify.sh full, which fails while images wait.
+C="$(new_project snapshots-collect)"
+set_config "$C" '{"snapshots":{"pending":"collect"}}'
+expect_commit_allowed "$C" "git commit -m x" "collect: with no image waiting a commit goes through"
+candidate "$C" Pill-macos-120-light missing new-pill
+candidate "$C" Card-macos-200-dark failed new-card
+candidate "$C" Row-macos-200-light not-compared other-mac
+out="$(commit_guard "$C" "git add -A && git commit -m x")"
+if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$out" 2>/dev/null)" = ask ] &&
+  grep -qE "2 snapshot image\(s\) wait for the user's approval \(Card-macos-200-dark, Pill-macos-120-light\)" <<<"$out" &&
+  grep -qF '/swift-harness:approve-snapshots' <<<"$out" && grep -qF 'verify.sh full fails' <<<"$out" && ! grep -qF 'Row-macos' <<<"$out"; then
+  ok "collect: a commit asks first while images wait, and names them (an image from another Mac does not wait)"
+else nok "collect: a commit asks first while images wait, and names them (an image from another Mac does not wait)" "$out"; fi
+out="$(commit_guard "$C" "git -C $C commit -m x" "$TMP")"
+[ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$out" 2>/dev/null)" = ask ] && ok "collect: ... also with git -C from another folder" || nok "collect: ... also with git -C from another folder" "$out"
+if grep -rqs '"check":"snapshot images","kind":"asked"' "$TMP/data/state"; then ok "collect: the question is in the catch log"
+else nok "collect: the question is in the catch log"; fi
+expect_commit_allowed "$C" "git push" "collect: a push does not ask"
+expect_commit_allowed "$C" "git commit-graph write" "collect: commit-graph is not a commit"
+mkdir -p "$TMP/collect-other"
+git -C "$TMP/collect-other" init -q && git -C "$TMP/collect-other" config user.email test@example.com && git -C "$TMP/collect-other" config user.name test
+expect_commit_allowed "$C" "cd $TMP/collect-other && git commit -m x" "collect: a commit in another repository does not ask"
+set_config "$C" '{}'
+expect_commit_allowed "$C" "git commit -m x" "collect: without the setting a commit does not ask (the tests fail instead)"
+set_config "$C" '{"snapshots":{"pending":"later"}}'
+expect_row "doctor: snapshots.pending is fail or collect" "$(doctor "$C")" FAIL Config 'snapshots\.pending must be "fail".*or "collect"'
+set_config "$C" '{"snapshots":{"tolerance":2}}'
+expect_row "doctor: snapshots.tolerance is a fraction" "$(doctor "$C")" FAIL Config 'snapshots\.tolerance must be a number from 0 up to 1'
+set_config "$C" '{"snapshots":{"pending":"collect","tolerance":0.001}}'
+mkdir -p "$C/snapshots"
+printf 'old' >"$C/snapshots/Card-macos-200-dark.png"
+printf '{"os": "%s", "scale": 2}\n' "$THIS_OS" >"$C/snapshots/Card-macos-200-dark.json"
+out="$(doctor "$C")"
+expect_row "doctor: snapshots.pending and snapshots.tolerance are known keys" "$out" PASS 'Config keys' 'all known'
+expect_row "doctor: images collected are said to wait with their tests passed" "$out" WARN 'Snapshot baselines' 'new image\(s\).*snapshots\.pending is collect: their tests passed'
+
+# verify.sh: full fails while images wait, fast only says so.
+V="$(verify_project collect '' '' '"Packages/Core"')"
+mkdir -p "$V/Packages/Core" "$V/.claude"
+candidate "$V" Pill-macos-120-light missing new-pill
+candidate "$V" Row-macos-200-light not-compared other-mac
+expect_verify "collect: without the setting verify.sh does not look at the images" 0 'verify full: PASS' "$(run_verify "$V" full)"
+printf '{"snapshots":{"pending":"collect"}}\n' >"$V/.claude/swift-harness.json"
+out="$(run_verify "$V" full)"
+expect_verify "collect: verify.sh full fails while an image waits" 1 'verify full: FAIL' "$out"
+expect_result "collect: ... and names it, not the one from another Mac" 1 '^snapshot waiting for approval: Pill-macos-120-light$' "$out" 'Row-macos'
+out="$(run_verify "$V" fast)"
+expect_verify "collect: verify.sh fast passes and says images wait" 0 '1 image\(s\) wait \(fast does not fail on them; full does\)' "$out"
+if grep -qF 'snapshot waiting for approval: ' "$SCRIPTS/mutate.sh"; then ok "collect: check-sensitivity credits the snapshot check with the waiting line of verify.sh"
+else nok "collect: check-sensitivity credits the snapshot check with the waiting line of verify.sh"; fi
+
+# The Stop hook: the images are not checked, and the user is told.
+SC="$(new_project stop-collect)"
+set_config "$SC" '{"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast"},"snapshots":{"pending":"collect"}}'
+git -C "$SC" add -A && git -C "$SC" commit -qm collect
+approve "$SC" >/dev/null
+hook session-start.sh "$SC" '{"source":"startup"}' >/dev/null
+echo 'let app = 3' >"$SC/Sources/App.swift"
+candidate "$SC" Pill-macos-120-light missing new-pill
+out="$(hook stop-verify.sh "$SC" 2>&1)"
+expect_result "collect: the end of the turn tells the user that waiting images are not checked" 0 "not checked: snapshot images \(1 snapshot image\(s\) wait for the user's approval \(Pill-macos-120-light\): /swift-harness:approve-snapshots\)" "exit=$?
+$out"
+sc_state="$TMP/data/state/$(printf '%s' "$(cd "$SC" && pwd -P)" | shasum | cut -c1-16)"
+if [ "$(jq -r '.checks[] | select(.name == "snapshot images") | .result' "$sc_state/evidence.json" 2>/dev/null)" = "not checked" ] &&
+  [ "$(jq -r .outcome "$sc_state/evidence.json")" = passed ]; then
+  ok "collect: ... and the record has them as not checked, next to the verify command that passed"
+else nok "collect: ... and the record has them as not checked, next to the verify command that passed" "$(cat "$sc_state/evidence.json" 2>&1)"; fi
+
+# A project-wide tolerance: raising it is a weaker check.
+WT="$(new_project weaken-snapshot-tolerance)"
+set_config "$WT" '{"snapshots":{"tolerance":0.001}}'
+git -C "$WT" add -A && git -C "$WT" commit -qm tolerance
+hook session-start.sh "$WT" '{"source":"startup"}' >/dev/null
+set_config "$WT" '{"snapshots":{"tolerance":0.01}}'
+out="$(hook weaken-watch.sh "$WT" 2>&1)"
+expect_result "collect: raising snapshots.tolerance is reported as a weaker check" 0 '\.claude/swift-harness\.json: tolerance raised \(0\.001 -> 0\.01\)' "exit=$?
+$out"
+hook session-start.sh "$WT" '{"source":"startup"}' >/dev/null
+set_config "$WT" '{"snapshots":{"tolerance":0.0001}}'
+expect_result "collect: lowering it says nothing" 0 '^exit=0$' "exit=$?
+$(hook weaken-watch.sh "$WT" 2>&1)" 'swift-harness'
+if grep -qF '"tolerance"' "$TEMPLATES/tests/Snapshot.swift" && grep -qF 'tolerance ?? (settings["tolerance"]' "$TEMPLATES/tests/Snapshot.swift"; then
+  ok "collect: Snapshot.verify takes the project's tolerance when a test passes none"
+else nok "collect: Snapshot.verify takes the project's tolerance when a test passes none"; fi
 
 # ---------- security settings (#32) ----------
 

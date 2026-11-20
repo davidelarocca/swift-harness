@@ -526,6 +526,32 @@ sh_docs_keys() {
 # test result. New images wait in SH_SNAPSHOT_CANDIDATES.
 sh_snapshots() { local p; p="$(sh_cfg '.snapshots.path' 'snapshots')"; p="${p#./}"; printf '%s' "${p%/}"; }
 SH_SNAPSHOT_CANDIDATES=".build/swift-harness/snapshots"
+# "snapshots": {"pending": "collect"}: a new or different image does not fail its test. It
+# waits, and the approval is asked once: before a commit (guard-bash.sh), and by
+# `scripts/verify.sh full`, which fails while images wait. The default, "fail", fails the test.
+sh_snapshots_collect() { [ "$(sh_cfg '.snapshots.pending' 'fail')" = collect ]; }
+# The images of the last test run that are new or differ from their baseline, one name per
+# line. An image made on another macOS version (not compared) is not one of them: no approval
+# is owed for it on this Mac.
+sh_snapshots_waiting() {
+  local result name
+  for result in "$SH_ROOT/$SH_SNAPSHOT_CANDIDATES"/*.result.json; do
+    [ -f "$result" ] && [ -f "${result%.result.json}.png" ] || continue
+    case "$(jq -r '.status // ""' "$result" 2>/dev/null)" in missing | failed) ;; *) continue ;; esac
+    name="${result##*/}"
+    printf '%s\n' "${name%.result.json}"
+  done
+}
+# "3 snapshot image(s) wait for the user's approval (A, B and 1 more)", or nothing.
+sh_snapshots_waiting_text() {
+  local list count
+  list="$(sh_snapshots_waiting)"
+  [ -n "$list" ] || return 0
+  count="$(printf '%s\n' "$list" | grep -c .)"
+  printf "%s snapshot image(s) wait for the user's approval (%s%s)" "$count" \
+    "$(printf '%s\n' "$list" | head -2 | paste -sd, - | sed 's/,/, /g')" \
+    "$([ "$count" -le 2 ] || printf ' and %s more' "$((count - 2))")"
+}
 # Approved performance baselines (#33): compared by the project's budget tests, written only by
 # /swift-harness:approve-performance. Part of the fingerprint like the snapshot baselines.
 sh_performance() { local p; p="$(sh_cfg '.performance.path' 'performance')"; p="${p#./}"; printf '%s' "${p%/}"; }
@@ -574,7 +600,7 @@ sh_dirty_list() {
 # What the checks stand on, for weaken-watch.sh (#146): "<kind>\t<path>\t<name>\t<count>" lines,
 # sorted. In test files (a folder or a file name ending in Test or Tests): tests (func test...,
 # @Test; always printed, so a file that goes is seen), assertions, skips (XCTSkip, .disabled(,
-# #if false), and each tolerance: literal with its count. In any Swift file: swiftlint:disable.
+# #if false), and each tolerance: literal with its count; the config's snapshots.tolerance. In any Swift file: swiftlint:disable.
 # In .swiftlint.yml: each rule in disabled_rules, opt_in_rules, only_rules, and each path in
 # excluded. In the layout contract: the Min of each Screens row. In the registry: each
 # Components row ("ID Name") and each Retired ID. Text only: lines that start as a comment are
@@ -649,6 +675,9 @@ sh_weaken_list() {
     "$here/registry.sh" records "$SH_ROOT" 2>/dev/null | awk -F'\037' -v f="$(sh_registry)" '
       $1 == "C" && $4 != "" { printf "registry\t%s\t%s\t1\n", f, ($3 != "" ? $3 " " $4 : $4) }
       $1 == "R" && $3 != "" { printf "registry-retired\t%s\t%s\t1\n", f, $3 }'
+    # The project's snapshot tolerance: a larger one lets more pixels change, like a larger
+    # tolerance: in a test file.
+    jq -r 'if (.snapshots.tolerance? | type) == "number" then "tolerance\t.claude/swift-harness.json\t\(.snapshots.tolerance)\t1" else empty end' "$SH_CONFIG" 2>/dev/null
     # The porting ratchet's modules and accepted uses (#73): one fewer module or one more accepted
     # use is a weaker ratchet.
     [ -f "$SH_ROOT/$(sh_ratchet)" ] && awk -F'\t' -v f="$(sh_ratchet)" '

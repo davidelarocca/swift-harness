@@ -479,6 +479,13 @@ elif [ "$run_security" = "true" ]; then
   fi
 fi
 
+# Snapshot images collected instead of failing (snapshots.pending "collect"): their tests
+# passed, but what they show is not approved yet, so the record says not checked.
+if sh_snapshots_collect; then
+  waiting="$(sh_snapshots_waiting_text)"
+  [ -z "$waiting" ] || ev "snapshot images" "not checked" "${waiting}: /swift-harness:approve-snapshots"
+fi
+
 rm -f "$sess/running"
 if [ "$status" -eq 0 ]; then
   # "passed" means the verify command ran and passed (SH130-01). Lint, contracts or the

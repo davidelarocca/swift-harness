@@ -27,6 +27,8 @@ DERIVED_DATA=".build/DerivedData"
 RESULTS=".build/swift-harness/results"
 # SwiftLint baseline: set to the file path once created, so only new violations count.
 LINT_BASELINE=""
+# New or changed snapshot images, left by tests/Snapshot.swift for /swift-harness:approve-snapshots.
+SNAPSHOTS_WAITING=".build/swift-harness/snapshots"
 # ---------------------------------------------------------
 
 case "$MODE" in
@@ -209,6 +211,43 @@ if [ "$MODE" = "full" ]; then
     fi
   else
     skipped="$skipped swiftlint(not-installed)"
+  fi
+fi
+
+# With "snapshots": {"pending": "collect"} in .claude/swift-harness.json, a new or changed snapshot
+# image does not fail its test: it waits for the user's approval. Full fails while any waits, so
+# a branch is not merged with images nobody looked at; fast only says so.
+snapshots_collected() {
+  local config=".claude/swift-harness.json"
+  [ -f "$config" ] || return 1
+  if command -v jq >/dev/null 2>&1; then
+    [ "$(jq -r '.snapshots.pending? // "fail"' "$config" 2>/dev/null)" = collect ]
+  else
+    grep -qE '"pending"[[:space:]]*:[[:space:]]*"collect"' "$config"
+  fi
+}
+waiting_snapshots() { # one name per line: an image new or different from its baseline
+  local result name
+  for result in "$SNAPSHOTS_WAITING"/*.result.json; do
+    [ -f "$result" ] && [ -f "${result%.result.json}.png" ] || continue
+    grep -qE '"status"[[:space:]]*:[[:space:]]*"(missing|failed)"' "$result" || continue
+    name="${result##*/}"
+    printf '%s\n' "${name%.result.json}"
+  done
+}
+if snapshots_collected; then
+  waiting="$(waiting_snapshots)"
+  if [ -n "$waiting" ]; then
+    step "snapshot images waiting for approval"
+    printf '%s\n' "$waiting" | sed 's/^/snapshot waiting for approval: /' | head -20
+    count="$(printf '%s\n' "$waiting" | grep -c .)"
+    [ "$count" -le 20 ] || printf '... and %s more\n' "$((count - 20))"
+    if [ "$MODE" = full ]; then
+      printf '%s image(s) wait: the user approves them with /swift-harness:approve-snapshots, or the change that made them is fixed.\n' "$count"
+      fail=1
+    else
+      printf '%s image(s) wait (fast does not fail on them; full does): the user approves them with /swift-harness:approve-snapshots.\n' "$count"
+    fi
   fi
 fi
 

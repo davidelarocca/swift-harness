@@ -2,7 +2,9 @@
 # One static file: every value that comes from the project goes through @html, every path
 # through @uri. No script, no external resource; the images are the project's own files.
 # Made to be read in seconds: a table of what waits, then one image set per component (the
-# variant that changed most), with the other sizes and appearances folded under it.
+# variant that changed most). Its other sizes and appearances are folded under it only when they
+# show the same change in the same place; any other is shown open, so that answering "all"
+# never approves an image that differs in a way the user could not see.
 # Inputs: $items (one object per image waiting: name, status, reason, meta, baseline, diff,
 # old), $project (the project folder's name), $baselines (the baselines folder, relative to
 # the project), $up (the way from the page's folder back to the project root), $made.
@@ -28,6 +30,13 @@ def kindtext:
   else "changed" end;
 # Changed images first, the largest change on top; then new ones; then the ones not compared.
 def rank: if . == "size" then 0 elif . == "changed" then 1 elif . == "new" then 2 else 3 end;
+# The same change as $shown: pixels changed in the same region, the same change of size, or both
+# not compared. A new image is never like another: nothing was approved to compare it with.
+def like($shown):
+  .kind == $shown.kind
+  and (if .kind == "changed" then region != null and region == ($shown | region)
+       elif .kind == "size" then resized == ($shown | resized)
+       else .kind == "other Mac" end);
 def title: [(.meta.screen // .name), (.meta.state // ""), (.meta.locale // "")] | map(select(. != "")) | join(" · ");
 def variant: [(.meta.contractSize // .meta.size // ""), (.meta.appearance // "")] | map(select(. != "")) | join(", ");
 def amount:
@@ -80,7 +89,7 @@ code { font: 12px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
 </style></head><body>
 <h1>\(count($all | length; "snapshot image waits"; "snapshot images wait")) for your approval, in \(count($groups | length; "component"; "components"))</h1>
 <p>Approving means: from now on each of these must look like its <b>Now</b> image, and the tests compare with it. Approve what is meant to look like this; what is not is a defect for Claude to fix.</p>
-<p class=\"mute\">Nothing is approved by looking at this page. Back in Claude Code, answer: all, the names to approve, or none. The largest changes are first, and each component shows the variant that changed most: its other sizes and appearances are folded under it.</p>
+<p class=\"mute\">Nothing is approved by looking at this page. Back in Claude Code, answer: all, the names to approve, or none. The largest changes are first, and each component shows the variant that changed most. Its other sizes and appearances are folded under it when they show the same change in the same place; the others are shown open.</p>
 <table><tr><th>Component</th><th>Images</th><th>What</th><th>Largest change</th></tr>"
 + ($groups | to_entries | map(
     "<tr><td><a href=\"#g\(.key)\">\(.value.title | esc)</a></td><td>\(.value.images | length)</td>"
@@ -89,11 +98,14 @@ code { font: 12px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
 + "</table>"
 + ($groups | to_entries | map(
     "<h2 id=\"g\(.key)\">\(.value.title | esc)</h2>"
-    + (.value.images[0] | shown)
-    + (if (.value.images | length) > 1 then
-        "<details><summary>\(count((.value.images | length) - 1; "more image"; "more images")) of this component: \(.value.images[1:] | map(variant) | join("; ") | esc)</summary>"
-        + (.value.images[1:] | map(shown) | join("\n")) + "</details>"
-      else "" end)
+    + (.value.images[0] as $first
+      | (.value.images[1:] | map(select(like($first)))) as $folded
+      | ($first | shown)
+      + (.value.images[1:] | map(select(like($first) | not) | shown) | join("\n"))
+      + (if ($folded | length) > 0 then
+          "<details><summary>\(count($folded | length; "more image"; "more images")) of this component with the same change in the same place: \($folded | map(variant) | join("; ") | esc)</summary>"
+          + ($folded | map(shown) | join("\n")) + "</details>"
+        else "" end))
   ) | join("\n"))
 + "<p class=\"mute\" style=\"margin-top: 32px\">\($project | esc) · made \($made | esc) by swift-harness. A test run or an approval changes what waits: the approval command makes this page again.</p>
 </body></html>"
