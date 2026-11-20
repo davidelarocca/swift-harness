@@ -41,6 +41,20 @@ struct ScreenshotTests {
         #expect(rep.pixelsHigh == Int(420 * scale))
     }
 
+    // A folder that exists and has no project above it (no .git, no config, no contract): the
+    // search for the project root ends at the root of the disk. It used to go on for ever
+    // there, since a folder URL asked for its parent at "/" answers "/../", never "/" again.
+    @Test(.timeLimit(.minutes(1))) func theSearchForTheProjectEndsAtTheRootOfTheDisk() throws {
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("no-project-\(UUID().uuidString)/Tests/AppTests")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside.deletingLastPathComponent().deletingLastPathComponent()) }
+        #expect(Screenshot.root(from: outside) == nil)
+        #expect(Screenshot.folder(from: outside) == nil)
+        #expect(Snapshot.folders(from: outside) == nil)
+        #expect(Snapshot.verify("Loose", sizes: ["120x40"], file: "/no/project/above/here/LooseTests.swift") { Text("Loose") }
+            == ["No project root found above /no/project/above/here/LooseTests.swift: pass baselines: and output:."])
+    }
+
     @Test func explicitSizesAndStateNameTheFiles() throws {
         let out = try temporaryFolder()
         let problems = Screenshot.capture("Badge", sizes: ["200"], state: "long-text", output: out) {

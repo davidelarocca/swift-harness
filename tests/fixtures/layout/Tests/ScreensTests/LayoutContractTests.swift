@@ -7,6 +7,15 @@ import Testing
 // fixture screen must give.
 @MainActor
 struct LayoutContractTests {
+    // With no contract and no config above an existing folder, the search ends at the root of
+    // the disk (it used to go on for ever there).
+    @Test(.timeLimit(.minutes(1))) func theSearchForTheContractEndsAtTheRootOfTheDisk() throws {
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("no-project-\(UUID().uuidString)/Tests")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside.deletingLastPathComponent()) }
+        #expect(LayoutContract.locate(from: outside) == nil)
+    }
+
     @Test func aBarWiderThanTheMinimumIsReported() {
         let problems = LayoutContract.check("LibraryView") { LibraryView() }
         #expect(problems == ["LAYOUT_CONTRACT.md:9 LibraryView: at 640x400 it needs 772 pt of width. Content is clipped or pushed out of the window: let it shrink, wrap or collapse (ViewThatFits, a menu) below this width."])
