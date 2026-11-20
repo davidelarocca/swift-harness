@@ -48,6 +48,8 @@ For a `not-compared` image, say that approving it moves the baseline to this Mac
 
 ## 3. Approve
 
+If `approvals.ask` in `.claude/swift-harness.json` is `"always"`, the user chose to be asked every time: ask before approving, whatever the status says.
+
 If the arguments (`$ARGUMENTS`) are `all`, or name images, the user decided when typing the command: open the page all the same (step 2) and approve them in this turn without asking, unless an image looks like a defect (step 2): then ask about that one only, and approve the rest. Otherwise ask the user which images to approve (all, some, or none): they decide on the page, which only they can see. When you ask, say in one line what the answer means: an approved image is how the component must look from now on, and the tests compare with it; one that is not approved stays a failure for you to fix. Then pass the `Digest:` value from step 1, and the names when not all of them:
 
 ```bash

@@ -70,6 +70,7 @@ flowchart LR
 | Type | Name | What it does |
 |---|---|---|
 | Skill (you run it) | `/swift-harness:setup` | Bootstraps or retrofits a project: `CLAUDE.md`, `.claude/rules/`, `docs/` (architecture hub, design system, component registry, product map, layout contract, ADR template), `.swiftlint.yml`, formatter config, `scripts/verify.sh`, hook config. Never overwrites existing files. `/swift-harness:setup audit` first reports, read-only, what the project already has (rules, commands, checks, each with how it is known) and proposes the guest setup. `/swift-harness:setup guest` adds only `.claude/swift-harness.json` and a `scripts/verify.sh` that runs the project's own commands, for a project that keeps its own agent rules, docs and checks. |
+| Skill (you run it) | `/swift-harness:configure` | A few questions, written into `.claude/swift-harness.json`: how strict the checks are, whether they run at the end of each turn or before a commit, snapshots that fail or wait for one approval, how often approvals ask, where the app is going (Mac only, iPhone planned, a port under way), the docs check, and a recap of the checks at the end of each turn. Run it again to change an answer. |
 | Skill (you run it) | `/swift-harness:approve` | Everything that waits for you in one pass: the verify command, the security settings and new snapshot images. It shows each group once and asks one question at most, only for what needs your decision; the three commands below stay for one kind alone. |
 | Skill (you run it) | `/swift-harness:approve-verify` | Shows the project's verify command and the files it runs, then approves it for the end-of-turn check. Only you can run it. `/swift-harness:approve-verify revoke` removes the approval. |
 | Skill (you run it) | `/swift-harness:approve-snapshots` | Shows the new images that failing snapshot tests left (with the changed pixels in red), and copies the ones you approve into the baselines folder. Only you can run it: tests never write a baseline. |
@@ -413,6 +414,7 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `verify.enabled` | run the Stop check | `true` |
 | `verify.command` | any shell command, exit 0 means pass | `scripts/verify.sh fast` |
 | `verify.maxAttempts` | consecutive failures before Claude may stop | `3` |
+| `verify.when` | `"turn"`: the checks run at the end of each turn that changed code. `"commit"`: nothing runs at the end of a turn, and a `git commit` made by Claude is refused until the checks pass on its code (Claude runs them with `scripts/check.sh`); your own commits are checked only through a git hook you add | `turn` |
 | `verify.inputs` | files or folders covered by the approval in addition to the files the command names, such as a script the command calls through quotes or `make` | `[]` |
 | `verify.watch` | more files, folders or git pathspec globs whose changes make the end-of-turn check run, for code the app builds from another language or tool (a Rust engine, C++ with CMake); `:!` in front leaves something out. Not part of the verify approval. XcodeGen `project.yml`, `Podfile` and `Cartfile` are watched without it | `[]` |
 | `protectedPaths` | path prefixes relative to the repo root that require approval before an Edit or Write (`../` and symlinks are resolved, also when the entry itself is a symlink) | `[]` |
@@ -424,7 +426,7 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `registry.sources` | design system folders where views, modifiers and styles missing from the registry are looked for | `[]` |
 | `docs.enabled` | check the docs references at the end of the turn | `true` |
 | `docs.command` | the project's own docs check, run instead of the harness's (an adapter): at the end of a turn when the docs changed, part of the verify approval. Exit 1 means problems, another non-zero exit means it could not run | none |
-| `docs.blocking` | `false` records the project's docs check (evidence, catch log) without ever blocking | `true` |
+| `docs.blocking` | `false` records the docs check, the built-in one or the project's own (`docs.command`), and tells you, without ever blocking | `true` |
 | `verify.retryFailed` | a failing verify command runs once more; a pass on the rerun is recorded as unstable (evidence and catch log, with the tests that failed) instead of blocking | `false` |
 | `docs.paths` | the Markdown files and folders checked | `["CLAUDE.md", "AGENTS.md", "docs"]` |
 | `docs.history` | records of the past, where paths that no longer exist are expected (links are still checked) | `["docs/adr", "docs/audit", "docs/archive", "docs/HISTORY.md", "CHANGELOG.md"]` |
@@ -443,6 +445,9 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `scope` | branch scope contracts: `[{"branch": "ios-port", "paths": ["App-iOS/"], "base": "main"}]` (`branch` may end with `*`). At the end of a turn on that branch, files changed since it left `base` outside `paths` (committed or not), and `base`'s commits not merged yet, are told once to you and Claude; never blocks | none |
 | `security.enabled` | compare the app's security settings with the ones you approved at the end of each turn (`false` turns it off) | `true` |
 | `security.moves` | a setting moved to another file with the same value (a rename): `"approve"` waits for your approval, which asks no question for it; `"pass"` counts it as no change. Setting `"pass"` is itself a change you approve | `approve` |
+| `approvals.ask` | `"weakening"`: an approval command asks only when something weakens a check. `"always"`: it asks every time | `weakening` |
+| `porting.direction` | where the app goes: `"mac"`, `"ios-planned"` or `"porting"`; with `"porting"` and no ratchet recorded, the doctor warns | `mac` |
+| `recap` | `"text"`: one line at the end of each turn whose checks ran, with every check and its result; `"md"` or `"html"`: the same, kept in `.build/swift-harness/recap.md` or `.html`; `"off"`: you hear about the checks only when one failed or did not run | `off` |
 
 With `swift-format`, keep a `.swift-format` file in the repository root (setup creates one). Without it, swift-format applies its defaults, including 2-space indentation, to every file Claude edits, and SessionStart warns about it.
 
@@ -479,7 +484,7 @@ scripts/verify.sh
 
 ## Roadmap
 
-Next up: **v2.0.0, assisted macOS to iOS porting**, for any Mac app, SwiftPM or Xcode project. 1.11.0 brought the tools to carry a port on day by day (the ratchet, Xcode projects, a wider scan, audio, the simulator lock), and 1.12.0 fixed what one session on a real app found (paths of the Mac in baseline metadata, commits with git's automatic identity, formatters rewriting the helpers and renaming tests, a failed test hidden by `verify.sh`); 2.0.0 adds privacy and usage descriptions for iOS, binary frameworks without an iOS slice, background work, iPad, Mac Catalyst and visionOS as destinations, and UI tests that ask first on a shared machine. It ships when a first real feature works on iPhone and the tools have been checked on a second real app. Then **v2.1.0, perception in motion**: the running app over time (real against declared navigation, interaction conventions, injected faults, an accessibility task done through the accessibility tree), evals with and without the plugin over a series of sessions, and a demo that shows the plugin in minutes. Methods from other fields are studied in a research track, each against a simple baseline before it becomes a feature. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
+Next up: **v2.0.0, assisted macOS to iOS porting**, for any Mac app, SwiftPM or Xcode project. 1.11.0 brought the tools to carry a port on day by day (the ratchet, Xcode projects, a wider scan, audio, the simulator lock), 1.12.0 fixed what one session on a real app found (paths of the Mac in baseline metadata, commits with git's automatic identity, formatters rewriting the helpers and renaming tests, a failed test hidden by `verify.sh`), and 1.13.0 made the work stop less (snapshots that wait for one approval, approvals that ask only when something weakens a check, renames said as moves, a guided configuration); 2.0.0 adds privacy and usage descriptions for iOS, binary frameworks without an iOS slice, background work, iPad, Mac Catalyst and visionOS as destinations, and UI tests that ask first on a shared machine. It ships when a first real feature works on iPhone and the tools have been checked on a second real app. Then **v2.1.0, perception in motion**: the running app over time (real against declared navigation, interaction conventions, injected faults, an accessibility task done through the accessibility tree), evals with and without the plugin over a series of sessions, and a demo that shows the plugin in minutes. Methods from other fields are studied in a research track, each against a simple baseline before it becomes a feature. The README says macOS until a real iOS app passes. See the full [roadmap](ROADMAP.md).
 
 ## Limitations
 
@@ -509,7 +514,7 @@ Issues, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.
 .claude-plugin/marketplace.json
 plugins/swift-harness/
   .claude-plugin/plugin.json
-  skills/        setup, approve, approve-verify, approve-snapshots, approve-security, check-sensitivity, drift, report, rules, doctor, audit, product-map, port-to-ios, ui-change, design-system, feature, adr
+  skills/        setup, configure, approve, approve-verify, approve-snapshots, approve-security, check-sensitivity, drift, report, rules, doctor, audit, product-map, port-to-ios, ui-change, design-system, feature, adr
   agents/        ui-reviewer
   hooks/         hooks.json
   scripts/       hook scripts (bash + jq)

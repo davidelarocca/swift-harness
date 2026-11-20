@@ -77,8 +77,8 @@ if ! jq -e 'type == "object"' "$SH_CONFIG" >/dev/null 2>&1; then
 fi
 
 unknown="$(jq -r '
-  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "guardCommitIdentity", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance", "porting"])[],
-  (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed", "watch"])[] | "verify." + . else empty end),
+  (keys - ["guest", "uiTests", "scope", "format", "lint", "lintBlocking", "guardPbxproj", "guardBash", "guardCommitIdentity", "protectedPaths", "verify", "registry", "layout", "screenshots", "snapshots", "security", "docs", "performance", "porting", "approvals", "recap"])[],
+  (if (.verify | type) == "object" then (.verify | keys - ["enabled", "command", "maxAttempts", "inputs", "retryFailed", "watch", "when"])[] | "verify." + . else empty end),
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
@@ -87,7 +87,8 @@ unknown="$(jq -r '
   (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget", "command", "blocking"])[] | "docs." + . else empty end),
   (("lint", "format") as $k | if (.[$k] | type) == "object" then (.[$k] | keys - ["command", "blocking"])[] | "\($k)." + . else empty end),
   (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end),
-  (if (.porting | type) == "object" then (.porting | keys - ["ratchet"])[] | "porting." + . else empty end)
+  (if (.porting | type) == "object" then (.porting | keys - ["ratchet", "direction"])[] | "porting." + . else empty end),
+  (if (.approvals | type) == "object" then (.approvals | keys - ["ask"])[] | "approvals." + . else empty end)
 ' "$SH_CONFIG" | paste -sd, - | sed 's/,/, /g')"
 if [ -n "$unknown" ]; then
   row WARN "Config keys" "unknown, ignored by the hooks (typo?): $unknown"
@@ -120,7 +121,8 @@ problems="$(jq -r '
     check(["verify", "maxAttempts"]; type == "number" and . >= 1 and floor == .; "verify.maxAttempts must be a whole number, 1 or more"),
     check(["verify", "retryFailed"]; type == "boolean"; "verify.retryFailed must be true or false"),
     check(["verify", "inputs"]; type == "array" and all(.[]; type == "string"); "verify.inputs must be a list of paths"),
-    check(["verify", "watch"]; type == "array" and all(.[]; type == "string"); "verify.watch must be a list of paths")
+    check(["verify", "watch"]; type == "array" and all(.[]; type == "string"); "verify.watch must be a list of paths"),
+    check(["verify", "when"]; . == "turn" or . == "commit"; "verify.when must be \"turn\" (the checks run at the end of a turn) or \"commit\" (before a commit)")
   else empty end),
   check(["registry"]; type == "object"; "registry must be an object"),
   (if (.registry | type) == "object" then
@@ -134,8 +136,14 @@ problems="$(jq -r '
     check(["layout", "path"]; type == "string" and length > 0; "layout.path must be a path")
   else empty end),
   check(["porting"]; type == "object"; "porting must be an object"),
+  check(["approvals"]; type == "object"; "approvals must be an object"),
+  (if (.approvals | type) == "object" then
+    check(["approvals", "ask"]; . == "weakening" or . == "always"; "approvals.ask must be \"weakening\" (ask only when something weakens a check) or \"always\"")
+  else empty end),
+  check(["recap"]; . == "off" or . == "text" or . == "md" or . == "html"; "recap must be \"off\", \"text\", \"md\" or \"html\""),
   (if (.porting | type) == "object" then
-    check(["porting", "ratchet"]; type == "string" and length > 0; "porting.ratchet must be a path")
+    check(["porting", "ratchet"]; type == "string" and length > 0; "porting.ratchet must be a path"),
+    check(["porting", "direction"]; . == "mac" or . == "ios-planned" or . == "porting"; "porting.direction must be \"mac\", \"ios-planned\" or \"porting\"")
   else empty end),
   check(["screenshots"]; type == "object"; "screenshots must be an object"),
   (if (.screenshots | type) == "object" then
@@ -509,6 +517,17 @@ if [ -f "$SH_ROOT/$ratchet" ]; then
   else
     row PASS "Porting ratchet" "$ratchet_mods ported module(s), $ratchet_ok macOS-only use(s) accepted, checked at the end of each turn (text only; porting.sh build-check proves the iOS build)"
   fi
+fi
+# The app's direction (porting.direction, /swift-harness:configure): a port under way with no
+# ratchet lets a module that already builds for iOS go back unnoticed.
+case "$(sh_cfg '.porting.direction' 'mac')" in
+  porting) [ -f "$SH_ROOT/$ratchet" ] || row WARN "Porting ratchet" "porting.direction is \"porting\" but no module is recorded in $ratchet: a module that builds for iOS can get macOS-only code again unnoticed. Fix: porting.sh ratchet --record, with the user's yes" ;;
+  ios-planned) [ -f "$SH_ROOT/$ratchet" ] || row INFO "Porting ratchet" "porting.direction is \"ios-planned\": /swift-harness:port-to-ios writes a read-only plan; the ratchet starts once a module builds for iOS" ;;
+esac
+
+# When the checks run (verify.when, /swift-harness:configure).
+if [ "$(sh_cfg '.verify.when' 'turn')" = commit ]; then
+  row INFO "Checks run" "before a commit (verify.when is \"commit\"): the end of a turn runs nothing, and a commit made by the agent is refused until the checks pass on its code. Commits made outside the agent are not stopped: a git pre-commit hook can run scripts/check.sh"
 fi
 
 # Docs references (#70). Reads Markdown only. With docs.command, the project's own check (#105).
