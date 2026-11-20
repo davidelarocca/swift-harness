@@ -83,7 +83,7 @@ unknown="$(jq -r '
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
   (if (.snapshots | type) == "object" then (.snapshots | keys - ["path", "pending", "tolerance"])[] | "snapshots." + . else empty end),
-  (if (.security | type) == "object" then (.security | keys - ["enabled"])[] | "security." + . else empty end),
+  (if (.security | type) == "object" then (.security | keys - ["enabled", "moves"])[] | "security." + . else empty end),
   (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget", "command", "blocking"])[] | "docs." + . else empty end),
   (("lint", "format") as $k | if (.[$k] | type) == "object" then (.[$k] | keys - ["command", "blocking"])[] | "\($k)." + . else empty end),
   (if (.performance | type) == "object" then (.performance | keys - ["path"])[] | "performance." + . else empty end),
@@ -152,7 +152,8 @@ problems="$(jq -r '
   else empty end),
   check(["security"]; type == "object"; "security must be an object"),
   (if (.security | type) == "object" then
-    check(["security", "enabled"]; type == "boolean"; "security.enabled must be true or false")
+    check(["security", "enabled"]; type == "boolean"; "security.enabled must be true or false"),
+    check(["security", "moves"]; . == "approve" or . == "pass"; "security.moves must be \"approve\" (a setting moved to another file waits for the user, with no question) or \"pass\" (it is no change)")
   else empty end),
   check(["docs"]; type == "object"; "docs must be an object"),
   (if (.docs | type) == "object" then
@@ -580,9 +581,9 @@ shots="${shots%/}"
 absolute_shots=""
 case "/$shots/" in // | //* | */../*) ;; *) absolute_shots="$(sh_snapshot_absolute "$shots")" ;; esac
 if [ -n "$absolute_meta" ]; then
-  row WARN "Snapshot metadata" "$(printf '%s\n' "$absolute_meta" | grep -c .) file(s) in $snapshots/ name the test file by its absolute path on the Mac that made them, account name included (first: $(printf '%s\n' "$absolute_meta" | head -1)): committing them publishes it. Fix: update tests/Snapshot.swift and tests/Screenshot.swift from the setup templates, then type /swift-harness:approve-snapshots, which makes the paths relative without touching the images"
+  row WARN "Snapshot metadata" "$(printf '%s\n' "$absolute_meta" | grep -c .) file(s) in $snapshots/ name the test or source file by its absolute path on the Mac that made them, account name included (first: $(printf '%s\n' "$absolute_meta" | head -1)): committing them publishes it. Fix: update tests/Snapshot.swift and tests/Screenshot.swift from the setup templates, then type /swift-harness:approve-snapshots, which makes the paths relative without touching the images"
 elif [ -n "$absolute_shots" ]; then
-  row WARN "Snapshot metadata" "$(printf '%s\n' "$absolute_shots" | grep -c .) file(s) in $shots/ name the test file by its absolute path on the Mac that made them, account name included (first: $(printf '%s\n' "$absolute_shots" | head -1)). Fix: update tests/Screenshot.swift from the setup templates and run the tests that capture again"
+  row WARN "Snapshot metadata" "$(printf '%s\n' "$absolute_shots" | grep -c .) file(s) in $shots/ name the test or source file by its absolute path on the Mac that made them, account name included (first: $(printf '%s\n' "$absolute_shots" | head -1)). Fix: update tests/Screenshot.swift from the setup templates and run the tests that capture again"
 elif [ -d "$SH_ROOT/$snapshots" ] && [ -n "$(find "$SH_ROOT/$snapshots" -type f -name '*.json' | head -1)" ]; then
   row PASS "Snapshot metadata" "no absolute path in $snapshots/: the test file is named relative to the project"
 fi

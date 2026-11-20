@@ -77,6 +77,9 @@ current_state() {
     done <<<"$(files '*.pbxproj' '*.xcconfig')"
     # Turning the check off is a change to approve like any other (#32).
     printf '.claude/swift-harness.json: security.enabled = %s\n' "$(sh_cfg '.security.enabled' 'true')"
+    # Letting moves pass is a weaker check, so it is approved too. Recorded only when set, so a
+    # project without it keeps the state it approved.
+    [ "$(sh_cfg '.security.moves' 'approve')" != pass ] || printf '.claude/swift-harness.json: security.moves = pass\n'
   } | sort
 }
 
@@ -86,10 +89,67 @@ approved="$state_dir/security-approved"
 # reviewed: a new clone, Mac or worktree starts from what is on its branch.
 unreviewed="$state_dir/security-unreviewed"
 # Settings that weaken protection, pointed out wherever they appear.
-RELAXED='cs\.(disable-library-validation|allow-jit|allow-unsigned-executable-memory|allow-dyld-environment-variables|disable-executable-page-protection|debugger) = true|temporary-exception|app-sandbox = false|NSAllowsArbitraryLoads[A-Za-z]* = true|NSExceptionAllowsInsecureHTTPLoads = true|ENABLE_HARDENED_RUNTIME = NO|ENABLE_APP_SANDBOX = NO|CODE_SIGNING_ALLOWED = NO|DISABLE_LIBRARY_VALIDATION = YES|RUNTIME_EXCEPTION_[A-Z_]+ = YES|security\.enabled = false'
+RELAXED='cs\.(disable-library-validation|allow-jit|allow-unsigned-executable-memory|allow-dyld-environment-variables|disable-executable-page-protection|debugger) = true|temporary-exception|app-sandbox = false|NSAllowsArbitraryLoads[A-Za-z]* = true|NSExceptionAllowsInsecureHTTPLoads = true|ENABLE_HARDENED_RUNTIME = NO|ENABLE_APP_SANDBOX = NO|CODE_SIGNING_ALLOWED = NO|DISABLE_LIBRARY_VALIDATION = YES|RUNTIME_EXCEPTION_[A-Z_]+ = YES|security\.enabled = false|security\.moves = pass'
 changes() { # "+ line" for added or changed, "- line" for removed
   diff "$approved" <(current_state) | sed -n -e 's/^> /+ /p' -e 's/^< /- /p'
 }
+# Settings whose removal weakens protection, when nothing with the same value replaces them.
+PROTECTIVE='app-sandbox = true|ENABLE_HARDENED_RUNTIME = YES|ENABLE_APP_SANDBOX = YES|ENABLE_LIBRARY_VALIDATION = YES|security\.enabled = true'
+# The changes ($1, from changes) sorted out for a rename: a setting removed from one file and the
+# same "key = value" added in another is a move, not a change. The entitlements path in a build
+# setting that follows a moved entitlements file is part of the move too. Prints one line each:
+#   moved<TAB><old file><TAB><new file><TAB><count><TAB><note>
+#   change<TAB><+ or - line>
+sort_changes() {
+  printf '%s\n' "$1" | awk '
+    function strip(v) { sub(/ \([0-9]+ configurations\)$/, "", v); return v }
+    function configs(v) { return match(v, / \([0-9]+ configurations\)$/) ? substr(v, RSTART) : "" }
+    function ends(s, t) { return t != "" && length(s) >= length(t) && substr(s, length(s) - length(t) + 1) == t }
+    /^[+-] / {
+      sign = substr($0, 1, 1); line = substr($0, 3)
+      i = index(line, ": "); if (i == 0) { other[++n] = $0; next }
+      file = substr(line, 1, i - 1); rest = substr(line, i + 2)
+      if (sign == "-") { mi = ++m; mf[mi] = file; mr[mi] = rest } else { pi = ++q; pf[pi] = file; pr[pi] = rest }
+    }
+    END {
+      # Pair each removed line with an added one of the same setting and value in another file.
+      for (a = 1; a <= m; a++) for (b = 1; b <= q; b++) {
+        if (usedp[b] || mr[a] != pr[b] || mf[a] == pf[b]) continue
+        usedm[a] = usedp[b] = 1; key = mf[a] SUBSEP pf[b]; moved[key]++; break
+      }
+      # An entitlements path that follows a moved entitlements file.
+      for (a = 1; a <= m; a++) if (!usedm[a] && mr[a] ~ /^CODE_SIGN_ENTITLEMENTS(\[[^]]*\])? = /) {
+        split(mr[a], x, " = "); oldv = strip(x[2])
+        for (b = 1; b <= q; b++) {
+          if (usedp[b] || pr[b] !~ /^CODE_SIGN_ENTITLEMENTS(\[[^]]*\])? = /) continue
+          split(pr[b], y, " = "); newv = strip(y[2])
+          if (configs(mr[a]) != configs(pr[b])) continue
+          follows = 0
+          for (k in moved) { split(k, f, SUBSEP); if (f[1] ~ /\.entitlements$/ && ends(f[1], oldv) && ends(f[2], newv)) follows = 1 }
+          if (!follows) continue
+          usedm[a] = usedp[b] = 1; key = mf[a] SUBSEP pf[b]; moved[key]++
+          note[key] = "among them the entitlements path, which follows the moved entitlements file"
+          break
+        }
+      }
+      for (k in moved) { split(k, f, SUBSEP); printf "moved\t%s\t%s\t%d\t%s\n", f[1], f[2], moved[k], note[k] }
+      for (a = 1; a <= m; a++) if (!usedm[a]) printf "change\t- %s: %s\n", mf[a], mr[a]
+      for (b = 1; b <= q; b++) if (!usedp[b]) printf "change\t+ %s: %s\n", pf[b], pr[b]
+      for (i = 1; i <= n; i++) printf "change\t%s\n", other[i]
+    }' | LC_ALL=C sort
+}
+# The changes that are not moves, as "+ line" and "- line".
+real_changes() { sort_changes "$1" | sed -n 's/^change\t//p'; }
+# The real changes that weaken protection: a weakening setting added, or a protective one removed.
+weakening() {
+  local real
+  real="$(real_changes "$1")"
+  grep -E "^\+ .*($RELAXED)" <<<"$real"
+  grep -E "^- .*($PROTECTIVE)( \([0-9]+ configurations\))?\$" <<<"$real"
+  return 0
+}
+# How many settings are recorded, the check's own switch apart.
+recorded() { grep -vEc '^\.claude/swift-harness\.json: security\.(enabled|moves) = ' "$approved" 2>/dev/null || echo 0; }
 digest_of() { { cat "$approved" 2>/dev/null; printf -- '--\n'; current_state; } | shasum -a 256 | cut -d' ' -f1; }
 # For the user's eyes only: the line of the check's own switch says when its value is the
 # default, with no security.enabled key in the file to look for. The recorded line stays as it
@@ -118,6 +178,19 @@ case "$action" in
     fi
     out="$(changes)"
     [ -z "$out" ] && exit 0
+    # A rename moves settings between files without changing them. With security.moves "pass"
+    # that is no change; with "approve", the default, the user records the new paths, with no
+    # question asked (the status says there is nothing to decide).
+    real="$(real_changes "$out")"
+    if [ -z "$real" ]; then
+      [ "$(sh_cfg '.security.moves' 'approve')" != pass ] || exit 0
+      printf 'Security settings moved to other files, values unchanged (a rename):\n%s\n' \
+        "$(sort_changes "$out" | awk -F'\t' '$1 == "moved" && $2 == $3 { printf "  %s: the entitlements path follows the moved entitlements file\n", $2; next }
+          $1 == "moved" { printf "  %s -> %s: %s setting(s)\n", $2, $3, $4 }' | head -30)"
+      printf 'Nothing was relaxed. The user records the new paths by typing /swift-harness:approve-security (no question to answer); tell them so. Do not run it yourself.\n'
+      exit 1
+    fi
+    [ "$(sh_cfg '.security.moves' 'approve')" != pass ] || out="$real"
     printf 'Security settings changed since the user approved them:\n%s\n' "$(printf '%s\n' "$out" | head -30)"
     printf 'If you relaxed a setting to make something work, revert it and find another way. If the change is needed, stop and tell the user why: only they approve it, by typing /swift-harness:approve-security. Do not run it yourself.\n'
     exit 1
@@ -145,9 +218,35 @@ case "$action" in
         printf '\n'
       fi
       if [ -z "$out" ]; then
-        printf 'No change since the last approval (%s setting(s) recorded).\n' "$(grep -c . "$approved" 2>/dev/null || echo 0)"
+        printf 'No change since the last approval (%s setting(s) recorded).\n' "$(recorded)"
+        decide=""
       else
-        printf 'Changes since the last approval (+ added or new value, - removed or old value):\n%s\n' "$(printf '%s\n' "$out" | shown)"
+        sorted="$(sort_changes "$out")"
+        moves="$(printf '%s\n' "$sorted" | awk -F'\t' '$1 == "moved" && $2 == $3 { printf "  %s: the entitlements path follows the moved entitlements file\n", $2; next }
+          $1 == "moved" { printf "  %s -> %s: %s setting(s) moved%s\n", $2, $3, $4, ($5 != "" ? ", " $5 : "") }')"
+        real="$(printf '%s\n' "$sorted" | sed -n 's/^change\t//p')"
+        if [ -n "$moves" ]; then
+          printf 'Moved to another file, values unchanged (a rename):\n%s\n' "$moves"
+          if [ "$(sh_cfg '.security.moves' 'approve')" = pass ]; then
+            printf '(security.moves is "pass": these do not fail the end-of-turn check; approving records the new paths.)\n'
+          else
+            printf '(security.moves is "approve", the default: these fail the end-of-turn check until approved, with no question to answer.)\n'
+          fi
+        fi
+        if [ -n "$real" ]; then
+          printf 'Changes since the last approval (+ added or new value, - removed or old value):\n%s\n' "$(printf '%s\n' "$real" | shown)"
+        else
+          printf 'No setting changed its value.\n'
+        fi
+        decide="$(weakening "$out")"
+      fi
+      # What the user has to decide: the skill asks only when this names something.
+      if [ -f "$unreviewed" ] && [ -n "$(grep -E "$RELAXED" "$approved")" ]; then
+        printf 'To decide: the baseline was never reviewed and holds settings that weaken protection (listed above).\n'
+      elif [ -n "$decide" ]; then
+        printf 'To decide: these changes weaken protection:\n%s\n' "$(printf '%s\n' "$decide" | sed 's/^/  /')"
+      elif [ -n "$out" ] || [ -f "$unreviewed" ]; then
+        printf 'Nothing to decide: no change weakens protection.\n'
       fi
       printf 'Digest: %s\n' "$(digest_of)"
       exit 0
@@ -160,7 +259,7 @@ case "$action" in
     # The approved state is outside the repository, so approving does not change the code
     # identity: drop the failure recorded for this code, and the next Stop checks it again (#141).
     rm -f "$state_dir/failed"
-    printf 'Approved: %s setting(s) recorded as the security baseline.\n' "$(grep -c . "$approved")"
-    sh_catch "security settings" approved "$(grep -c . "$approved") setting(s)"
+    printf 'Approved: %s setting(s) recorded as the security baseline, and security.enabled.\n' "$(recorded)"
+    sh_catch "security settings" approved "$(recorded) setting(s)"
     ;;
 esac

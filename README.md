@@ -70,6 +70,7 @@ flowchart LR
 | Type | Name | What it does |
 |---|---|---|
 | Skill (you run it) | `/swift-harness:setup` | Bootstraps or retrofits a project: `CLAUDE.md`, `.claude/rules/`, `docs/` (architecture hub, design system, component registry, product map, layout contract, ADR template), `.swiftlint.yml`, formatter config, `scripts/verify.sh`, hook config. Never overwrites existing files. `/swift-harness:setup audit` first reports, read-only, what the project already has (rules, commands, checks, each with how it is known) and proposes the guest setup. `/swift-harness:setup guest` adds only `.claude/swift-harness.json` and a `scripts/verify.sh` that runs the project's own commands, for a project that keeps its own agent rules, docs and checks. |
+| Skill (you run it) | `/swift-harness:approve` | Everything that waits for you in one pass: the verify command, the security settings and new snapshot images. It shows each group once and asks one question at most, only for what needs your decision; the three commands below stay for one kind alone. |
 | Skill (you run it) | `/swift-harness:approve-verify` | Shows the project's verify command and the files it runs, then approves it for the end-of-turn check. Only you can run it. `/swift-harness:approve-verify revoke` removes the approval. |
 | Skill (you run it) | `/swift-harness:approve-snapshots` | Shows the new images that failing snapshot tests left (with the changed pixels in red), and copies the ones you approve into the baselines folder. Only you can run it: tests never write a baseline. |
 | Skill (you run it) | `/swift-harness:approve-performance` | Shows the new numbers that performance budget tests left (a first baseline, a regression, a gain, or another Mac), and copies the ones you accept into `performance/`. Only you can run it: tests and Claude never write a baseline. |
@@ -441,6 +442,7 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `guest` | guest mode: the project's own rules and docs are the source of truth, set by `/swift-harness:setup guest` | `false` |
 | `scope` | branch scope contracts: `[{"branch": "ios-port", "paths": ["App-iOS/"], "base": "main"}]` (`branch` may end with `*`). At the end of a turn on that branch, files changed since it left `base` outside `paths` (committed or not), and `base`'s commits not merged yet, are told once to you and Claude; never blocks | none |
 | `security.enabled` | compare the app's security settings with the ones you approved at the end of each turn (`false` turns it off) | `true` |
+| `security.moves` | a setting moved to another file with the same value (a rename): `"approve"` waits for your approval, which asks no question for it; `"pass"` counts it as no change. Setting `"pass"` is itself a change you approve | `approve` |
 
 With `swift-format`, keep a `.swift-format` file in the repository root (setup creates one). Without it, swift-format applies its defaults, including 2-space indentation, to every file Claude edits, and SessionStart warns about it.
 
@@ -507,7 +509,7 @@ Issues, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.
 .claude-plugin/marketplace.json
 plugins/swift-harness/
   .claude-plugin/plugin.json
-  skills/        setup, approve-verify, approve-snapshots, approve-security, check-sensitivity, drift, report, rules, doctor, audit, product-map, port-to-ios, ui-change, design-system, feature, adr
+  skills/        setup, approve, approve-verify, approve-snapshots, approve-security, check-sensitivity, drift, report, rules, doctor, audit, product-map, port-to-ios, ui-change, design-system, feature, adr
   agents/        ui-reviewer
   hooks/         hooks.json
   scripts/       hook scripts (bash + jq)

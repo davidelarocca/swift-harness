@@ -29,13 +29,15 @@ If the status is already `approved`, say so and stop. If it is `approved, partia
 
 ## 2. Point out what deserves a look
 
-Read each file listed under `File:` and tell the user in two or three lines what it runs (for the generated `scripts/verify.sh`: `swift test` and `xcodebuild build`). Flag anything that does more than build, test or lint: network access, `curl`, `sudo`, deleting files outside the project, writing outside the project, or reading credentials. Also mention any script the command calls without naming it in the command line, since that is not covered by the approval.
+If the status has `Changes since the last approval`, the rest was already approved: look only at those lines. Tell the user in one or two lines what they change (a rename that substitutes names is said in a few words, not line by line), and flag only what the added lines (`+`) and new files bring. A line that was already in the approved version is not a finding, even when it is shown as context around a change.
+
+Otherwise (a first approval, or one that kept no copy), read each file listed under `File:` and tell the user in two or three lines what it runs (for the generated `scripts/verify.sh`: `swift test` and `xcodebuild build`). Flag anything that does more than build, test or lint: network access, `curl`, `sudo`, deleting files outside the project, writing outside the project, or reading credentials. Also mention any script the command calls without naming it in the command line, since that is not covered by the approval.
 
 Approving means trusting the project's build: `xcodebuild` runs the project's Run Script phases and SwiftPM runs package manifests and plugins.
 
 ## 3. Approve
 
-If you flagged something, ask the user to confirm before approving. Otherwise approve right away, passing the `Digest:` value from step 1:
+The user typed this command: that is the decision to approve. If you flagged something new, ask the user to confirm before approving, naming it. Otherwise approve right away, in this turn, passing the `Digest:` value from step 1:
 
 ```bash
 CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}/scripts/approve-verify.sh" --approve <digest>

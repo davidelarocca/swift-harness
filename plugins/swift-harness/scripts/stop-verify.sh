@@ -159,6 +159,13 @@ ev_log_end() { # $1 kind: fixed or left-failing, $2 what
   while IFS= read -r name; do [ -n "$name" ] && sh_catch "$name" "$1" "$2"; done <"$sess/blocked-checks"
   rm -f "$sess/blocked-checks"
 }
+# "name, ..." of the checks that failed in the record, else of all that ran ($checks): the
+# header of a failure names only what failed (the second field report on 1.11).
+ev_failed() {
+  local failed
+  failed="$(awk -F'\t' '$2 == "failed" { printf "%s%s", (n++ ? ", " : ""), $1 }' "$ev_lines")"
+  printf '%s' "${failed:-$checks}"
+}
 # "name, ..." of the checks that passed this turn.
 ev_passed() { awk -F'\t' '$2 == "passed" || $2 == "partial" { printf "%s%s", (n++ ? ", " : ""), $1 }' "$ev_lines"; }
 
@@ -271,12 +278,22 @@ failures="${failures:-0}"
 # field keep one count, as before.
 [ "$(printf '%s' "$SH_INPUT" | jq -r 'if .stop_hook_active == false then "new" else "" end' 2>/dev/null)" != new ] || failures=0
 
+# More than one kind of approval waiting (the verify command, the security settings, snapshot
+# images): one command clears them all (the second field report on 1.11).
+approvals_hint() {
+  local n=0
+  [ "$verify_enabled" = "true" ] && [ "$run_verify" != "true" ] && n=$((n + 1))
+  awk -F'\t' '$1 == "security settings" && $2 == "failed" { f = 1 } END { exit !f }' "$ev_lines" && n=$((n + 1))
+  [ -z "$(sh_snapshots_waiting)" ] || n=$((n + 1))
+  [ "$n" -lt 2 ] || printf ' More than one approval waits: /swift-harness:approve clears them in one go.'
+}
 # The user is told what was not checked (#81) with any message they get; told is set once said.
 told=false
 warn_user() {
   local msg="$1" missing
   missing="$(ev_missing)"
   [ -z "$missing" ] || msg="$msg Not checked this turn: $missing."
+  msg="$msg$(approvals_hint)"
   told=true
   printf '%s%s' "$fp" "$missing" >"$sess/missing-told"
   [ -z "$missing" ] || ev_log_skipped
@@ -299,7 +316,9 @@ warn_unapproved() {
   [ "$verify_enabled" = "true" ] && [ "$run_verify" = "false" ] || return 0
   [ "$fp" = "$(cat "$sess/unapproved-warned" 2>/dev/null)" ] && return 0
   printf '%s' "$fp" >"$sess/unapproved-warned"
-  warn_user "swift-harness: the end-of-turn check did not run '$command_line', because this project's verify command is new or changed since you last approved it. These changes are not verified. Review the command and the files it runs, then $(sh_approve_how)."
+  local changed
+  changed="$(sh_verify_text_summary "$command_line" "$state")"
+  warn_user "swift-harness: the end-of-turn check did not run '$command_line', because this project's verify command is new or changed since you last approved it${changed:+ (changed: $changed)}. These changes are not verified. Review the command and the files it runs, then $(sh_approve_how)."
 }
 
 if [ -z "$checks" ]; then
@@ -347,7 +366,7 @@ if [ "$fp" = "$failed_fp" ]; then
   if [ "$(sh_in '.stop_hook_active')" = "true" ]; then
     printf '0' > "$sess/failures"
     ev_log_end left-failing "$(sh_agent_name) stopped without fixing it; the user was told"
-    warn_user "swift-harness: '$checks' is still failing. $(sh_agent_name) stopped without fixing it."
+    warn_user "swift-harness: '$(ev_failed)' is still failing. $(sh_agent_name) stopped without fixing it."
   fi
   exit 0
 fi
@@ -538,16 +557,21 @@ if [ "$failures" -ge "$max_attempts" ]; then
   printf '0' > "$sess/failures"
   rm -f "$out"
   ev_log_end left-failing "failed $max_attempts times in a row; the user decides"
-  warn_user "swift-harness: '$checks' failed $max_attempts times in a row. Stopping so you can decide."
+  warn_user "swift-harness: '$(ev_failed)' failed $max_attempts times in a row. Stopping so you can decide."
   exit 0
 fi
 printf '%s' "$failures" > "$sess/failures"
 
 {
-  printf 'Verification failed (attempt %s of %s): %s\n\n' "$failures" "$max_attempts" "$checks"
+  printf 'Verification failed (attempt %s of %s): %s\n' "$failures" "$max_attempts" "$(ev_failed)"
+  passed="$(ev_passed)"
+  [ -z "$passed" ] || printf 'Passed: %s\n' "$passed"
+  printf '\n'
   tail -n 60 "$out"
   missing="$(ev_missing)"
   [ -z "$missing" ] || printf '\nNot checked this turn: %s. Do not report these as verified.\n' "$missing"
+  hint="$(approvals_hint)"
+  [ -z "$hint" ] || printf '%s Tell the user; do not run it yourself.\n' "${hint# }"
   printf '\nFix the failures caused by your changes, then finish. If a failure is unrelated to your work, or you stopped on purpose to ask the user something, say so in one line and stop again without editing: the check will not block twice on the same code.\n'
 } >&2
 rm -f "$out"

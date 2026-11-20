@@ -1489,7 +1489,8 @@ hook session-start.sh "$C" '{"source":"startup"}' >/dev/null
 add_dependency "$C" Domain '"DesignSystem"'
 out="$(cstop "$C")"
 expect_result "stop: a forbidden dependency blocks the turn, with verify passing" 2 'target "Domain" depends on "DesignSystem"' "$out"
-expect_result "stop: the contracts are named in the failure header" 2 'scripts/verify\.sh fast \+ architecture contracts' "$out"
+expect_result "stop: the contracts are named in the failure header, the verify command that passed apart" 2 '^Verification failed \(attempt 1 of 3\): architecture contracts$' "$out"
+expect_result "stop: ... and the verify command on the line of the checks that passed" 2 '^Passed: scripts/verify\.sh fast' "$out"
 git -C "$C" checkout -q Package.swift
 echo '// changed' >>"$C/Sources/Domain/Domain.swift"
 expect_result "stop: an allowed change passes" 0 '^exit=0' "$(cstop "$C")" 'depends on'
@@ -1762,7 +1763,8 @@ hook session-start.sh "$R" '{"source":"startup"}' >/dev/null
 sed -i '' 's/public struct Badge</public struct Tag</' "$R/Sources/DesignSystem/Badge.swift"
 out="$(rstop "$R")"
 expect_result "stop: a registry error blocks the turn, with verify passing" 2 'UI-003 Badge: .*not declared' "$out"
-expect_result "stop: the registry is named in the failure header" 2 'scripts/verify\.sh fast \+ component registry' "$out"
+expect_result "stop: the registry is named in the failure header, the verify command that passed apart" 2 '^Verification failed \(attempt 1 of 3\): component registry$' "$out"
+expect_result "stop: ... and the verify command on the line of the checks that passed" 2 '^Passed: scripts/verify\.sh fast' "$out"
 reg_edit "$R" 's/^| UI-003 | Badge |/| UI-003 | Tag |/'
 expect_result "stop: a registry fix alone is checked again and passes" 0 '^exit=0' "$(rstop "$R")" 'not declared'
 
@@ -2093,7 +2095,8 @@ hook session-start.sh "$L" '{"source":"startup"}' >/dev/null
 sed -i '' 's/struct InspectorPane:/struct DetailsPane:/' "$L/Sources/App/Inspector.swift"
 out="$(rstop "$L")"
 expect_result "stop: a layout contract error blocks the turn, with verify passing" 2 'InspectorPane is not declared' "$out"
-expect_result "stop: the layout contract is named in the failure header" 2 'scripts/verify\.sh fast \+ layout contract' "$out"
+expect_result "stop: the layout contract is named in the failure header, the verify command that passed apart" 2 '^Verification failed \(attempt 1 of 3\): layout contract$' "$out"
+expect_result "stop: ... and the verify command on the line of the checks that passed" 2 '^Passed: scripts/verify\.sh fast' "$out"
 lay_edit "$L" 's/| InspectorPane |/| DetailsPane |/'
 sed -i '' 's/"InspectorPane") { InspectorPane()/"DetailsPane") { DetailsPane()/' "$L/Tests/AppTests/LayoutTests.swift"
 expect_result "stop: a contract fix is checked again and passes" 0 '^exit=0' "$(rstop "$L")" 'not declared'
@@ -2360,12 +2363,12 @@ done
 git -C "$S" add -A && git -C "$S" commit -qm "baselines from an older helper"
 hook session-start.sh "$S" '{"source":"startup"}' >/dev/null
 png_before="$(shasum "$S"/snapshots/*.png)"
-expect_row "doctor: a baseline made by an older helper is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '2 file\(s\) in snapshots/ name the test file by its absolute path.*first: snapshots/Elsewhere-macos-80-light\.json.*approve-snapshots'
+expect_row "doctor: a baseline made by an older helper is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '2 file\(s\) in snapshots/ name the test or source file by its absolute path.*first: snapshots/Elsewhere-macos-80-light\.json.*approve-snapshots'
 expect_result "snapshots: status counts the metadata with an absolute path" 0 '^2 metadata file\(s\) in snapshots/ hold the absolute path.*--relative-paths' "$(snap --status --project "$S")"
 expect_result "snapshots: --relative-paths takes no image name" 2 'usage:' "$(snap --relative-paths --project "$S" Here-macos-80-light)"
 out="$(snap --relative-paths --project "$S")"
 expect_result "snapshots: --relative-paths rewrites the test field of each file" 0 'Made relative: snapshots/Elsewhere-macos-80-light\.json \(test: Tests/AppTests/SnapTests\.swift\)' "$out"
-expect_result "snapshots: --relative-paths says what to commit" 0 'only the "test" field of 2 metadata file\(s\) changed' "$out"
+expect_result "snapshots: --relative-paths says what to commit" 0 'only the file paths \("test", "source"\) of 2 metadata file\(s\) changed' "$out"
 if [ "$png_before" = "$(shasum "$S"/snapshots/*.png)" ] && ! grep -rqE '"/' "$S/snapshots" &&
   [ "$(git -C "$S" diff --numstat | awk '{ a += $1; d += $2 } END { print NR, a, d }')" = "2 2 2" ]; then
   ok "snapshots: --relative-paths changes one line in each file and no image"
@@ -2374,6 +2377,12 @@ expect_result "snapshot-watch: paths made relative by the script are not reporte
 expect_result "snapshots: --relative-paths with nothing to do says so" 0 'Nothing changed' "$(snap --relative-paths --project "$S")"
 expect_row "doctor: after --relative-paths the metadata passes" "$(doctor "$S")" PASS 'Snapshot metadata'
 expect_result "snapshots: status says nothing about metadata when it is clean" 0 'No new images wait' "$(snap --status --project "$S")" 'absolute path'
+# The source a test passes (source:) is committed too: an absolute one is caught the same way.
+jq --arg s "$ELSEWHERE/Sources/App.swift" '.source = $s' "$S/snapshots/Here-macos-80-light.json" >"$TMP/sj" && mv "$TMP/sj" "$S/snapshots/Here-macos-80-light.json"
+expect_row "doctor: an absolute source path in a baseline is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '1 file\(s\) in snapshots/ name the test or source file by its absolute path'
+snap --relative-paths --project "$S" >/dev/null
+if [ "$(jq -r .source "$S/snapshots/Here-macos-80-light.json")" = Sources/App.swift ]; then ok "snapshots: --relative-paths makes the source relative too"
+else nok "snapshots: --relative-paths makes the source relative too" "$(cat "$S/snapshots/Here-macos-80-light.json")"; fi
 # Screenshots are not committed by default; a folder set in the config can be.
 mkdir -p "$S/review/shots"
 printf '{"os": "27.0", "test": "%s/Tests/AppTests/ShotTests.swift"}\n' "$ELSEWHERE" >"$S/review/shots/Main-macos-600x400-light.json"
@@ -2821,6 +2830,166 @@ mkdir -p "$P/Helper"
 hook session-start.sh "$P" '{"source":"startup"}' >/dev/null
 printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/></dict></plist>\n' >"$P/Helper/Helper.entitlements"
 expect_result "security: a new entitlements file is a change too" 2 'Helper/Helper\.entitlements: com\.apple\.security\.cs\.allow-unsigned-executable-memory = true' "$(rstop "$P")"
+
+# ---------- approvals on a rename (the second field report on 1.11) ----------
+# One rename of a whole project set off three approvals and two notices, each approval with a
+# second question. A move is said as a move, an approval asks only what needs a decision, and
+# one command clears whatever waits.
+
+state_dir_of() { printf '%s/data/state/%s' "$TMP" "$(printf '%s' "$(cd "$1" && pwd -P)" | shasum | cut -c1-16)"; }
+R="$(sec_project rename-security)"
+hook session-start.sh "$R" '{"source":"startup"}' >/dev/null
+d="$(sec --status --project "$R" | sed -n 's/^Digest: //p')"
+out="$(sec --approve "$d" --project "$R")"
+expect_result "rename: the approval counts the settings the listing shows, the switch apart" 0 '^Approved: 4 setting\(s\) recorded as the security baseline, and security\.enabled\.$' "exit=0
+$out"
+git -C "$R" mv App NewApp
+git -C "$R" mv NewApp/App.entitlements NewApp/NewApp.entitlements
+perl -pi -e 's#App/App\.entitlements#NewApp/NewApp.entitlements#' "$R/App.xcodeproj/project.pbxproj"
+out="$(sec --status --project "$R")"
+if grep -qF 'Moved to another file, values unchanged (a rename):' <<<"$out" &&
+  grep -qF '  App/App.entitlements -> NewApp/NewApp.entitlements: 2 setting(s) moved' <<<"$out" &&
+  grep -qF '  App.xcodeproj/project.pbxproj: the entitlements path follows the moved entitlements file' <<<"$out" &&
+  grep -qF 'No setting changed its value.' <<<"$out" && grep -qF 'Nothing to decide: no change weakens protection.' <<<"$out" &&
+  ! grep -qE '^[+-] ' <<<"$out"; then
+  ok "rename: the security status shows moved settings one line per file, with no +/- pair"
+else nok "rename: the security status shows moved settings one line per file, with no +/- pair" "$out"; fi
+echo 'let app = 2' >"$R/Sources/App.swift"
+out="$(rstop "$R")"
+expect_result "rename: by default a move waits for the user, said as a move with nothing relaxed" 2 'Nothing was relaxed\. The user records the new paths by typing /swift-harness:approve-security \(no question to answer\)' "$out" '^\+ '
+d="$(sec --status --project "$R" | sed -n 's/^Digest: //p')"
+sec --approve "$d" --project "$R" >/dev/null
+expect_result "rename: ... and once approved the turn passes" 0 '^exit=0' "$(rstop "$R")" 'Security settings'
+
+# security.moves "pass": a move is no change. Setting it is itself a change to approve.
+set_config "$R" '{"format":"none","lint":"none","verify":{"enabled":false,"maxAttempts":20},"security":{"moves":"pass"}}'
+out="$(sec --status --project "$R")"
+expect_result "rename: security.moves pass is a change that weakens protection, to decide" 0 'To decide: these changes weaken protection:' "exit=0
+$out"
+expect_result "rename: ... named" 0 '^  \+ \.claude/swift-harness\.json: security\.moves = pass$' "exit=0
+$out"
+d="$(sec --status --project "$R" | sed -n 's/^Digest: //p')"
+sec --approve "$d" --project "$R" >/dev/null
+git -C "$R" add -A && git -C "$R" commit -qm renamed
+git -C "$R" mv NewApp Renamed
+git -C "$R" mv Renamed/NewApp.entitlements Renamed/Renamed.entitlements
+perl -pi -e 's#NewApp/NewApp\.entitlements#Renamed/Renamed.entitlements#' "$R/App.xcodeproj/project.pbxproj"
+echo 'let app = 3' >"$R/Sources/App.swift"
+expect_result "rename: with security.moves pass a move passes the turn" 0 '^exit=0' "$(rstop "$R")" 'Security settings'
+plutil -replace 'com\.apple\.security\.cs\.disable-library-validation' -bool YES "$R/Renamed/Renamed.entitlements"
+echo 'let app = 4' >"$R/Sources/App.swift"
+out="$(rstop "$R")"
+expect_result "rename: ... and a real change in a moved file still blocks, alone in the list" 2 '^\+ Renamed/Renamed\.entitlements: com\.apple\.security\.cs\.disable-library-validation = true$' "$out" 'app-sandbox'
+expect_result "rename: the failure header names only the failing check" 2 '^Verification failed \(attempt [0-9] of 20\): security settings$' "$out"
+if grep -qF 'Nothing to decide' "$SKILLS/approve-security/SKILL.md" && grep -qF 'do not ask again for what weakens nothing' "$SKILLS/approve-security/SKILL.md"; then
+  ok "rename: approve-security asks only when something weakens protection"
+else nok "rename: approve-security asks only when something weakens protection"; fi
+expect_row "doctor: security.moves is approve or pass" "$(set_config "$R" '{"security":{"moves":"sometimes"}}'; doctor "$R")" FAIL Config 'security\.moves must be "approve"'
+
+# The verify approval keeps the text it approved: the next status shows what changed since.
+V2="$(new_project rename-verify)"
+printf 'source scripts/helper.sh\n' >>"$V2/scripts/verify.sh"
+printf 'name=OldApp\n' >"$V2/scripts/helper.sh"
+set_config "$V2" '{"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast","inputs":["scripts/helper.sh"]}}'
+git -C "$V2" add -A && git -C "$V2" commit -qm inputs
+approve "$V2" >/dev/null
+hook session-start.sh "$V2" '{"source":"startup"}' >/dev/null
+perl -pi -e 's/fake verify output/fake check output/' "$V2/scripts/verify.sh"
+perl -pi -e 's/OldApp/NewApp/' "$V2/scripts/helper.sh"
+out="$(approval "$V2" --status)"
+expect_result "verify diff: the status names the files changed since the approval" 0 'Changes since the last approval in this folder \(scripts/helper\.sh \(\+1 -1 lines\), scripts/verify\.sh \(\+1 -1 lines\);' "exit=0
+$out"
+expect_result "verify diff: ... and shows the lines" 0 '^\+echo "fake check output"$' "exit=0
+$out"
+expect_result "verify diff: ... and not the lines that did not change" 0 '^-name=OldApp$' "exit=0
+$out" '^[+-]exit '
+echo 'let app = 5' >"$V2/Sources/App.swift"
+out="$(FAKE_VERIFY_LOG=/dev/null hook stop-verify.sh "$V2" 2>&1)"
+expect_result "verify diff: the end-of-turn notice says which files changed and by how much" 0 'changed since you last approved it \(changed: scripts/helper\.sh \(\+1 -1 lines\), scripts/verify\.sh \(\+1 -1 lines\)\)' "exit=$?
+$out"
+rm -rf "$(state_dir_of "$V2")/verify-approved-text"
+expect_result "verify diff: an approval that kept no copy says the changes are not available" 0 'Changes since the last approval: not available' "exit=0
+$(approval "$V2" --status)"
+approve "$V2" >/dev/null
+approval "$V2" --revoke >/dev/null
+if [ ! -e "$(state_dir_of "$V2")/verify-approved-text" ]; then ok "verify diff: revoking removes the copy"
+else nok "verify diff: revoking removes the copy"; fi
+if grep -qF 'flag only what the added lines' "$SKILLS/approve-verify/SKILL.md"; then ok "verify diff: the skill flags only what the changed lines bring"
+else nok "verify diff: the skill flags only what the changed lines bring"; fi
+
+# The failure header: the failing checks only, the ones that passed on their own line. And when
+# more than one kind of approval waits, the single command is named.
+H="$(sec_project rename-header)"
+set_config "$H" '{"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast","maxAttempts":20}}'
+git -C "$H" add -A && git -C "$H" commit -qm verify
+approve "$H" >/dev/null
+hook session-start.sh "$H" '{"source":"startup"}' >/dev/null
+d="$(sec --status --project "$H" | sed -n 's/^Digest: //p')"
+sec --approve "$d" --project "$H" >/dev/null
+entitle "$H" 'com\.apple\.security\.cs\.allow-jit' YES
+echo 'let app = 6' >"$H/Sources/App.swift"
+out="$(rstop "$H")"
+expect_result "header: a failure names the failing check" 2 '^Verification failed \(attempt 1 of 20\): security settings$' "$out"
+expect_result "header: ... and the passed ones apart" 2 '^Passed: scripts/verify\.sh fast$' "$out"
+expect_result "header: one kind of approval waiting does not name the single command" 2 'security settings' "$out" 'swift-harness:approve clears'
+echo '# changed' >>"$H/scripts/verify.sh"
+echo 'let app = 7' >"$H/Sources/App.swift"
+out="$(rstop "$H")"
+expect_result "approve: with two kinds of approval waiting, the block names the single command" 2 'More than one approval waits: /swift-harness:approve clears them in one go\. Tell the user; do not run it yourself\.' "$out"
+if grep -qx 'disable-model-invocation: true' "$SKILLS/approve/SKILL.md" && grep -qF 'approve-verify.sh" --approve' "$SKILLS/approve/SKILL.md" &&
+  grep -qF 'security.sh" --approve' "$SKILLS/approve/SKILL.md" && grep -qF 'snapshots.sh" --approve' "$SKILLS/approve/SKILL.md" &&
+  grep -qF 'One question at most' "$SKILLS/approve/SKILL.md"; then
+  ok "approve: one command for the three approvals, run by the user only, with one question at most"
+else nok "approve: one command for the three approvals, run by the user only, with one question at most"; fi
+if grep -qF 'are `all`, or name images, the user decided' "$SKILLS/approve-snapshots/SKILL.md"; then ok "approve: approve-snapshots all asks no question"
+else nok "approve: approve-snapshots all asks no question"; fi
+
+# A protected file moved: said as a move, content unchanged.
+M="$(new_project rename-protected)"
+hook session-start.sh "$M" '{"source":"startup"}' >/dev/null
+git -C "$M" mv Sources/Audio Sources/Sound
+out="$(hook protected-watch.sh "$M" 2>&1)"
+expect_result "protected move: a file moved out of the protected paths is said as a move" 0 'moved out of the protected paths, content unchanged: Sources/Audio/Engine\.swift -> Sources/Sound/Engine\.swift' "exit=0
+$out" 'deleted: '
+expect_result "protected move: ... and the notice says it is no longer protected" 0 'still names the old place, so the files at the new one are no longer protected' "exit=0
+$out"
+M2="$(new_project rename-protected-inside)"
+set_config "$M2" '{"protectedPaths":["Sources/Audio/","Sources/Sound/"]}'
+hook session-start.sh "$M2" '{"source":"startup"}' >/dev/null
+git -C "$M2" mv Sources/Audio Sources/Sound
+out="$(hook protected-watch.sh "$M2" 2>&1)"
+expect_result "protected move: a move inside the protected paths is said as a move, not a change" 0 '  moved, content unchanged: Sources/Audio/Engine\.swift -> Sources/Sound/Engine\.swift' "exit=0
+$out" '[^n]changed: |deleted: |no longer protected'
+echo 'let engine = 2' >"$M2/Sources/Sound/Engine.swift"
+expect_result "protected move: an edit after the move is still a change" 0 'changed: Sources/Sound/Engine\.swift' "exit=0
+$(hook protected-watch.sh "$M2" 2>&1)"
+if grep -qF 'move the file with `git mv`, content unchanged, and name its new place in `protectedPaths`' "$TEMPLATES/CLAUDE.md"; then
+  ok "protected move: the setup's rules say how to move a protected file"
+else nok "protected move: the setup's rules say how to move a protected file"; fi
+
+# A lint exclusion that follows a renamed folder is not a weaker check.
+X="$(new_project rename-lint)"
+printf 'excluded:\n  - OldApp/Generated\n' >"$X/.swiftlint.yml"
+git -C "$X" add -A && git -C "$X" commit -qm lint
+hook session-start.sh "$X" '{"source":"startup"}' >/dev/null
+printf 'excluded:\n  - NewApp/Generated\n' >"$X/.swiftlint.yml"
+expect_result "rename: a lint exclusion that follows a renamed folder is not a weaker check" 0 '^exit=0$' "exit=0
+$(hook weaken-watch.sh "$X" 2>&1)" 'excluded from lint'
+printf 'excluded:\n  - NewApp/Generated\n  - Other/Stuff\n' >"$X/.swiftlint.yml"
+expect_result "rename: ... a new exclusion still is" 0 'Other/Stuff excluded from lint' "exit=0
+$(hook weaken-watch.sh "$X" 2>&1)" 'NewApp/Generated excluded'
+# A test file moved and edited in the same change: compared as one file by its name.
+Y="$(new_project rename-tests)"
+mkdir -p "$Y/OldApp/Tests"
+printf 'import XCTest\nfinal class PlayerTests: XCTestCase {\n    func testPlays() { XCTAssertTrue(true) }\n    func testStops() { XCTAssertTrue(true) }\n    func testSeeks() { XCTAssertTrue(true) }\n}\n' >"$Y/OldApp/Tests/PlayerTests.swift"
+git -C "$Y" add -A && git -C "$Y" commit -qm tests
+hook session-start.sh "$Y" '{"source":"startup"}' >/dev/null
+mkdir -p "$Y/NewApp"
+git -C "$Y" mv OldApp/Tests NewApp/Tests
+perl -ni -e 'print unless /testSeeks/' "$Y/NewApp/Tests/PlayerTests.swift"
+out="$(hook weaken-watch.sh "$Y" 2>&1)"
+expect_result "rename: a test file moved and edited is compared as one file" 0 'NewApp/Tests/PlayerTests\.swift: 1 test removed \(3 -> 2\)' "exit=0
+$out" 'file removed'
 
 # ---------- concurrency escape hatches (#37) ----------
 # Real SwiftLint with the setup template: the rules are regexes, so test them as SwiftLint runs them.
@@ -4733,7 +4902,7 @@ EOF
 mkdir -p "$UC/scripts/nested"; echo 'print(1)' >"$UC/scripts/helper.py"; echo 'exit 0' >"$UC/scripts/nested/run.sh"
 git -C "$UC" add -A; git -C "$UC" commit -qm uncovered
 out="$(approval "$UC" --status)"
-if grep -q 'Not covered: scripts/helper.py, named in scripts/verify.sh' <<<"$out" && grep -q 'Not covered: scripts/nested/run.sh, named in scripts/verify.sh' <<<"$out" && ! grep -q 'gone.sh' <<<"$out" && ! grep -q 'Not covered: scripts/verify.sh' <<<"$out"; then
+if grep -q 'Not covered: scripts/helper.py, named in scripts/verify.sh' <<<"$out" && grep -q 'Not covered: scripts/nested/run.sh, named in scripts/verify.sh' <<<"$out" && ! grep -q 'Not covered: .*gone.sh' <<<"$out" && ! grep -q 'Not covered: scripts/verify.sh' <<<"$out"; then
   ok "approval: a script named by the approved one and not covered is shown; a name that does not exist is not"
 else nok "approval: a script named by the approved one and not covered is shown; a name that does not exist is not" "$out"; fi
 out="$(doctor "$UC")"

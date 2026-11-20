@@ -93,14 +93,16 @@ relative_test() {
   done
   printf '%s' "${p##*/}"
 }
-# The metadata in file $1 with a relative test path, on stdout. $2 and $3: the time and the
-# status of an approval, to add.
+# The metadata in file $1 with relative test and source paths, on stdout. $2 and $3: the time and
+# the status of an approval, to add.
 relative_meta() {
-  local test
+  local test source
   test="$(relative_test "$(jq -r 'if (.test | type) == "string" then .test else "" end' "$1" 2>/dev/null)")"
-  jq --arg test "$test" --arg now "${2:-}" --arg status "${3:-}" '
+  source="$(relative_test "$(jq -r 'if (.source | type) == "string" then .source else "" end' "$1" 2>/dev/null)")"
+  jq --arg test "$test" --arg source "$source" --arg now "${2:-}" --arg status "${3:-}" '
     (if $now != "" then . + {approved: $now, approvedFrom: $status} else . end)
-    | if (.test | type) == "string" then .test = $test else . end' "$1"
+    | if (.test | type) == "string" then .test = $test else . end
+    | if (.source | type) == "string" then .source = $source else . end' "$1"
 }
 
 if [ "$action" = "--relative-paths" ]; then
@@ -123,7 +125,7 @@ if [ "$action" = "--relative-paths" ]; then
     count=$((count + 1))
   done <<<"$absolute"
   sh_catch "snapshot baselines" approved "$count metadata file(s): absolute test path made relative"
-  echo "Commit $baselines/: only the \"test\" field of $count metadata file(s) changed, the images are the same. A commit already made keeps the old path in the history."
+  echo "Commit $baselines/: only the file paths (\"test\", \"source\") of $count metadata file(s) changed, the images are the same. A commit already made keeps the old path in the history."
   exit 0
 fi
 

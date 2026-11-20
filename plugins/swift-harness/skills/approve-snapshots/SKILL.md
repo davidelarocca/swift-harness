@@ -2,7 +2,7 @@
 name: approve-snapshots
 description: Look at the new snapshot images left by failing visual regression tests and approve them as baselines. Only the user runs this; tests never write baselines, and Claude must not copy images into the baselines folder.
 disable-model-invocation: true
-argument-hint: "[image name ...]"
+argument-hint: "[all | image name ...]"
 ---
 
 # Approve snapshot baselines
@@ -48,7 +48,7 @@ For a `not-compared` image, say that approving it moves the baseline to this Mac
 
 ## 3. Approve
 
-Ask the user which images to approve (all, some, or none), unless the arguments (`$ARGUMENTS`) already name them. Say in one line what the answer means: an approved image is how the component must look from now on, and the tests compare with it; one that is not approved stays a failure for you to fix. Then pass the `Digest:` value from step 1, and the names when not all of them:
+If the arguments (`$ARGUMENTS`) are `all`, or name images, the user decided when typing the command: open the page all the same (step 2) and approve them in this turn without asking, unless an image looks like a defect (step 2): then ask about that one only, and approve the rest. Otherwise ask the user which images to approve (all, some, or none): they decide on the page, which only they can see. When you ask, say in one line what the answer means: an approved image is how the component must look from now on, and the tests compare with it; one that is not approved stays a failure for you to fix. Then pass the `Digest:` value from step 1, and the names when not all of them:
 
 ```bash
 CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}/scripts/snapshots.sh" --approve <digest> [name ...]
