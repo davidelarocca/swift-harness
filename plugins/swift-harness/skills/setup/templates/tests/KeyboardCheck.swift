@@ -97,8 +97,12 @@ final class KeyboardCheck {
         if focused { return nil }
         let setting = NSApp.isFullKeyboardAccessEnabled
             ? "\"Keyboard navigation\" is on, so the hosted view has nothing that can take the focus"
-            : "\"Keyboard navigation\" is off on this Mac (System Settings > Keyboard), so standard controls (Slider, Toggle, Picker, Button) do not take it, or the hosted view has nothing that can"
-        return "no view took the focus: \(setting). Keys that are not shortcuts (Return for .defaultAction, Escape for .cancelAction, Command combinations) reach nothing. A component whose keys must work whatever the setting takes the focus itself: .focusable(interactions: .edit) with .onKeyPress."
+            : "\"Keyboard navigation\" is off on this Mac (System Settings > Keyboard), so standard controls"
+                + " (Slider, Toggle, Picker, Button) do not take it, or the hosted view has nothing that can"
+        return "no view took the focus: \(setting)."
+            + " Keys that are not shortcuts (Return for .defaultAction, Escape for .cancelAction, Command combinations)"
+            + " reach nothing. A component whose keys must work whatever the setting takes the focus itself:"
+            + " .focusable(interactions: .edit) with .onKeyPress."
     }
 
     func press(_ character: String, modifiers: NSEvent.ModifierFlags = []) {
