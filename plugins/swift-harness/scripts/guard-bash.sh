@@ -119,7 +119,7 @@ if [[ "$cmd" =~ $COMMIT ]] && [ "$(sh_cfg '.verify.when' 'turn')" = commit ]; th
     else
       why="the checks have not passed on this code yet (verify.when is \"commit\": they run before a commit, not at the end of each turn). Run them"
     fi
-    reason="swift-harness: $why with: \"$check\" --project \"$SH_ROOT\" --agent claude, then commit again. If it says the verify command is not approved, stop and tell the user: only they approve it (/swift-harness:approve-verify)."
+    reason="swift-harness: $why with: CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA:-}\" \"$check\" --project \"$SH_ROOT\" --agent claude, then commit again. If it says the verify command is not approved, stop and tell the user: only they approve it (/swift-harness:approve-verify)."
     sh_catch "checks before a commit" blocked "a commit before the checks passed on its code"
     jq -n --arg reason "$reason" '{
       hookSpecificOutput: {

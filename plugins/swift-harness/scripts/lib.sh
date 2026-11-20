@@ -563,6 +563,23 @@ sh_snapshot_list() {
     sed 's/  / /' | LC_ALL=C sort
 }
 
+# A newer swift-harness installed for this project than the one running, as "<version>\t<scope>";
+# nothing otherwise. Claude Code can load an older install of the plugin (a user-scope install
+# left behind while a project-scope one was updated), and its hooks are then the old ones.
+# Read from Claude Code's list of installed plugins; nothing if it cannot be read.
+sh_newer_install() {
+  local list="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json" mine
+  mine="$(jq -r '.version // empty' "$(dirname "${BASH_SOURCE[0]}")/../.claude-plugin/plugin.json" 2>/dev/null)"
+  [ -n "$mine" ] && [ -f "$list" ] || return 0
+  jq -r --arg mine "$mine" --arg root "$SH_ROOT" '
+    def v: [splits("[.]") | tonumber? // 0];
+    [(.plugins // {}) | to_entries[] | select(.key | startswith("swift-harness@")) | .value[]?
+      | select(type == "object" and (.version | type) == "string")
+      | select(.scope == "user" or ((.projectPath // "") as $p | $p != "" and ($root == $p or ($root | startswith($p + "/")))))
+      | select((.version | v) > ($mine | v))]
+    | max_by(.version | v) // empty | "\(.version)\t\(.scope // "user")"' "$list" 2>/dev/null
+}
+
 # Metadata files under a baselines folder ($1, relative to the project) whose "test" or "source"
 # is an absolute path, as project-relative paths. A Snapshot.swift older than 1.12.0 wrote the
 # test file as the Mac that made the image saw it, account name included, and the folder is

@@ -86,7 +86,7 @@ for answer in "$@"; do
       case "$a" in
         turn) program="$program | del(.verify.when)" ;;
         commit) program="$program | .verify.when = \"commit\""
-          notes="$notes- stop=commit: the end of a turn runs nothing; a git commit made by Claude is refused until the checks pass on its code (Claude runs them with check.sh). Your own commits are not stopped: to check them too, add a git pre-commit hook that runs \"$(cd "$(dirname "$0")" && pwd)/check.sh\" --project \"$SH_ROOT\".
+          notes="$notes- stop=commit: the end of a turn runs nothing; a git commit made by Claude is refused until the checks pass on its code (Claude runs them with check.sh). Your own commits are not stopped: to check them too, add a git pre-commit hook that runs CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA:-}\" \"$(cd "$(dirname "$0")" && pwd)/check.sh\" --project \"$SH_ROOT\".
 " ;;
         *) bad "turn or commit" ;;
       esac ;;

@@ -44,6 +44,12 @@ else
   row PASS Xcode "$(xcodebuild -version 2>/dev/null | head -1), $(swift --version 2>/dev/null | head -1 | sed 's/ (.*//')"
 fi
 
+# An older install of the plugin running while a newer one is installed for this project.
+newer="$(sh_newer_install)"
+if [ -n "$newer" ]; then
+  row WARN "Plugin install" "this session runs swift-harness $(jq -r .version "$(dirname "$0")/../.claude-plugin/plugin.json"), but ${newer%%	*} is installed for this project (${newer#*	} scope): Claude Code loaded an older install, so the checks are the old ones. Fix: update the older install (/plugin, swift-harness, update), then start a new session"
+fi
+
 # ---------- configuration ----------
 
 if git -C "$SH_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
