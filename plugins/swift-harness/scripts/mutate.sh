@@ -217,7 +217,8 @@ credit_regex() {
     keyboard) signature_of 'KeyboardCheck\.' ;;
     layout-size) signature_of 'LayoutContract\.check|LayoutAudit\.' ;;
     accessibility) signature_of 'AccessibilityAudit\.|performAccessibilityAudit' ;;
-    snapshot) signature_of 'Snapshot\.verify' ;;
+    # With snapshots.pending "collect" the test passes and verify.sh full names the image instead.
+    snapshot) printf '%s' "$(signature_of 'Snapshot\.verify' | sed 's/.*/(&)|/')^snapshot waiting for approval: " ;;
   esac
 }
 

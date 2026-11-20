@@ -526,6 +526,32 @@ sh_docs_keys() {
 # test result. New images wait in SH_SNAPSHOT_CANDIDATES.
 sh_snapshots() { local p; p="$(sh_cfg '.snapshots.path' 'snapshots')"; p="${p#./}"; printf '%s' "${p%/}"; }
 SH_SNAPSHOT_CANDIDATES=".build/swift-harness/snapshots"
+# "snapshots": {"pending": "collect"}: a new or different image does not fail its test. It
+# waits, and the approval is asked once: before a commit (guard-bash.sh), and by
+# `scripts/verify.sh full`, which fails while images wait. The default, "fail", fails the test.
+sh_snapshots_collect() { [ "$(sh_cfg '.snapshots.pending' 'fail')" = collect ]; }
+# The images of the last test run that are new or differ from their baseline, one name per
+# line. An image made on another macOS version (not compared) is not one of them: no approval
+# is owed for it on this Mac.
+sh_snapshots_waiting() {
+  local result name
+  for result in "$SH_ROOT/$SH_SNAPSHOT_CANDIDATES"/*.result.json; do
+    [ -f "$result" ] && [ -f "${result%.result.json}.png" ] || continue
+    case "$(jq -r '.status // ""' "$result" 2>/dev/null)" in missing | failed) ;; *) continue ;; esac
+    name="${result##*/}"
+    printf '%s\n' "${name%.result.json}"
+  done
+}
+# "3 snapshot image(s) wait for the user's approval (A, B and 1 more)", or nothing.
+sh_snapshots_waiting_text() {
+  local list count
+  list="$(sh_snapshots_waiting)"
+  [ -n "$list" ] || return 0
+  count="$(printf '%s\n' "$list" | grep -c .)"
+  printf "%s snapshot image(s) wait for the user's approval (%s%s)" "$count" \
+    "$(printf '%s\n' "$list" | head -2 | paste -sd, - | sed 's/,/, /g')" \
+    "$([ "$count" -le 2 ] || printf ' and %s more' "$((count - 2))")"
+}
 # Approved performance baselines (#33): compared by the project's budget tests, written only by
 # /swift-harness:approve-performance. Part of the fingerprint like the snapshot baselines.
 sh_performance() { local p; p="$(sh_cfg '.performance.path' 'performance')"; p="${p#./}"; printf '%s' "${p%/}"; }
@@ -537,13 +563,14 @@ sh_snapshot_list() {
     sed 's/  / /' | LC_ALL=C sort
 }
 
-# Metadata files under a baselines folder ($1, relative to the project) whose "test" is an
-# absolute path, as project-relative paths. A Snapshot.swift older than 1.12.0 wrote the test
-# file as the Mac that made the image saw it, account name included, and the folder is committed.
+# Metadata files under a baselines folder ($1, relative to the project) whose "test" or "source"
+# is an absolute path, as project-relative paths. A Snapshot.swift older than 1.12.0 wrote the
+# test file as the Mac that made the image saw it, account name included, and the folder is
+# committed; "source" is what a test passes as source:, absolute when the test wrote it so.
 sh_snapshot_absolute() {
   [ -d "$SH_ROOT/$1" ] || return 0
   (cd "$SH_ROOT" && find "$1" -type f -name '*.json' -exec \
-    jq -r 'select(type == "object" and (.test | type) == "string" and (.test | startswith("/"))) | input_filename' {} + 2>/dev/null) |
+    jq -r 'select(type == "object" and any(.test, .source; type == "string" and startswith("/"))) | input_filename' {} + 2>/dev/null) |
     LC_ALL=C sort
 }
 
@@ -574,7 +601,7 @@ sh_dirty_list() {
 # What the checks stand on, for weaken-watch.sh (#146): "<kind>\t<path>\t<name>\t<count>" lines,
 # sorted. In test files (a folder or a file name ending in Test or Tests): tests (func test...,
 # @Test; always printed, so a file that goes is seen), assertions, skips (XCTSkip, .disabled(,
-# #if false), and each tolerance: literal with its count. In any Swift file: swiftlint:disable.
+# #if false), and each tolerance: literal with its count; the config's snapshots.tolerance. In any Swift file: swiftlint:disable.
 # In .swiftlint.yml: each rule in disabled_rules, opt_in_rules, only_rules, and each path in
 # excluded. In the layout contract: the Min of each Screens row. In the registry: each
 # Components row ("ID Name") and each Retired ID. Text only: lines that start as a comment are
@@ -649,6 +676,9 @@ sh_weaken_list() {
     "$here/registry.sh" records "$SH_ROOT" 2>/dev/null | awk -F'\037' -v f="$(sh_registry)" '
       $1 == "C" && $4 != "" { printf "registry\t%s\t%s\t1\n", f, ($3 != "" ? $3 " " $4 : $4) }
       $1 == "R" && $3 != "" { printf "registry-retired\t%s\t%s\t1\n", f, $3 }'
+    # The project's snapshot tolerance: a larger one lets more pixels change, like a larger
+    # tolerance: in a test file.
+    jq -r 'if (.snapshots.tolerance? | type) == "number" then "tolerance\t.claude/swift-harness.json\t\(.snapshots.tolerance)\t1" else empty end' "$SH_CONFIG" 2>/dev/null
     # The porting ratchet's modules and accepted uses (#73): one fewer module or one more accepted
     # use is a weaker ratchet.
     [ -f "$SH_ROOT/$(sh_ratchet)" ] && awk -F'\t' -v f="$(sh_ratchet)" '
@@ -919,6 +949,83 @@ sh_verify_partial() {
 }
 
 sh_verify_digest() { sh_verify_manifest "$1" | shasum -a 256 | cut -d' ' -f1; }
+
+# The text the user approved (the second field report on 1.11): the approval itself is a digest,
+# which says that something changed, not what. A copy of the covered files is kept with it, so
+# the next status can show the lines that changed since, and the Stop hook can say how many.
+SH_VERIFY_TEXT_MAX=5242880 # bytes: past this the copy is not kept, and the status says so
+# The covered files, as paths relative to the project, one per line: the files the commands name
+# and every file under verify.inputs.
+sh_verify_text_files() { # $1 command
+  local line word sha input rel
+  while IFS= read -r line; do
+    case "$line" in
+      "file "*)
+        read -r _ word sha <<<"$line"
+        case "$word" in "$SH_ROOT"/*) printf '%s\n' "${word#"$SH_ROOT"/}" ;; *) printf '%s\n' "$word" ;; esac
+        ;;
+      input$'\t'*)
+        IFS=$'\t' read -r _ input sha <<<"$line"
+        case "$sha" in missing | outside | linkdir) continue ;; esac
+        rel="$(sh_relpath "$input")"
+        [ -n "$rel" ] || continue
+        if [ -d "$SH_ROOT/$rel" ]; then
+          (cd "$SH_ROOT" && find "$rel" \( -type f -o -type l \) ! -name .DS_Store 2>/dev/null)
+        else
+          printf '%s\n' "$rel"
+        fi
+        ;;
+    esac
+  done < <(sh_verify_manifest "$1") | sed 's#^\./##' | LC_ALL=C sort -u
+}
+# Keeps a copy of the covered files in $2/verify-approved-text, replacing the last one. $1 command.
+sh_verify_keep_text() {
+  local dir="$2/verify-approved-text" f size=0
+  rm -rf "$dir" "$dir.tmp"
+  mkdir -p "$dir.tmp/files" || return 0
+  printf '%s\n' "$1" >"$dir.tmp/command"
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ -f "$SH_ROOT/$f" ] || continue
+    size=$((size + $(wc -c <"$SH_ROOT/$f")))
+    [ "$size" -le "$SH_VERIFY_TEXT_MAX" ] || { rm -rf "$dir.tmp"; return 0; }
+    mkdir -p "$dir.tmp/files/$(dirname "$f")" && cat "$SH_ROOT/$f" >"$dir.tmp/files/$f"
+  done < <(sh_verify_text_files "$1")
+  mv "$dir.tmp" "$dir"
+}
+# What changed since the approved text, for the status: a unified diff of each file, new and
+# removed files named. Prints nothing when no copy was kept. $1 command, $2 state folder.
+sh_verify_text_diff() {
+  local dir="$2/verify-approved-text" f
+  [ -d "$dir/files" ] || return 0
+  [ "$(cat "$dir/command" 2>/dev/null)" = "$1" ] || printf 'command: was "%s"\n' "$(cat "$dir/command" 2>/dev/null)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ ! -f "$dir/files/$f" ]; then
+      printf 'new file: %s (%s lines)\n' "$f" "$(wc -l <"$SH_ROOT/$f" | tr -d ' ')"
+    elif ! cmp -s "$dir/files/$f" "$SH_ROOT/$f"; then
+      diff -u --label "approved/$f" --label "now/$f" "$dir/files/$f" "$SH_ROOT/$f"
+    fi
+  done < <(sh_verify_text_files "$1")
+  (cd "$dir/files" && find . -type f | sed 's#^\./##' | LC_ALL=C sort) | LC_ALL=C comm -23 - <(sh_verify_text_files "$1") |
+    sed 's/^/no longer covered: /'
+}
+# One line: "scripts/verify.sh (+3 -3 lines), scripts/ci.sh (new)", or nothing.
+sh_verify_text_summary() { # $1 command, $2 state folder
+  sh_verify_text_diff "$1" "$2" | awk '
+    /^\+\+\+ now\// { f = substr($0, 9); order[++n] = f; next }
+    /^--- approved\// { next }
+    /^\+/ && f != "" { add[f]++; c[f] = "lines"; next }
+    /^-/ && f != "" { del[f]++; c[f] = "lines"; next }
+    /^new file: / { sub(/^new file: /, ""); sub(/ \([0-9]+ lines\)$/, ""); order[++n] = $0; c[$0] = "new"; f = ""; next }
+    /^no longer covered: / { sub(/^no longer covered: /, ""); order[++n] = $0; c[$0] = "no longer covered"; f = ""; next }
+    /^command: / { order[++n] = "the command"; c["the command"] = "changed"; f = ""; next }
+    END {
+      for (i = 1; i <= n; i++) {
+        k = order[i]; v = c[k]
+        printf "%s%s (%s)", (i > 1 ? ", " : ""), k, (v == "lines" ? "+" (add[k] + 0) " -" (del[k] + 0) " lines" : v)
+      }
+    }'
+}
 
 # Approval across worktrees (#107). Worktrees of one repository share its git common
 # directory. An approval given in one is also recorded under that repository, by a digest of

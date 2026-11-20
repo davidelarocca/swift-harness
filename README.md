@@ -70,6 +70,7 @@ flowchart LR
 | Type | Name | What it does |
 |---|---|---|
 | Skill (you run it) | `/swift-harness:setup` | Bootstraps or retrofits a project: `CLAUDE.md`, `.claude/rules/`, `docs/` (architecture hub, design system, component registry, product map, layout contract, ADR template), `.swiftlint.yml`, formatter config, `scripts/verify.sh`, hook config. Never overwrites existing files. `/swift-harness:setup audit` first reports, read-only, what the project already has (rules, commands, checks, each with how it is known) and proposes the guest setup. `/swift-harness:setup guest` adds only `.claude/swift-harness.json` and a `scripts/verify.sh` that runs the project's own commands, for a project that keeps its own agent rules, docs and checks. |
+| Skill (you run it) | `/swift-harness:approve` | Everything that waits for you in one pass: the verify command, the security settings and new snapshot images. It shows each group once and asks one question at most, only for what needs your decision; the three commands below stay for one kind alone. |
 | Skill (you run it) | `/swift-harness:approve-verify` | Shows the project's verify command and the files it runs, then approves it for the end-of-turn check. Only you can run it. `/swift-harness:approve-verify revoke` removes the approval. |
 | Skill (you run it) | `/swift-harness:approve-snapshots` | Shows the new images that failing snapshot tests left (with the changed pixels in red), and copies the ones you approve into the baselines folder. Only you can run it: tests never write a baseline. |
 | Skill (you run it) | `/swift-harness:approve-performance` | Shows the new numbers that performance budget tests left (a first baseline, a regression, a gain, or another Mac), and copies the ones you accept into `performance/`. Only you can run it: tests and Claude never write a baseline. |
@@ -209,8 +210,11 @@ A shared component changed for one screen can shift every other screen that uses
 ```
 
 - `Snapshot.verify` (copied by setup next to `Screenshot.swift`, from `templates/tests/Snapshot.swift`) renders the view the same way as the screenshots, in light and dark, and compares each image with its baseline in `snapshots/`. `locale:` sets the language and the text direction, so a gallery covers long languages and right to left.
-- A test never writes a baseline. A missing or different image fails and names the region that changed ("85 of 151200 pixels differ, within x 96-110, y 118-126 pt"); the new image and a diff with the changed pixels in red wait in `.build/swift-harness/snapshots/`. You look at them and approve with `/swift-harness:approve-snapshots`, which copies them into `snapshots/` to commit.
+- A test never writes a baseline. A missing or different image fails and names the region that changed ("85 of 151200 pixels differ, within x 96-110, y 118-126 pt"); the new image and a diff with the changed pixels in red wait in `.build/swift-harness/snapshots/`. You approve with `/swift-harness:approve-snapshots`: it opens a page on your Mac with each image as approved, as it is now and with the changed pixels in red, the largest changes first and one image set per component, so you decide on what you see; the ones you approve are copied into `snapshots/` to commit.
 - Claude cannot replace a baseline quietly: the guard asks before an Edit or Write in `snapshots/`, and at the end of a turn you are told about baselines changed without approval, shell commands included. In real sessions, Claude handed the approval back to the user even when asked to update the baselines ([results](tests/smoke/RESULTS.md)).
+- Fewer stops while you work: with `"snapshots": {"pending": "collect"}` a new or different image does not fail its test. It waits all the same, and the approval is asked once for all of them: a `git commit` asks you first while images wait, the end of each turn tells you they are not checked yet, and `scripts/verify.sh full` fails until they are approved. An image that cannot be read still fails.
+- `"snapshots": {"tolerance": 0.001}` is the fraction of pixels allowed to differ in every snapshot test that passes no `tolerance:` of its own. Raising it, like raising a `tolerance:` in a test, is reported at the end of the turn as a weaker check.
+- On the approval page a component shows the image that changed most; its other sizes and appearances are folded under it only when they show the same change in the same place, so answering "all" never approves an image you could not see.
 - Baselines are pinned to the macOS version and display scale they were made on. On another version an image is reported as not compared, never as a match.
 - The `.json` beside each baseline is committed with it, so it names the test file relative to the project, never by its absolute path on your Mac. Baselines approved before 1.12.0 hold that path: the doctor reports them, and `/swift-harness:approve-snapshots` makes them relative without touching the images.
 
@@ -430,12 +434,15 @@ On Claude Code 2.1.275 or later, the first two lines can be one: `/plugin instal
 | `layout.path` | the layout contract, relative to the repo root; `LayoutContract.check` reads it from the same config | `docs/LAYOUT_CONTRACT.md` |
 | `screenshots.path` | where `Screenshot.capture` saves images and `ui-reviewer` looks for them, relative to the repo root | `.build/swift-harness/screenshots` |
 | `snapshots.path` | the approved snapshot baselines `Snapshot.verify` compares with, inside the repo; only `/swift-harness:approve-snapshots` writes there, and the guard asks before an edit | `snapshots` |
+| `snapshots.pending` | `"fail"`: a new or different image fails its snapshot test. `"collect"`: it waits without failing, a `git commit` asks first while any waits, and `scripts/verify.sh full` fails until `/swift-harness:approve-snapshots` | `fail` |
+| `snapshots.tolerance` | the fraction of pixels allowed to differ, for snapshot tests that pass no `tolerance:`; raising it is reported as a weaker check | `0` |
 | `performance.path` | the approved performance baselines `PerformanceBudget.verify` compares with, inside the repo; only `/swift-harness:approve-performance` writes there, and the guard asks before an edit | `performance` |
 | `uiTests.isolation` | the launch arguments or environment keys that give the app its own test store and defaults in UI tests (for example `"-UITestingSuite"`); `/swift-harness:doctor` warns about a UI test file that launches the app without them, directly or through a launch helper | none |
 | `uiTests.launchHelpers` | more launch helpers, when their names do not contain "launch" | none |
 | `guest` | guest mode: the project's own rules and docs are the source of truth, set by `/swift-harness:setup guest` | `false` |
 | `scope` | branch scope contracts: `[{"branch": "ios-port", "paths": ["App-iOS/"], "base": "main"}]` (`branch` may end with `*`). At the end of a turn on that branch, files changed since it left `base` outside `paths` (committed or not), and `base`'s commits not merged yet, are told once to you and Claude; never blocks | none |
 | `security.enabled` | compare the app's security settings with the ones you approved at the end of each turn (`false` turns it off) | `true` |
+| `security.moves` | a setting moved to another file with the same value (a rename): `"approve"` waits for your approval, which asks no question for it; `"pass"` counts it as no change. Setting `"pass"` is itself a change you approve | `approve` |
 
 With `swift-format`, keep a `.swift-format` file in the repository root (setup creates one). Without it, swift-format applies its defaults, including 2-space indentation, to every file Claude edits, and SessionStart warns about it.
 
@@ -502,7 +509,7 @@ Issues, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.
 .claude-plugin/marketplace.json
 plugins/swift-harness/
   .claude-plugin/plugin.json
-  skills/        setup, approve-verify, approve-snapshots, approve-security, check-sensitivity, drift, report, rules, doctor, audit, product-map, port-to-ios, ui-change, design-system, feature, adr
+  skills/        setup, approve, approve-verify, approve-snapshots, approve-security, check-sensitivity, drift, report, rules, doctor, audit, product-map, port-to-ios, ui-change, design-system, feature, adr
   agents/        ui-reviewer
   hooks/         hooks.json
   scripts/       hook scripts (bash + jq)

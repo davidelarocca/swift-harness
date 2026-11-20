@@ -53,10 +53,54 @@ sh_protected_list >"$now"
 
 # Lines "<sha> <path>" present now and not at the start (added or changed), minus the states
 # left by a guarded edit; paths present at the start and gone now (deleted).
-changed="$(comm -13 "$start" "$now" | { if [ -f "$sess/protected-edited" ]; then grep -vxF -f "$sess/protected-edited"; else cat; fi; } | cut -d' ' -f2-)"
+added="$(comm -13 "$start" "$now" | { if [ -f "$sess/protected-edited" ]; then grep -vxF -f "$sess/protected-edited"; else cat; fi; })"
 deleted="$(comm -23 <(cut -d' ' -f2- "$start" | sort -u) <(cut -d' ' -f2- "$now" | sort -u))"
+
+# A move is not an edit (the second field report on 1.11): a file gone from one protected path
+# whose same content is now at a new path. Inside the protected paths (protectedPaths names the
+# new place too), or out of them, found among the files git sees as new or changed since the
+# session started: then protectedPaths still names the old place and the file is no longer
+# protected. Each is said as a move, content unchanged, and not as a change and a deletion.
+moved=""
+moved_out=""
+if [ -n "$deleted" ]; then
+  start_paths="$(cut -d' ' -f2- "$start")"
+  outside=""
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    sha="$(awk -v p="$p" '{ s = $1; sub(/^[^ ]+ /, "") } $0 == p { print s; exit }' "$start")"
+    new="$(printf '%s\n' "$added" | awk -v s="$sha" '$1 == s { sub(/^[^ ]+ /, ""); print; exit }')"
+    if [ -n "$new" ] && ! grep -qxF -- "$new" <<<"$start_paths"; then
+      moved="$moved$p -> $new"$'\n'
+      added="$(printf '%s\n' "$added" | grep -vxF -- "$sha $new")"
+      deleted="$(printf '%s\n' "$deleted" | grep -vxF -- "$p")"
+      continue
+    fi
+    # Out of the protected paths: hashed once, only when needed.
+    if [ -z "$outside" ]; then
+      outside="$(
+        cd "$SH_ROOT" || exit 0
+        {
+          git -c core.quotepath=off ls-files -o --exclude-standard 2>/dev/null
+          git -c core.quotepath=off diff --name-only HEAD 2>/dev/null
+          h="$(cat "$sess/session-head" 2>/dev/null)"
+          [ -z "$h" ] || git -c core.quotepath=off diff --name-only "$h" HEAD 2>/dev/null
+        } | sort -u | while IFS= read -r f; do [ -f "$f" ] && printf '%s\0' "$f"; done |
+          xargs -0 shasum -a 256 2>/dev/null | sed 's/  / /'
+      )"
+      [ -n "$outside" ] || outside="-"
+    fi
+    new="$(printf '%s\n' "$outside" | awk -v s="$sha" '$1 == s { sub(/^[^ ]+ /, ""); print; exit }')"
+    if [ -n "$new" ] && ! grep -qxF -- "$new" <<<"$(cut -d' ' -f2- "$now")"; then
+      moved_out="$moved_out$p -> $new"$'\n'
+      deleted="$(printf '%s\n' "$deleted" | grep -vxF -- "$p")"
+    fi
+  done <<<"$deleted"
+fi
+changed="$(printf '%s\n' "$added" | grep . | cut -d' ' -f2-)"
+deleted="$(printf '%s\n' "$deleted" | grep .)"
 rm -f "$now"
-if [ -z "$changed$deleted" ]; then
+if [ -z "$changed$deleted$moved$moved_out" ]; then
   [ -z "$messages" ] || jq -n --arg msg "$messages" '{systemMessage: $msg}'
   exit 0
 fi
@@ -84,13 +128,31 @@ report="$(
   [ -n "$changed" ] && printf '%s\n' "$changed" | annotate changed
   [ -n "$deleted" ] && printf '%s\n' "$deleted" | annotate deleted
 )"
-sum="$(printf '%s' "$report" | shasum | cut -d' ' -f1)"
+moves="$(
+  [ -z "$moved" ] || printf '%s' "$moved" | sed 's/^/  moved, content unchanged: /'
+  [ -z "$moved_out" ] || printf '%s' "$moved_out" | sed 's/^/  moved out of the protected paths, content unchanged: /'
+)"
+sum="$(printf '%s\n%s' "$report" "$moves" | shasum | cut -d' ' -f1)"
 if [ "$sum" = "$(cat "$sess/protected-warned" 2>/dev/null)" ]; then
   [ -z "$messages" ] || jq -n --arg msg "$messages" '{systemMessage: $msg}'
   exit 0
 fi
 printf '%s' "$sum" >"$sess/protected-warned"
 
+if [ -n "$moves" ]; then
+  sh_catch "protected paths" reported "$(printf '%s\n' "$moves" | grep -c .) protected file(s) moved, content unchanged"
+  mmsg="swift-harness: protected files moved since this session started, their content unchanged (a rename):
+$(printf '%s\n' "$moves" | head -20)"
+  [ -z "$moved_out" ] || mmsg="$mmsg
+protectedPaths in .claude/swift-harness.json still names the old place, so the files at the new one are no longer protected: name the new place there if they must stay protected."
+  messages="${messages:+$messages
+
+}$mmsg"
+fi
+if [ -z "$report" ]; then
+  jq -n --arg msg "$messages" '{systemMessage: $msg}'
+  exit 0
+fi
 sh_catch "protected paths" reported "$(printf '%s\n' "$report" | grep -c .) protected file(s) changed outside Edit and Write"
 note=""
 case "$report" in *"(committed in "*) note="

@@ -24,6 +24,11 @@
 // `snapshots/` at the project root. Commit that folder: the metadata beside each image names
 // the test file relative to the project root, never by its absolute path.
 //
+// With `"snapshots": {"pending": "collect"}` in .claude/swift-harness.json a missing or different
+// image does not fail its test: it is saved the same way and waits, so work goes on, and the
+// approval is asked once, when the work is committed (a commit asks first, and
+// `scripts/verify.sh full` fails while images wait). An image that cannot be read still fails.
+//
 // Baselines are pinned to the macOS version (major.minor) and display scale they were made on:
 // text and controls draw differently on other versions. On a Mac or runner that differs, the
 // image is not compared and the test says so on its output ("not compared"); it does not fail
@@ -36,7 +41,9 @@
 // one depends on the Mac that made it.
 //
 // A pixel differs when a color channel changes by more than `channelTolerance`; `tolerance:`
-// is the fraction of pixels allowed to differ (default 0).
+// is the fraction of pixels allowed to differ. Without it, `"snapshots": {"tolerance": 0.001}`
+// in .claude/swift-harness.json gives the fraction for the whole project (default 0). A larger
+// tolerance, here or in the config, is reported at the end of the turn as a weaker check.
 
 // A helper kept as shipped, so that a later version can be compared with it: no formatter
 // rewrites it (SwiftFormat, swift-format) and its style rules are off here; the project's
@@ -67,15 +74,19 @@ enum Snapshot {
         sizes: [String]? = nil,
         state: String? = nil,
         locale: String? = nil,
-        tolerance: Double = 0,
+        tolerance: Double? = nil,
         source: String? = nil,
         contract: URL? = nil,
         baselines: URL? = nil,
         output: URL? = nil,
+        collect: Bool? = nil,
         file: StaticString = #filePath,
         @ViewBuilder _ make: () -> Content
     ) -> [String] {
         let testFolder = URL(fileURLWithPath: "\(file)").deletingLastPathComponent()
+        let settings = Snapshot.settings(from: testFolder)
+        let collects = collect ?? (settings["pending"] as? String == "collect")
+        let allowed = tolerance ?? (settings["tolerance"] as? NSNumber)?.doubleValue ?? 0
         let plan: Screenshot.Plan
         switch Screenshot.plan(name, sizes: sizes, source: source, contract: contract, file: file) {
         case .failure(let failure): return [failure.description]
@@ -122,8 +133,14 @@ enum Snapshot {
                     "test": test,
                     "captured": ISO8601DateFormatter().string(from: Date()),
                 ]
-                let outcome = check(image, info: info, base: base, baselines: baselineFolder, candidates: candidateFolder, tolerance: tolerance)
-                if let problem = outcome.problem { problems.append(problem) }
+                let outcome = check(image, info: info, base: base, baselines: baselineFolder, candidates: candidateFolder, tolerance: allowed)
+                if let problem = outcome.problem {
+                    if collects, outcome.waits {
+                        print("swift-harness snapshot: \(base) waits for approval and does not fail this test (snapshots.pending is \"collect\"): \(problem)")
+                    } else {
+                        problems.append(problem)
+                    }
+                }
                 if outcome.status == .notCompared, let note = outcome.note { print("swift-harness snapshot: \(note)") }
             }
         }
@@ -138,6 +155,19 @@ enum Snapshot {
         return (root.appendingPathComponent(path), root.appendingPathComponent(candidates))
     }
 
+    /// The `snapshots` object of the .claude/swift-harness.json above `start`, or empty.
+    /// `"pending": "collect"`: a new or different image waits instead of failing its test.
+    /// `"tolerance"`: the fraction of pixels allowed to differ when a test passes none.
+    static func settings(from start: URL) -> [String: Any] {
+        guard let (_, config) = Screenshot.root(from: start) else { return [:] }
+        return config?["snapshots"] as? [String: Any] ?? [:]
+    }
+
+    /// True when the project collects images that wait instead of failing their tests.
+    static func collects(from start: URL) -> Bool {
+        settings(from: start)["pending"] as? String == "collect"
+    }
+
     /// This Mac's macOS version, major.minor: what a baseline is pinned to.
     static var osVersion: String {
         let version = ProcessInfo.processInfo.operatingSystemVersion
@@ -148,6 +178,9 @@ enum Snapshot {
         var status: Status
         var problem: String?
         var note: String?
+        /// The image is new or differs from its baseline: it waits for the user's approval.
+        /// False for a problem of another kind (a baseline that cannot be read).
+        var waits = false
     }
 
     /// Compares one rendered image with its baseline and leaves the files the approval reads in
@@ -160,9 +193,9 @@ enum Snapshot {
         let candidatePNG = candidates.appendingPathComponent("\(base).png")
         let candidateJSON = candidates.appendingPathComponent("\(base).json")
         let diffPNG = candidates.appendingPathComponent("\(base).diff.png")
-        let approve = "Show it to the user; only they approve it, with /swift-harness:approve-snapshots. Do not copy it into \(baselines.lastPathComponent)/ yourself."
+        let approve = "Only the user approves it: /swift-harness:approve-snapshots opens a page with each image before, now and its changed pixels, and asks which to keep. Tell them so, and which change caused it. Do not copy it into \(baselines.lastPathComponent)/ yourself."
 
-        func finish(_ status: Status, problem: String? = nil, note: String? = nil, diff: CGImage? = nil) -> Outcome {
+        func finish(_ status: Status, problem: String? = nil, note: String? = nil, diff: CGImage? = nil, waits: Bool = false) -> Outcome {
             for url in [candidatePNG, candidateJSON, diffPNG] { try? files.removeItem(at: url) }
             var result: [String: Any] = ["status": status.rawValue, "baseline": baselinePNG.path]
             if status != .passed {
@@ -176,11 +209,11 @@ enum Snapshot {
             if let json = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
                 try? json.write(to: candidates.appendingPathComponent("\(base).result.json"))
             }
-            return Outcome(status: status, problem: problem, note: note)
+            return Outcome(status: status, problem: problem, note: note, waits: waits)
         }
 
         guard files.fileExists(atPath: baselinePNG.path) else {
-            return finish(.missing, problem: "\(base): no approved baseline in \(baselines.path). The new image is \(candidatePNG.path). \(approve)")
+            return finish(.missing, problem: "\(base): no approved baseline in \(baselines.path). The new image is \(candidatePNG.path). \(approve)", waits: true)
         }
         let pinned = (try? Data(contentsOf: baselineJSON)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
         let pinnedOS = pinned["os"] as? String ?? "?"
@@ -197,7 +230,7 @@ enum Snapshot {
             func points(_ image: CGImage) -> String {
                 "\(LayoutContract.Size.number(CGFloat(Double(image.width) / ratio)))x\(LayoutContract.Size.number(CGFloat(Double(image.height) / ratio)))"
             }
-            return finish(.failed, problem: "\(base): the size changed from \(points(reference)) to \(points(image)) pt. The new image is \(candidatePNG.path). \(approve)")
+            return finish(.failed, problem: "\(base): the size changed from \(points(reference)) to \(points(image)) pt. The new image is \(candidatePNG.path). \(approve)", waits: true)
         }
         guard let old = pixels(reference), let new = pixels(image) else {
             return finish(.failed, problem: "\(base): cannot read the pixels to compare. \(approve)")
@@ -237,7 +270,7 @@ enum Snapshot {
         let region = "x \(pt(minX))-\(pt(maxX + 1)), y \(pt(minY))-\(pt(maxY + 1)) pt from the top left"
         return finish(.failed,
                       problem: "\(base): \(changed) of \(total) pixels differ (\(percent)%), within \(region). The new image is \(candidatePNG.path), changes in red in \(diffPNG.path). \(approve)",
-                      diff: Snapshot.image(from: diff, width: image.width, height: image.height))
+                      diff: Snapshot.image(from: diff, width: image.width, height: image.height), waits: true)
     }
 
     /// RGBA pixels, premultiplied, one UInt32 each.

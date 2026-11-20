@@ -4,6 +4,15 @@ import XCTest
 
 /// The template helper on the fixture. XCTest runs one test at a time, as budgets need.
 final class BudgetTests: XCTestCase {
+    // With no project above an existing folder, the search for the baselines ends at the root of
+    // the disk (it used to go on for ever there).
+    func testTheSearchForTheProjectEndsAtTheRootOfTheDisk() throws {
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("no-project-\(UUID().uuidString)/Tests")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside.deletingLastPathComponent()) }
+        XCTAssertNil(PerformanceBudget.folders(from: outside))
+    }
+
     func testLoadingTenThousandSongs() {
         let data = Library.data(count: 10_000)
         let env = ProcessInfo.processInfo.environment

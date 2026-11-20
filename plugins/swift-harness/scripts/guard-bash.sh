@@ -1,5 +1,5 @@
 #!/bin/bash
-# PreToolUse (Bash). Two checks on the text of a shell command.
+# PreToolUse (Bash). Three checks on the text of a shell command.
 #
 # 1. The commit identity, on unless "guardCommitIdentity" is false: a command that writes a
 #    commit (git commit, merge, pull, cherry-pick, revert, rebase, am) is denied while the
@@ -7,7 +7,12 @@
 #    folder is the one of git -C, of a cd earlier in the command, or the session's. A command
 #    that gives the identity itself (-c user.email=..., GIT_COMMITTER_EMAIL=...) is let through.
 #
-# 2. Opt-in with "guardBash": true (#135): ask the user before a shell command
+# 2. With "snapshots": {"pending": "collect"}: ask the user before a `git commit` in this
+#    repository while snapshot images wait for approval. Collected images do not fail their
+#    tests, so this is where the approval is asked, once for all of them. The user can approve
+#    them first (/swift-harness:approve-snapshots) or let the commit go on.
+#
+# 3. Opt-in with "guardBash": true (#135): ask the user before a shell command
 # that writes to a protected path, as guard.sh does for the Edit, Write and MultiEdit tools.
 # The areas are guard.sh's: protectedPaths, project.pbxproj (unless guardPbxproj is false) and
 # the snapshot and performance baselines.
@@ -35,9 +40,12 @@ COMMITS="(^|[^[:alnum:]_.-])git($GIT_OPTION)*[[:space:]]+(commit|merge|pull|cher
 GIVEN="(user[.]email=|GIT_COMMITTER_EMAIL=)"
 found=""
 [[ "$cmd" =~ $COMMITS ]] && found="${BASH_REMATCH[0]}"
-if [ -n "$found" ] && [ "$(sh_cfg '.guardCommitIdentity' 'true')" != "false" ] && ! [[ "$cmd" =~ $GIVEN ]]; then
+# The folder a git command found in the command ($1, the text matched) works in: the one of
+# git -C, of a cd earlier in the command, or the session's. Nothing when it is not a folder (named
+# through a variable, or created by the command first): it is not there to ask.
+commit_dir() {
+  local found="$1" before dir="" re here
   before="${cmd%%"$found"*}"
-  dir=""
   re="-C[[:space:]]+([^[:space:]]+)"
   if [[ "$found" =~ $re ]]; then
     dir="${BASH_REMATCH[1]}"
@@ -51,8 +59,10 @@ if [ -n "$found" ] && [ "$(sh_cfg '.guardCommitIdentity' 'true')" != "false" ] &
   here="$(sh_in '.cwd')"
   [ -n "$here" ] || here="$SH_ROOT"
   case "$dir" in "") dir="$here" ;; /*) ;; *) dir="$here/$dir" ;; esac
-  # A folder named through a variable, or one the command creates first, is not there to ask.
-  [ -d "$dir" ] || dir=""
+  [ -d "$dir" ] && printf '%s' "$dir"
+}
+if [ -n "$found" ] && [ "$(sh_cfg '.guardCommitIdentity' 'true')" != "false" ] && ! [[ "$cmd" =~ $GIVEN ]]; then
+  dir="$(commit_dir "$found")"
   why=""
   [ -z "$dir" ] || why="$(sh_git_identity "$dir")"
   if [ -n "$why" ]; then
@@ -69,7 +79,31 @@ if [ -n "$found" ] && [ "$(sh_cfg '.guardCommitIdentity' 'true')" != "false" ] &
   fi
 fi
 
-# ---------- 2. protected paths ----------
+# ---------- 2. a commit while snapshot images wait ----------
+
+COMMIT="(^|[^[:alnum:]_.-])git($GIT_OPTION)*[[:space:]]+commit([[:space:];&|)]|\$)"
+if [[ "$cmd" =~ $COMMIT ]] && sh_snapshots_collect; then
+  dir="$(commit_dir "${BASH_REMATCH[0]}")"
+  waiting=""
+  # Only a commit in the repository of this project: its images say nothing about another one.
+  if [ -n "$dir" ] && [ "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(git -C "$SH_ROOT" rev-parse --show-toplevel 2>/dev/null)" ]; then
+    waiting="$(sh_snapshots_waiting_text)"
+  fi
+  if [ -n "$waiting" ]; then
+    reason="swift-harness: $waiting, and this command commits. They did not fail their tests (snapshots.pending is \"collect\"), so nobody has looked at them yet: the commit would hold code whose images differ from the approved ones. Approve them first with /swift-harness:approve-snapshots (it opens a page with each image), or let this commit go on and approve later: scripts/verify.sh full fails until then."
+    sh_catch "snapshot images" asked "$waiting: before a commit"
+    jq -n --arg reason "$reason" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason: $reason
+      }
+    }'
+    exit 0
+  fi
+fi
+
+# ---------- 3. protected paths ----------
 
 [ "$(sh_cfg '.guardBash' 'false')" = "true" ] || exit 0
 

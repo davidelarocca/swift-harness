@@ -1489,7 +1489,8 @@ hook session-start.sh "$C" '{"source":"startup"}' >/dev/null
 add_dependency "$C" Domain '"DesignSystem"'
 out="$(cstop "$C")"
 expect_result "stop: a forbidden dependency blocks the turn, with verify passing" 2 'target "Domain" depends on "DesignSystem"' "$out"
-expect_result "stop: the contracts are named in the failure header" 2 'scripts/verify\.sh fast \+ architecture contracts' "$out"
+expect_result "stop: the contracts are named in the failure header, the verify command that passed apart" 2 '^Verification failed \(attempt 1 of 3\): architecture contracts$' "$out"
+expect_result "stop: ... and the verify command on the line of the checks that passed" 2 '^Passed: scripts/verify\.sh fast' "$out"
 git -C "$C" checkout -q Package.swift
 echo '// changed' >>"$C/Sources/Domain/Domain.swift"
 expect_result "stop: an allowed change passes" 0 '^exit=0' "$(cstop "$C")" 'depends on'
@@ -1762,7 +1763,8 @@ hook session-start.sh "$R" '{"source":"startup"}' >/dev/null
 sed -i '' 's/public struct Badge</public struct Tag</' "$R/Sources/DesignSystem/Badge.swift"
 out="$(rstop "$R")"
 expect_result "stop: a registry error blocks the turn, with verify passing" 2 'UI-003 Badge: .*not declared' "$out"
-expect_result "stop: the registry is named in the failure header" 2 'scripts/verify\.sh fast \+ component registry' "$out"
+expect_result "stop: the registry is named in the failure header, the verify command that passed apart" 2 '^Verification failed \(attempt 1 of 3\): component registry$' "$out"
+expect_result "stop: ... and the verify command on the line of the checks that passed" 2 '^Passed: scripts/verify\.sh fast' "$out"
 reg_edit "$R" 's/^| UI-003 | Badge |/| UI-003 | Tag |/'
 expect_result "stop: a registry fix alone is checked again and passes" 0 '^exit=0' "$(rstop "$R")" 'not declared'
 
@@ -2093,7 +2095,8 @@ hook session-start.sh "$L" '{"source":"startup"}' >/dev/null
 sed -i '' 's/struct InspectorPane:/struct DetailsPane:/' "$L/Sources/App/Inspector.swift"
 out="$(rstop "$L")"
 expect_result "stop: a layout contract error blocks the turn, with verify passing" 2 'InspectorPane is not declared' "$out"
-expect_result "stop: the layout contract is named in the failure header" 2 'scripts/verify\.sh fast \+ layout contract' "$out"
+expect_result "stop: the layout contract is named in the failure header, the verify command that passed apart" 2 '^Verification failed \(attempt 1 of 3\): layout contract$' "$out"
+expect_result "stop: ... and the verify command on the line of the checks that passed" 2 '^Passed: scripts/verify\.sh fast' "$out"
 lay_edit "$L" 's/| InspectorPane |/| DetailsPane |/'
 sed -i '' 's/"InspectorPane") { InspectorPane()/"DetailsPane") { DetailsPane()/' "$L/Tests/AppTests/LayoutTests.swift"
 expect_result "stop: a contract fix is checked again and passes" 0 '^exit=0' "$(rstop "$L")" 'not declared'
@@ -2360,12 +2363,12 @@ done
 git -C "$S" add -A && git -C "$S" commit -qm "baselines from an older helper"
 hook session-start.sh "$S" '{"source":"startup"}' >/dev/null
 png_before="$(shasum "$S"/snapshots/*.png)"
-expect_row "doctor: a baseline made by an older helper is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '2 file\(s\) in snapshots/ name the test file by its absolute path.*first: snapshots/Elsewhere-macos-80-light\.json.*approve-snapshots'
+expect_row "doctor: a baseline made by an older helper is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '2 file\(s\) in snapshots/ name the test or source file by its absolute path.*first: snapshots/Elsewhere-macos-80-light\.json.*approve-snapshots'
 expect_result "snapshots: status counts the metadata with an absolute path" 0 '^2 metadata file\(s\) in snapshots/ hold the absolute path.*--relative-paths' "$(snap --status --project "$S")"
 expect_result "snapshots: --relative-paths takes no image name" 2 'usage:' "$(snap --relative-paths --project "$S" Here-macos-80-light)"
 out="$(snap --relative-paths --project "$S")"
 expect_result "snapshots: --relative-paths rewrites the test field of each file" 0 'Made relative: snapshots/Elsewhere-macos-80-light\.json \(test: Tests/AppTests/SnapTests\.swift\)' "$out"
-expect_result "snapshots: --relative-paths says what to commit" 0 'only the "test" field of 2 metadata file\(s\) changed' "$out"
+expect_result "snapshots: --relative-paths says what to commit" 0 'only the file paths \("test", "source"\) of 2 metadata file\(s\) changed' "$out"
 if [ "$png_before" = "$(shasum "$S"/snapshots/*.png)" ] && ! grep -rqE '"/' "$S/snapshots" &&
   [ "$(git -C "$S" diff --numstat | awk '{ a += $1; d += $2 } END { print NR, a, d }')" = "2 2 2" ]; then
   ok "snapshots: --relative-paths changes one line in each file and no image"
@@ -2374,6 +2377,12 @@ expect_result "snapshot-watch: paths made relative by the script are not reporte
 expect_result "snapshots: --relative-paths with nothing to do says so" 0 'Nothing changed' "$(snap --relative-paths --project "$S")"
 expect_row "doctor: after --relative-paths the metadata passes" "$(doctor "$S")" PASS 'Snapshot metadata'
 expect_result "snapshots: status says nothing about metadata when it is clean" 0 'No new images wait' "$(snap --status --project "$S")" 'absolute path'
+# The source a test passes (source:) is committed too: an absolute one is caught the same way.
+jq --arg s "$ELSEWHERE/Sources/App.swift" '.source = $s' "$S/snapshots/Here-macos-80-light.json" >"$TMP/sj" && mv "$TMP/sj" "$S/snapshots/Here-macos-80-light.json"
+expect_row "doctor: an absolute source path in a baseline is reported" "$(doctor "$S")" WARN 'Snapshot metadata' '1 file\(s\) in snapshots/ name the test or source file by its absolute path'
+snap --relative-paths --project "$S" >/dev/null
+if [ "$(jq -r .source "$S/snapshots/Here-macos-80-light.json")" = Sources/App.swift ]; then ok "snapshots: --relative-paths makes the source relative too"
+else nok "snapshots: --relative-paths makes the source relative too" "$(cat "$S/snapshots/Here-macos-80-light.json")"; fi
 # Screenshots are not committed by default; a folder set in the config can be.
 mkdir -p "$S/review/shots"
 printf '{"os": "27.0", "test": "%s/Tests/AppTests/ShotTests.swift"}\n' "$ELSEWHERE" >"$S/review/shots/Main-macos-600x400-light.json"
@@ -2382,6 +2391,105 @@ expect_row "doctor: screenshot metadata with an absolute path is reported" "$(do
 set_config "$S" '{}'
 if grep -qF -- '--relative-paths' "$SKILLS/approve-snapshots/SKILL.md"; then ok "snapshots: the approval skill makes old metadata relative"
 else nok "snapshots: the approval skill makes old metadata relative"; fi
+
+# The review page: the user approves images they have seen, not a description. --status writes
+# review.html next to the new images: per component the image that changed most, as approved,
+# as it is now and with the changed pixels in red.
+S="$(new_project snapshot-page)"
+RP="$S/.build/swift-harness/snapshots/review.html"
+full_meta() { # $1 image name, $2 screen, $3 state, $4 size, $5 appearance: the metadata the helper writes
+  printf '{"os": "%s", "scale": 2, "screen": "%s", "state": "%s", "locale": "", "contractSize": "%s", "size": "%s", "appearance": "%s"}\n' \
+    "$THIS_OS" "$2" "$3" "$4" "$4" "$5" >"$S/.build/swift-harness/snapshots/$1.json"
+}
+result() { # $1 image name, $2 status, $3 reason
+  jq -n --arg s "$2" --arg r "$3" '{status: $s, reason: $r}' >"$S/.build/swift-harness/snapshots/$1.result.json"
+}
+mkdir -p "$S/snapshots"
+for a in light dark; do
+  candidate "$S" "Card-macos-200x80-$a" failed new-card
+  full_meta "Card-macos-200x80-$a" Card "" 200x80 "$a"
+  printf 'old-card' >"$S/snapshots/Card-macos-200x80-$a.png"
+  printf '{"os": "%s", "scale": 2}\n' "$THIS_OS" >"$S/snapshots/Card-macos-200x80-$a.json"
+done
+result Card-macos-200x80-light failed "Card-macos-200x80-light: 85 of 151200 pixels differ (0.06%), within x 96-110, y 118-126 pt from the top left. The new image is /somewhere/Card.png, changes in red in /somewhere/Card.diff.png."
+result Card-macos-200x80-dark failed "Card-macos-200x80-dark: 4200 of 151200 pixels differ (2.78%), within x 10-110, y 18-126 pt from the top left. The new image is /somewhere/Card.png."
+candidate "$S" Pill-long-text-macos-120-light missing new-pill
+full_meta Pill-long-text-macos-120-light Pill long-text 120x24 light
+candidate "$S" Badge-macos-200-light failed new-badge
+full_meta Badge-macos-200-light Badge "" 200x64 light
+rm -f "$S/.build/swift-harness/snapshots/Badge-macos-200-light.diff.png"
+printf 'old-badge' >"$S/snapshots/Badge-macos-200-light.png"
+result Badge-macos-200-light failed "Badge-macos-200-light: the size changed from 200x48 to 200x64 pt. The new image is /somewhere/Badge.png."
+# A name with characters HTML reads: it comes from the project, so it is escaped.
+candidate "$S" 'Odd<b>&x-macos-80-light' missing odd
+out="$(snap --status --project "$S")"
+expect_result "snapshot page: status names the page to open, before the digest" 0 "Review page, to open for the user before asking what to approve: $RP.*Digest: [0-9a-f]{64}" "exit=0
+$(tail -n +2 <<<"$out" | tr '\n' ' ')"
+page="$(cat "$RP" 2>/dev/null)"
+if grep -qF '5 snapshot images wait for your approval, in 4 components' <<<"$page" && grep -qF 'must look like its <b>Now</b> image' <<<"$page"; then
+  ok "snapshot page: it says how many images wait and what approving means"
+else nok "snapshot page: it says how many images wait and what approving means" "$(grep -m1 '<h1>' <<<"$page")"; fi
+# The order: a size change, then pixel changes with the largest first, then new images.
+if [ "$(grep -o '<h2 id="g[0-9]*">[^<]*</h2>' <<<"$page" | sed -E 's/<[^>]*>//g' | paste -sd'|' -)" = 'Badge|Card|Odd&lt;b&gt;&amp;x-macos-80-light|Pill · long-text' ]; then
+  ok "snapshot page: the largest changes are first, and a name from the project is escaped"
+else nok "snapshot page: the largest changes are first, and a name from the project is escaped" "$(grep -o '<h2 id="g[0-9]*">[^<]*</h2>' <<<"$page")"; fi
+if grep -qF '<td>2.78% of pixels</td>' <<<"$page" && grep -qF '<td>200x48 to 200x64 pt</td>' <<<"$page" &&
+  grep -qF '· changed · 2.78% of pixels, within x 10-110, y 18-126 pt from the top left' <<<"$page"; then
+  ok "snapshot page: each component has the size of its largest change, and where to look"
+else nok "snapshot page: each component has the size of its largest change, and where to look" "$(grep '<td>' <<<"$page")"; fi
+card="$(awk '/<h2 id="g[0-9]*">Card</,/<h2 id="g[0-9]*">Odd/' <<<"$page")"
+# The light variant changed in another place than the dark one: folded, it could be approved
+# with "all" unseen, so it is shown open.
+# (The range ends on the next component's heading line, which holds its first <h3> too.)
+if [ "$(grep -o '<h3>[^<]*' <<<"$card" | head -2 | paste -sd'|' -)" = '<h3>200x80, dark |<h3>200x80, light ' ] && ! grep -qF '<details>' <<<"$card"; then
+  ok "snapshot page: a component shows the variant that changed most first, and one that changed elsewhere open"
+else nok "snapshot page: a component shows the variant that changed most first, and one that changed elsewhere open" "$(grep -o '<h3>[^<]*\|<summary>[^<]*' <<<"$card")"; fi
+if grep -qF 'src="../../../snapshots/Card-macos-200x80-dark.png"' <<<"$card" && grep -qF 'src="Card-macos-200x80-dark.png"' <<<"$card" &&
+  grep -qF 'src="Card-macos-200x80-dark.diff.png"' <<<"$card" && grep -qF "Before (approved, made on macOS $THIS_OS)" <<<"$card"; then
+  ok "snapshot page: the approved image, the new one and the changed pixels are side by side"
+else nok "snapshot page: the approved image, the new one and the changed pixels are side by side" "$(grep -o 'src="[^"]*"' <<<"$card")"; fi
+pill="$(awk '/<h2 id="g[0-9]*">Pill/,0' <<<"$page")"
+if grep -qF 'new: no approved image yet' <<<"$pill" && ! grep -qF 'Before (approved' <<<"$pill" && ! grep -qF '.diff.png' <<<"$pill"; then
+  ok "snapshot page: a new image has no approved one and no diff beside it"
+else nok "snapshot page: a new image has no approved one and no diff beside it" "$pill"; fi
+if grep -qF 'src="Odd%3Cb%3E%26x-macos-80-light.png"' <<<"$page" && ! grep -qF '<b>&x' <<<"$page"; then ok "snapshot page: a path is encoded for the link, never written as HTML"
+else nok "snapshot page: a path is encoded for the link, never written as HTML" "$(grep -o 'src="Odd[^"]*"' <<<"$page")"; fi
+if ! grep -qiE '<script|https?://|javascript:' <<<"$page" && grep -qF "default-src 'none'" <<<"$page" && ! grep -qF "$S" <<<"$page"; then
+  ok "snapshot page: no script, nothing from outside, and no absolute path of this Mac"
+else nok "snapshot page: no script, nothing from outside, and no absolute path of this Mac" "$(grep -iE '<script|https?://|javascript:' <<<"$page"; grep -F "$S" <<<"$page")"; fi
+# The same change in the same place: folded under the one shown.
+result Card-macos-200x80-light failed "Card-macos-200x80-light: 4000 of 151200 pixels differ (2.65%), within x 10-110, y 18-126 pt from the top left. The new image is /somewhere/Card.png."
+snap --status --project "$S" >/dev/null
+card="$(awk '/<h2 id="g[0-9]*">Card</,/<h2 id="g[0-9]*">Odd/' "$RP")"
+if [ "$(grep -o '<h3>200x80' <<<"$card" | grep -c .)" = 2 ] && grep -qF '<details><summary>1 more image of this component with the same change in the same place: 200x80, light</summary>' <<<"$card"; then
+  ok "snapshot page: a variant with the same change in the same place is folded under the one shown"
+else nok "snapshot page: a variant with the same change in the same place is folded under the one shown" "$(grep -o '<h3>[^<]*\|<summary>[^<]*' <<<"$card")"; fi
+d="$(snap_digest "$S")"
+if [ "$d" = "$(snap_digest "$S")" ] && [ -f "$RP" ] && [ -z "$(find "$S/.build/swift-harness/snapshots" -type f ! -name '*.png' ! -name '*.json' ! -name review.html)" ]; then
+  ok "snapshot page: writing the page does not change the digest, and leaves no other file"
+else nok "snapshot page: writing the page does not change the digest, and leaves no other file" "$(ls -a "$S/.build/swift-harness/snapshots")"; fi
+set_config "$S" '{"snapshots":{"path":"Tests/Baselines"}}'
+mkdir -p "$S/Tests/Baselines" && cp "$S/snapshots/Badge-macos-200-light.png" "$S/Tests/Baselines/"
+snap --status --project "$S" >/dev/null
+if grep -qF 'src="../../../Tests/Baselines/Badge-macos-200-light.png"' "$RP"; then ok "snapshot page: the approved images come from snapshots.path"
+else nok "snapshot page: the approved images come from snapshots.path" "$(grep -o 'src="[^"]*Badge[^"]*"' "$RP")"; fi
+set_config "$S" '{}'
+snap --approve "$(snap_digest "$S")" --project "$S" Badge-macos-200-light >/dev/null
+[ ! -e "$RP" ] && ok "snapshot page: an approval removes the page, which showed what waited before it" || nok "snapshot page: an approval removes the page, which showed what waited before it"
+# A link in the way could lead outside the project: no page, and the status goes on without it.
+mv "$S/.build/swift-harness/snapshots" "$TMP/moved-candidates" && ln -s "$TMP/moved-candidates" "$S/.build/swift-harness/snapshots"
+out="$(snap --status --project "$S")"
+expect_result "snapshot page: with a link in the way no page is written, and the status says so" 0 'No review page could be written in \.build/swift-harness/snapshots: show the user the image files listed above' "$out"
+[ ! -e "$TMP/moved-candidates/review.html" ] && ok "snapshot page: ... and nothing lands behind the link" || nok "snapshot page: ... and nothing lands behind the link"
+expect_result "snapshot page: ... while the digest is still given" 0 '^Digest: [0-9a-f]{64}$' "$out"
+rm "$S/.build/swift-harness/snapshots" && mv "$TMP/moved-candidates" "$S/.build/swift-harness/snapshots"
+if grep -qF 'open "<the path of the review page>"' "$SKILLS/approve-snapshots/SKILL.md" && grep -qF 'do not narrate every image' "$SKILLS/approve-snapshots/SKILL.md" &&
+  grep -qF 'an approved image is how the component must look from now on' "$SKILLS/approve-snapshots/SKILL.md"; then
+  ok "snapshot page: the skill opens it, keeps its own words short and says what approving means"
+else nok "snapshot page: the skill opens it, keeps its own words short and says what approving means"; fi
+if grep -qF 'opens a page with each image before, now and its changed pixels' "$TEMPLATES/tests/Snapshot.swift" && ! grep -qF 'Show it to the user' "$TEMPLATES/tests/Snapshot.swift"; then
+  ok "snapshot page: a failing snapshot test says what the approval command shows"
+else nok "snapshot page: a failing snapshot test says what the approval command shows"; fi
 
 # ---------- guard-bash.sh: a commit with git's automatic identity ----------
 
@@ -2486,6 +2594,93 @@ echo 'let app = 2' >"$SV/Sources/App.swift"
 out="$(jq -nc --arg cwd "$SV" '{cwd: $cwd, session_id: "test"}' | PATH="$SWF:$PATH" CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$SV" "$SCRIPTS/stop-verify.sh" 2>&1)"
 expect_result "stop: a test that failed before a long passing target is in what Claude reads" 2 'error: -\[ATests\.OldStyleTests testDoublingTwo\]' "exit=$?
 $out"
+
+# ---------- snapshots.pending "collect": images wait instead of failing ----------
+# A new or changed image does not fail its test (tests/Snapshot.swift); the approval is asked
+# once: before a commit, and by verify.sh full, which fails while images wait.
+C="$(new_project snapshots-collect)"
+set_config "$C" '{"snapshots":{"pending":"collect"}}'
+expect_commit_allowed "$C" "git commit -m x" "collect: with no image waiting a commit goes through"
+candidate "$C" Pill-macos-120-light missing new-pill
+candidate "$C" Card-macos-200-dark failed new-card
+candidate "$C" Row-macos-200-light not-compared other-mac
+out="$(commit_guard "$C" "git add -A && git commit -m x")"
+if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$out" 2>/dev/null)" = ask ] &&
+  grep -qE "2 snapshot image\(s\) wait for the user's approval \(Card-macos-200-dark, Pill-macos-120-light\)" <<<"$out" &&
+  grep -qF '/swift-harness:approve-snapshots' <<<"$out" && grep -qF 'verify.sh full fails' <<<"$out" && ! grep -qF 'Row-macos' <<<"$out"; then
+  ok "collect: a commit asks first while images wait, and names them (an image from another Mac does not wait)"
+else nok "collect: a commit asks first while images wait, and names them (an image from another Mac does not wait)" "$out"; fi
+out="$(commit_guard "$C" "git -C $C commit -m x" "$TMP")"
+[ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$out" 2>/dev/null)" = ask ] && ok "collect: ... also with git -C from another folder" || nok "collect: ... also with git -C from another folder" "$out"
+if grep -rqs '"check":"snapshot images","kind":"asked"' "$TMP/data/state"; then ok "collect: the question is in the catch log"
+else nok "collect: the question is in the catch log"; fi
+expect_commit_allowed "$C" "git push" "collect: a push does not ask"
+expect_commit_allowed "$C" "git commit-graph write" "collect: commit-graph is not a commit"
+mkdir -p "$TMP/collect-other"
+git -C "$TMP/collect-other" init -q && git -C "$TMP/collect-other" config user.email test@example.com && git -C "$TMP/collect-other" config user.name test
+expect_commit_allowed "$C" "cd $TMP/collect-other && git commit -m x" "collect: a commit in another repository does not ask"
+set_config "$C" '{}'
+expect_commit_allowed "$C" "git commit -m x" "collect: without the setting a commit does not ask (the tests fail instead)"
+set_config "$C" '{"snapshots":{"pending":"later"}}'
+expect_row "doctor: snapshots.pending is fail or collect" "$(doctor "$C")" FAIL Config 'snapshots\.pending must be "fail".*or "collect"'
+set_config "$C" '{"snapshots":{"tolerance":2}}'
+expect_row "doctor: snapshots.tolerance is a fraction" "$(doctor "$C")" FAIL Config 'snapshots\.tolerance must be a number from 0 up to 1'
+set_config "$C" '{"snapshots":{"pending":"collect","tolerance":0.001}}'
+mkdir -p "$C/snapshots"
+printf 'old' >"$C/snapshots/Card-macos-200-dark.png"
+printf '{"os": "%s", "scale": 2}\n' "$THIS_OS" >"$C/snapshots/Card-macos-200-dark.json"
+out="$(doctor "$C")"
+expect_row "doctor: snapshots.pending and snapshots.tolerance are known keys" "$out" PASS 'Config keys' 'all known'
+expect_row "doctor: images collected are said to wait with their tests passed" "$out" WARN 'Snapshot baselines' 'new image\(s\).*snapshots\.pending is collect: their tests passed'
+
+# verify.sh: full fails while images wait, fast only says so.
+V="$(verify_project collect '' '' '"Packages/Core"')"
+mkdir -p "$V/Packages/Core" "$V/.claude"
+candidate "$V" Pill-macos-120-light missing new-pill
+candidate "$V" Row-macos-200-light not-compared other-mac
+expect_verify "collect: without the setting verify.sh does not look at the images" 0 'verify full: PASS' "$(run_verify "$V" full)"
+printf '{"snapshots":{"pending":"collect"}}\n' >"$V/.claude/swift-harness.json"
+out="$(run_verify "$V" full)"
+expect_verify "collect: verify.sh full fails while an image waits" 1 'verify full: FAIL' "$out"
+expect_result "collect: ... and names it, not the one from another Mac" 1 '^snapshot waiting for approval: Pill-macos-120-light$' "$out" 'Row-macos'
+out="$(run_verify "$V" fast)"
+expect_verify "collect: verify.sh fast passes and says images wait" 0 '1 image\(s\) wait \(fast does not fail on them; full does\)' "$out"
+if grep -qF 'snapshot waiting for approval: ' "$SCRIPTS/mutate.sh"; then ok "collect: check-sensitivity credits the snapshot check with the waiting line of verify.sh"
+else nok "collect: check-sensitivity credits the snapshot check with the waiting line of verify.sh"; fi
+
+# The Stop hook: the images are not checked, and the user is told.
+SC="$(new_project stop-collect)"
+set_config "$SC" '{"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast"},"snapshots":{"pending":"collect"}}'
+git -C "$SC" add -A && git -C "$SC" commit -qm collect
+approve "$SC" >/dev/null
+hook session-start.sh "$SC" '{"source":"startup"}' >/dev/null
+echo 'let app = 3' >"$SC/Sources/App.swift"
+candidate "$SC" Pill-macos-120-light missing new-pill
+out="$(hook stop-verify.sh "$SC" 2>&1)"
+expect_result "collect: the end of the turn tells the user that waiting images are not checked" 0 "not checked: snapshot images \(1 snapshot image\(s\) wait for the user's approval \(Pill-macos-120-light\): /swift-harness:approve-snapshots\)" "exit=$?
+$out"
+sc_state="$TMP/data/state/$(printf '%s' "$(cd "$SC" && pwd -P)" | shasum | cut -c1-16)"
+if [ "$(jq -r '.checks[] | select(.name == "snapshot images") | .result' "$sc_state/evidence.json" 2>/dev/null)" = "not checked" ] &&
+  [ "$(jq -r .outcome "$sc_state/evidence.json")" = passed ]; then
+  ok "collect: ... and the record has them as not checked, next to the verify command that passed"
+else nok "collect: ... and the record has them as not checked, next to the verify command that passed" "$(cat "$sc_state/evidence.json" 2>&1)"; fi
+
+# A project-wide tolerance: raising it is a weaker check.
+WT="$(new_project weaken-snapshot-tolerance)"
+set_config "$WT" '{"snapshots":{"tolerance":0.001}}'
+git -C "$WT" add -A && git -C "$WT" commit -qm tolerance
+hook session-start.sh "$WT" '{"source":"startup"}' >/dev/null
+set_config "$WT" '{"snapshots":{"tolerance":0.01}}'
+out="$(hook weaken-watch.sh "$WT" 2>&1)"
+expect_result "collect: raising snapshots.tolerance is reported as a weaker check" 0 '\.claude/swift-harness\.json: tolerance raised \(0\.001 -> 0\.01\)' "exit=$?
+$out"
+hook session-start.sh "$WT" '{"source":"startup"}' >/dev/null
+set_config "$WT" '{"snapshots":{"tolerance":0.0001}}'
+expect_result "collect: lowering it says nothing" 0 '^exit=0$' "exit=$?
+$(hook weaken-watch.sh "$WT" 2>&1)" 'swift-harness'
+if grep -qF '"tolerance"' "$TEMPLATES/tests/Snapshot.swift" && grep -qF 'tolerance ?? (settings["tolerance"]' "$TEMPLATES/tests/Snapshot.swift"; then
+  ok "collect: Snapshot.verify takes the project's tolerance when a test passes none"
+else nok "collect: Snapshot.verify takes the project's tolerance when a test passes none"; fi
 
 # ---------- security settings (#32) ----------
 
@@ -2635,6 +2830,166 @@ mkdir -p "$P/Helper"
 hook session-start.sh "$P" '{"source":"startup"}' >/dev/null
 printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/></dict></plist>\n' >"$P/Helper/Helper.entitlements"
 expect_result "security: a new entitlements file is a change too" 2 'Helper/Helper\.entitlements: com\.apple\.security\.cs\.allow-unsigned-executable-memory = true' "$(rstop "$P")"
+
+# ---------- approvals on a rename (the second field report on 1.11) ----------
+# One rename of a whole project set off three approvals and two notices, each approval with a
+# second question. A move is said as a move, an approval asks only what needs a decision, and
+# one command clears whatever waits.
+
+state_dir_of() { printf '%s/data/state/%s' "$TMP" "$(printf '%s' "$(cd "$1" && pwd -P)" | shasum | cut -c1-16)"; }
+R="$(sec_project rename-security)"
+hook session-start.sh "$R" '{"source":"startup"}' >/dev/null
+d="$(sec --status --project "$R" | sed -n 's/^Digest: //p')"
+out="$(sec --approve "$d" --project "$R")"
+expect_result "rename: the approval counts the settings the listing shows, the switch apart" 0 '^Approved: 4 setting\(s\) recorded as the security baseline, and security\.enabled\.$' "exit=0
+$out"
+git -C "$R" mv App NewApp
+git -C "$R" mv NewApp/App.entitlements NewApp/NewApp.entitlements
+perl -pi -e 's#App/App\.entitlements#NewApp/NewApp.entitlements#' "$R/App.xcodeproj/project.pbxproj"
+out="$(sec --status --project "$R")"
+if grep -qF 'Moved to another file, values unchanged (a rename):' <<<"$out" &&
+  grep -qF '  App/App.entitlements -> NewApp/NewApp.entitlements: 2 setting(s) moved' <<<"$out" &&
+  grep -qF '  App.xcodeproj/project.pbxproj: the entitlements path follows the moved entitlements file' <<<"$out" &&
+  grep -qF 'No setting changed its value.' <<<"$out" && grep -qF 'Nothing to decide: no change weakens protection.' <<<"$out" &&
+  ! grep -qE '^[+-] ' <<<"$out"; then
+  ok "rename: the security status shows moved settings one line per file, with no +/- pair"
+else nok "rename: the security status shows moved settings one line per file, with no +/- pair" "$out"; fi
+echo 'let app = 2' >"$R/Sources/App.swift"
+out="$(rstop "$R")"
+expect_result "rename: by default a move waits for the user, said as a move with nothing relaxed" 2 'Nothing was relaxed\. The user records the new paths by typing /swift-harness:approve-security \(no question to answer\)' "$out" '^\+ '
+d="$(sec --status --project "$R" | sed -n 's/^Digest: //p')"
+sec --approve "$d" --project "$R" >/dev/null
+expect_result "rename: ... and once approved the turn passes" 0 '^exit=0' "$(rstop "$R")" 'Security settings'
+
+# security.moves "pass": a move is no change. Setting it is itself a change to approve.
+set_config "$R" '{"format":"none","lint":"none","verify":{"enabled":false,"maxAttempts":20},"security":{"moves":"pass"}}'
+out="$(sec --status --project "$R")"
+expect_result "rename: security.moves pass is a change that weakens protection, to decide" 0 'To decide: these changes weaken protection:' "exit=0
+$out"
+expect_result "rename: ... named" 0 '^  \+ \.claude/swift-harness\.json: security\.moves = pass$' "exit=0
+$out"
+d="$(sec --status --project "$R" | sed -n 's/^Digest: //p')"
+sec --approve "$d" --project "$R" >/dev/null
+git -C "$R" add -A && git -C "$R" commit -qm renamed
+git -C "$R" mv NewApp Renamed
+git -C "$R" mv Renamed/NewApp.entitlements Renamed/Renamed.entitlements
+perl -pi -e 's#NewApp/NewApp\.entitlements#Renamed/Renamed.entitlements#' "$R/App.xcodeproj/project.pbxproj"
+echo 'let app = 3' >"$R/Sources/App.swift"
+expect_result "rename: with security.moves pass a move passes the turn" 0 '^exit=0' "$(rstop "$R")" 'Security settings'
+plutil -replace 'com\.apple\.security\.cs\.disable-library-validation' -bool YES "$R/Renamed/Renamed.entitlements"
+echo 'let app = 4' >"$R/Sources/App.swift"
+out="$(rstop "$R")"
+expect_result "rename: ... and a real change in a moved file still blocks, alone in the list" 2 '^\+ Renamed/Renamed\.entitlements: com\.apple\.security\.cs\.disable-library-validation = true$' "$out" 'app-sandbox'
+expect_result "rename: the failure header names only the failing check" 2 '^Verification failed \(attempt [0-9] of 20\): security settings$' "$out"
+if grep -qF 'Nothing to decide' "$SKILLS/approve-security/SKILL.md" && grep -qF 'do not ask again for what weakens nothing' "$SKILLS/approve-security/SKILL.md"; then
+  ok "rename: approve-security asks only when something weakens protection"
+else nok "rename: approve-security asks only when something weakens protection"; fi
+expect_row "doctor: security.moves is approve or pass" "$(set_config "$R" '{"security":{"moves":"sometimes"}}'; doctor "$R")" FAIL Config 'security\.moves must be "approve"'
+
+# The verify approval keeps the text it approved: the next status shows what changed since.
+V2="$(new_project rename-verify)"
+printf 'source scripts/helper.sh\n' >>"$V2/scripts/verify.sh"
+printf 'name=OldApp\n' >"$V2/scripts/helper.sh"
+set_config "$V2" '{"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast","inputs":["scripts/helper.sh"]}}'
+git -C "$V2" add -A && git -C "$V2" commit -qm inputs
+approve "$V2" >/dev/null
+hook session-start.sh "$V2" '{"source":"startup"}' >/dev/null
+perl -pi -e 's/fake verify output/fake check output/' "$V2/scripts/verify.sh"
+perl -pi -e 's/OldApp/NewApp/' "$V2/scripts/helper.sh"
+out="$(approval "$V2" --status)"
+expect_result "verify diff: the status names the files changed since the approval" 0 'Changes since the last approval in this folder \(scripts/helper\.sh \(\+1 -1 lines\), scripts/verify\.sh \(\+1 -1 lines\);' "exit=0
+$out"
+expect_result "verify diff: ... and shows the lines" 0 '^\+echo "fake check output"$' "exit=0
+$out"
+expect_result "verify diff: ... and not the lines that did not change" 0 '^-name=OldApp$' "exit=0
+$out" '^[+-]exit '
+echo 'let app = 5' >"$V2/Sources/App.swift"
+out="$(FAKE_VERIFY_LOG=/dev/null hook stop-verify.sh "$V2" 2>&1)"
+expect_result "verify diff: the end-of-turn notice says which files changed and by how much" 0 'changed since you last approved it \(changed: scripts/helper\.sh \(\+1 -1 lines\), scripts/verify\.sh \(\+1 -1 lines\)\)' "exit=$?
+$out"
+rm -rf "$(state_dir_of "$V2")/verify-approved-text"
+expect_result "verify diff: an approval that kept no copy says the changes are not available" 0 'Changes since the last approval: not available' "exit=0
+$(approval "$V2" --status)"
+approve "$V2" >/dev/null
+approval "$V2" --revoke >/dev/null
+if [ ! -e "$(state_dir_of "$V2")/verify-approved-text" ]; then ok "verify diff: revoking removes the copy"
+else nok "verify diff: revoking removes the copy"; fi
+if grep -qF 'flag only what the added lines' "$SKILLS/approve-verify/SKILL.md"; then ok "verify diff: the skill flags only what the changed lines bring"
+else nok "verify diff: the skill flags only what the changed lines bring"; fi
+
+# The failure header: the failing checks only, the ones that passed on their own line. And when
+# more than one kind of approval waits, the single command is named.
+H="$(sec_project rename-header)"
+set_config "$H" '{"format":"none","lint":"none","verify":{"command":"scripts/verify.sh fast","maxAttempts":20}}'
+git -C "$H" add -A && git -C "$H" commit -qm verify
+approve "$H" >/dev/null
+hook session-start.sh "$H" '{"source":"startup"}' >/dev/null
+d="$(sec --status --project "$H" | sed -n 's/^Digest: //p')"
+sec --approve "$d" --project "$H" >/dev/null
+entitle "$H" 'com\.apple\.security\.cs\.allow-jit' YES
+echo 'let app = 6' >"$H/Sources/App.swift"
+out="$(rstop "$H")"
+expect_result "header: a failure names the failing check" 2 '^Verification failed \(attempt 1 of 20\): security settings$' "$out"
+expect_result "header: ... and the passed ones apart" 2 '^Passed: scripts/verify\.sh fast$' "$out"
+expect_result "header: one kind of approval waiting does not name the single command" 2 'security settings' "$out" 'swift-harness:approve clears'
+echo '# changed' >>"$H/scripts/verify.sh"
+echo 'let app = 7' >"$H/Sources/App.swift"
+out="$(rstop "$H")"
+expect_result "approve: with two kinds of approval waiting, the block names the single command" 2 'More than one approval waits: /swift-harness:approve clears them in one go\. Tell the user; do not run it yourself\.' "$out"
+if grep -qx 'disable-model-invocation: true' "$SKILLS/approve/SKILL.md" && grep -qF 'approve-verify.sh" --approve' "$SKILLS/approve/SKILL.md" &&
+  grep -qF 'security.sh" --approve' "$SKILLS/approve/SKILL.md" && grep -qF 'snapshots.sh" --approve' "$SKILLS/approve/SKILL.md" &&
+  grep -qF 'One question at most' "$SKILLS/approve/SKILL.md"; then
+  ok "approve: one command for the three approvals, run by the user only, with one question at most"
+else nok "approve: one command for the three approvals, run by the user only, with one question at most"; fi
+if grep -qF 'are `all`, or name images, the user decided' "$SKILLS/approve-snapshots/SKILL.md"; then ok "approve: approve-snapshots all asks no question"
+else nok "approve: approve-snapshots all asks no question"; fi
+
+# A protected file moved: said as a move, content unchanged.
+M="$(new_project rename-protected)"
+hook session-start.sh "$M" '{"source":"startup"}' >/dev/null
+git -C "$M" mv Sources/Audio Sources/Sound
+out="$(hook protected-watch.sh "$M" 2>&1)"
+expect_result "protected move: a file moved out of the protected paths is said as a move" 0 'moved out of the protected paths, content unchanged: Sources/Audio/Engine\.swift -> Sources/Sound/Engine\.swift' "exit=0
+$out" 'deleted: '
+expect_result "protected move: ... and the notice says it is no longer protected" 0 'still names the old place, so the files at the new one are no longer protected' "exit=0
+$out"
+M2="$(new_project rename-protected-inside)"
+set_config "$M2" '{"protectedPaths":["Sources/Audio/","Sources/Sound/"]}'
+hook session-start.sh "$M2" '{"source":"startup"}' >/dev/null
+git -C "$M2" mv Sources/Audio Sources/Sound
+out="$(hook protected-watch.sh "$M2" 2>&1)"
+expect_result "protected move: a move inside the protected paths is said as a move, not a change" 0 '  moved, content unchanged: Sources/Audio/Engine\.swift -> Sources/Sound/Engine\.swift' "exit=0
+$out" '[^n]changed: |deleted: |no longer protected'
+echo 'let engine = 2' >"$M2/Sources/Sound/Engine.swift"
+expect_result "protected move: an edit after the move is still a change" 0 'changed: Sources/Sound/Engine\.swift' "exit=0
+$(hook protected-watch.sh "$M2" 2>&1)"
+if grep -qF 'move the file with `git mv`, content unchanged, and name its new place in `protectedPaths`' "$TEMPLATES/CLAUDE.md"; then
+  ok "protected move: the setup's rules say how to move a protected file"
+else nok "protected move: the setup's rules say how to move a protected file"; fi
+
+# A lint exclusion that follows a renamed folder is not a weaker check.
+X="$(new_project rename-lint)"
+printf 'excluded:\n  - OldApp/Generated\n' >"$X/.swiftlint.yml"
+git -C "$X" add -A && git -C "$X" commit -qm lint
+hook session-start.sh "$X" '{"source":"startup"}' >/dev/null
+printf 'excluded:\n  - NewApp/Generated\n' >"$X/.swiftlint.yml"
+expect_result "rename: a lint exclusion that follows a renamed folder is not a weaker check" 0 '^exit=0$' "exit=0
+$(hook weaken-watch.sh "$X" 2>&1)" 'excluded from lint'
+printf 'excluded:\n  - NewApp/Generated\n  - Other/Stuff\n' >"$X/.swiftlint.yml"
+expect_result "rename: ... a new exclusion still is" 0 'Other/Stuff excluded from lint' "exit=0
+$(hook weaken-watch.sh "$X" 2>&1)" 'NewApp/Generated excluded'
+# A test file moved and edited in the same change: compared as one file by its name.
+Y="$(new_project rename-tests)"
+mkdir -p "$Y/OldApp/Tests"
+printf 'import XCTest\nfinal class PlayerTests: XCTestCase {\n    func testPlays() { XCTAssertTrue(true) }\n    func testStops() { XCTAssertTrue(true) }\n    func testSeeks() { XCTAssertTrue(true) }\n}\n' >"$Y/OldApp/Tests/PlayerTests.swift"
+git -C "$Y" add -A && git -C "$Y" commit -qm tests
+hook session-start.sh "$Y" '{"source":"startup"}' >/dev/null
+mkdir -p "$Y/NewApp"
+git -C "$Y" mv OldApp/Tests NewApp/Tests
+perl -ni -e 'print unless /testSeeks/' "$Y/NewApp/Tests/PlayerTests.swift"
+out="$(hook weaken-watch.sh "$Y" 2>&1)"
+expect_result "rename: a test file moved and edited is compared as one file" 0 'NewApp/Tests/PlayerTests\.swift: 1 test removed \(3 -> 2\)' "exit=0
+$out" 'file removed'
 
 # ---------- concurrency escape hatches (#37) ----------
 # Real SwiftLint with the setup template: the rules are regexes, so test them as SwiftLint runs them.
@@ -4547,7 +4902,7 @@ EOF
 mkdir -p "$UC/scripts/nested"; echo 'print(1)' >"$UC/scripts/helper.py"; echo 'exit 0' >"$UC/scripts/nested/run.sh"
 git -C "$UC" add -A; git -C "$UC" commit -qm uncovered
 out="$(approval "$UC" --status)"
-if grep -q 'Not covered: scripts/helper.py, named in scripts/verify.sh' <<<"$out" && grep -q 'Not covered: scripts/nested/run.sh, named in scripts/verify.sh' <<<"$out" && ! grep -q 'gone.sh' <<<"$out" && ! grep -q 'Not covered: scripts/verify.sh' <<<"$out"; then
+if grep -q 'Not covered: scripts/helper.py, named in scripts/verify.sh' <<<"$out" && grep -q 'Not covered: scripts/nested/run.sh, named in scripts/verify.sh' <<<"$out" && ! grep -q 'Not covered: .*gone.sh' <<<"$out" && ! grep -q 'Not covered: scripts/verify.sh' <<<"$out"; then
   ok "approval: a script named by the approved one and not covered is shown; a name that does not exist is not"
 else nok "approval: a script named by the approved one and not covered is shown; a name that does not exist is not" "$out"; fi
 out="$(doctor "$UC")"

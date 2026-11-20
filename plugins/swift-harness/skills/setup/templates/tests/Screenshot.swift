@@ -286,8 +286,9 @@ enum Screenshot {
                 || files.fileExists(atPath: dir.appendingPathComponent(".git").path) {
                 return (dir, nil)
             }
+            // At the root of the disk a folder URL answers "/../", never the root again: stop there.
             let parent = dir.deletingLastPathComponent()
-            if parent.path == dir.path { return nil }
+            if dir.path == "/" || parent.path == dir.path { return nil }
             dir = parent
         }
     }

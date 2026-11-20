@@ -83,6 +83,14 @@ status() {
     else echo "Status: approved, inherited from the ${src#worktree } worktree of this repository (same command and files)"; fi
   else
     echo "Status: not approved"
+    changed="$(sh_verify_text_diff "$command_line" "$state")"
+    if [ -n "$changed" ]; then
+      printf 'Changes since the last approval in this folder (%s; what is not shown here was already approved):\n' "$(sh_verify_text_summary "$command_line" "$state")"
+      printf '%s\n' "$changed" | head -200
+      [ "$(printf '%s\n' "$changed" | wc -l)" -le 200 ] || echo "... cut at 200 lines: git diff shows the rest"
+    elif [ -f "$state/verify-approved" ]; then
+      echo "Changes since the last approval: not available (that approval kept no copy of the files: approved before 1.13, or more than 5 MB)."
+    fi
   fi
   printf 'Digest: %s\n' "$(sh_verify_digest "$command_line")"
 }
@@ -91,6 +99,7 @@ case "$action" in
   --status) status ;;
   --revoke)
     rm -f "$state/verify-approved"
+    rm -rf "$state/verify-approved-text"
     # Also for the other worktrees (#107): this content, and what this worktree shared.
     if shared="$(sh_repo_approvals)" && [ -d "$shared" ]; then
       rm -f "$shared/$(sh_verify_content_digest "$command_line")"
@@ -110,6 +119,8 @@ case "$action" in
       exit 1
     fi
     printf '%s' "$digest" >"$state/verify-approved"
+    # The text approved, for the next status to show what changed since (not for any check).
+    sh_verify_keep_text "$command_line" "$state"
     # Other worktrees of this repository with the same command and files inherit it (#107).
     sh_verify_share_approval "$command_line"
     sh_catch "verify command" approved "$command_line"

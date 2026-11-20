@@ -8,8 +8,9 @@
 # rule disabled, no longer opted in or no longer in only_rules, or a path excluded, a layout
 # contract row removed or its Min lowered, a registry component gone from Components
 # without being retired, and a module removed from the porting ratchet or a macOS-only use
-# accepted in it. A test file renamed with the same counts is not a removal, nor a
-# component that keeps its ID under a new name. Text only, no project code runs. Said once per
+# accepted in it. A test file renamed with the same counts, or moved with the same name, is not a
+# removal (what it lost is reported, compared as one file), nor a
+# component that keeps its ID under a new name, nor a lint exclusion that follows a renamed folder. Text only, no project code runs. Said once per
 # set, recorded in the catch log. Never blocks.
 
 . "$(dirname "$0")/lib.sh"
@@ -42,12 +43,35 @@ report="$(awk -F'\t' '
       t = tup(s, g)
       for (f in nf) if (!(f in sf) && !(f in from) && tup(n, f) == t) { from[f] = g; renamed[g] = 1; break }
     }
+    # Moved and edited in the same change (the counts differ): the same file name at a new path is
+    # the same file, compared as one, so only what it lost is reported.
+    for (g in sf) if (!(g in nf) && !(g in renamed)) {
+      bg = g; sub(/.*\//, "", bg)
+      for (f in nf) {
+        bf = f; sub(/.*\//, "", bf)
+        if (!(f in sf) && !(f in from) && bf == bg) { from[f] = g; renamed[g] = 1; break }
+      }
+    }
     for (g in sf) if (!(g in nf) && !(g in renamed) && (s["tests" FS g FS "-"] + s["asserts" FS g FS "-"]) > 0) {
       gone[g] = 1
       print g ": file removed (" plural(s["tests" FS g FS "-"] + 0, "test") ", " plural(s["asserts" FS g FS "-"] + 0, "assertion") ")"
     }
     for (k in s) keys[k] = 1
     for (k in n) keys[k] = 1
+    # A lint exclusion that follows a renamed folder (the second field report on 1.11): one gone
+    # and one new in the same file, with the same last part ("OldApp/Generated" and
+    # "NewApp/Generated"), is the same exclusion at its new path.
+    for (k in keys) {
+      split(k, p, FS)
+      if (p[1] != "lint-excluded" || !(k in n) || (k in s)) continue
+      last = p[3]; sub(/\/+$/, "", last); sub(/.*\//, "", last)
+      for (j in s) {
+        split(j, q, FS)
+        if (q[1] != "lint-excluded" || q[2] != p[2] || (j in n) || (j in paired)) continue
+        was = q[3]; sub(/\/+$/, "", was); sub(/.*\//, "", was)
+        if (was == last) { paired[j] = 1; follows[k] = 1; break }
+      }
+    }
     for (k in keys) {
       split(k, p, FS); kind = p[1]; f = p[2]; name = p[3]
       if ((f in gone) || (f in renamed)) continue
@@ -61,7 +85,7 @@ report="$(awk -F'\t' '
       else if (kind == "lint-off" && b > a) print f ": rule " name " disabled"
       else if (kind == "lint-optin" && b < a) print f ": rule " name " no longer opted in"
       else if (kind == "lint-only" && b < a) print f ": rule " name " removed from only_rules"
-      else if (kind == "lint-excluded" && b > a) print f ": " name " excluded from lint"
+      else if (kind == "lint-excluded" && b > a && !(k in follows)) print f ": " name " excluded from lint"
       else if (kind == "tolerance" && a != b) {
         # Per file: the largest tolerance gone and the largest one new.
         g = (f in from) ? from[f] : f
