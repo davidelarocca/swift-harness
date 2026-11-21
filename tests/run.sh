@@ -440,7 +440,7 @@ set_config "$PU" '{"format":"none","lint":"none"}'
 hook session-start.sh "$PU" '{"source":"startup"}' >/dev/null
 printf 'struct Bar: View {\n    var body: some View { Button("x") {}.popover(isPresented: $shown) { List {} } }\n}\n' >"$PU/Sources/Bar.swift"
 out="$(pe_write "$PU" "$PU/Sources/Bar.swift" 'Button("x") {}.popover(isPresented: $shown) { List {} }')"
-expect_result "presented UI: a popover written by an edit is reminded to open inside the window" 0 'Presented UI: this edit opens a popover, menu, sheet or overlay in Sources/Bar\.swift.*smallest one.*clamp it inside the window bounds' "exit=0
+expect_result "presented UI: a popover written by an edit is reminded to open inside the window" 0 'Presented UI: this edit opens a popover, menu, sheet or overlay in Sources/Bar\.swift.*smallest one.*Nothing may stick out of the window.*windows of their own.*clamp it inside the window bounds.*fits inside the window on the side it opens' "exit=0
 $out"
 expect_result "presented UI: ... once per file in a session" 0 '^exit=0$' "exit=0
 $(pe_write "$PU" "$PU/Sources/Bar.swift" 'Menu("More") { Button("A") {} }')" 'Presented UI'
