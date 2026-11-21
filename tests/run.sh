@@ -429,6 +429,31 @@ set_config "$P" '{"format":"none","lint":"none"}'
 post_edit "$P" "$F" >/dev/null
 if [ ! -s "$TOOLLOG" ]; then ok "post-edit: format and lint set to none run nothing"; else nok "post-edit: format and lint set to none run nothing" "$(cat "$TOOLLOG")"; fi
 
+# Presented UI: an edit that writes a popover, a menu or a positioned overlay is reminded, once
+# per file, that it opens inside the window at every size.
+pe_write() { # $1 project, $2 file, $3 text written by the edit
+  jq -nc --arg cwd "$1" --arg f "$2" --arg t "$3" '{cwd: $cwd, session_id: "test", tool_name: "Edit", tool_input: {file_path: $f, old_string: "x", new_string: $t}}' |
+    CLAUDE_PLUGIN_DATA="$TMP/data" CLAUDE_PROJECT_DIR="$1" "$SCRIPTS/post-edit.sh" 2>&1
+}
+PU="$(new_project presented-ui)"
+set_config "$PU" '{"format":"none","lint":"none"}'
+hook session-start.sh "$PU" '{"source":"startup"}' >/dev/null
+printf 'struct Bar: View {\n    var body: some View { Button("x") {}.popover(isPresented: $shown) { List {} } }\n}\n' >"$PU/Sources/Bar.swift"
+out="$(pe_write "$PU" "$PU/Sources/Bar.swift" 'Button("x") {}.popover(isPresented: $shown) { List {} }')"
+expect_result "presented UI: a popover written by an edit is reminded to open inside the window" 0 'Presented UI: this edit opens a popover, menu, sheet or overlay in Sources/Bar\.swift.*smallest one.*clamp it inside the window bounds' "exit=0
+$out"
+expect_result "presented UI: ... once per file in a session" 0 '^exit=0$' "exit=0
+$(pe_write "$PU" "$PU/Sources/Bar.swift" 'Menu("More") { Button("A") {} }')" 'Presented UI'
+printf 'let menu = 1\n' >"$PU/Sources/Menu.swift"
+expect_result "presented UI: a Menu in another file is reminded too" 0 'Presented UI: .*Sources/Menu\.swift' "exit=0
+$(pe_write "$PU" "$PU/Sources/Menu.swift" 'Menu { Button("A") {} } label: { Text("More") }')"
+printf 'let a = 1\n' >"$PU/Sources/Plain.swift"
+expect_result "presented UI: an edit with none says nothing" 0 '^exit=0$' "exit=0
+$(pe_write "$PU" "$PU/Sources/Plain.swift" 'let mainMenuTitle = "x"; let overlayCount = 2')" 'Presented UI'
+printf 'struct Pop: View {\n    var body: some View { Color.clear.overlay { Text("x").offset(x: 300, y: 40) } }\n}\n' >"$PU/Sources/Pop.swift"
+expect_result "presented UI: an overlay in a file that offsets or positions views is reminded" 0 'Presented UI: .*Sources/Pop\.swift' "exit=0
+$(pe_write "$PU" "$PU/Sources/Pop.swift" 'Color.clear.overlay { Text("x").offset(x: 300, y: 40) }')"
+
 set_config "$P" '{"format":"swiftformat","lint":"swiftlint","lintBlocking":true}'
 expect_result "post-edit: lintBlocking blocks on lint errors" 2 'Force Unwrapping' "$(FAKE_LINT=error post_edit "$P" "$F")"
 expect_result "post-edit: lintBlocking message says what to do with pre-existing errors" 2 'already there before your edit' "$(FAKE_LINT=error post_edit "$P" "$F")" 'Fix this before continuing'

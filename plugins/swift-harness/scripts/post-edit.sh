@@ -140,6 +140,24 @@ if sh_layout_on; then
   [ -z "$screens" ] || add_note "Layout contract: $rel draws $screens in $(sh_layout). If you changed its layout, it must still fit at those sizes (LayoutContract.check in the tests measures it); update the contract in the same change if the sizes or the compact behavior changed."
 fi
 
+# ---- Presented UI ----
+# Not blocking: an edit that writes a popover, menu, sheet or positioned overlay is reminded, once
+# per file and session, that it must open inside the window at every size. Agents get it wrong
+# most at the smallest window size, and no test measures it.
+written="$(sh_in '[.tool_input.new_string?, .tool_input.content?, (.tool_input.edits[]?.new_string)] | map(select(. != null)) | join("\n")')"
+if [ -n "$written" ] && { grep -qE '\.(popover|sheet|inspector|contextMenu|confirmationDialog)[[:space:]]*[({]|(^|[^A-Za-z])Menu[[:space:]]*[({]|NSPopover|NSMenu|NSPanel' <<<"$written" ||
+  { grep -qE '\.overlay[[:space:]]*[({]' <<<"$written" && grep -qE '\.(offset|position)[[:space:]]*\(' "$path"; }; }; then
+  told="$(sh_session_dir "$(sh_state_dir)" 2>/dev/null)/presented-told"
+  if ! grep -qxF -- "$rel" "$told" 2>/dev/null; then
+    printf '%s\n' "$rel" >>"$told" 2>/dev/null
+    layout_doc="$(sh_layout)"
+    add_note "Presented UI: this edit opens a popover, menu, sheet or overlay in $rel. It must open inside the app window at every window size, above all the smallest one the window can be resized to$([ -f "$SH_ROOT/$layout_doc" ] && printf ' (the Min of its screen in %s)' "$layout_doc"):
+- Prefer the system presentations (Menu, a Picker with .menu style, .contextMenu, .popover): they place themselves. Give their content a maxWidth and maxHeight below the window's smallest size, and let it scroll instead of growing.
+- A hand-built dropdown, popup or overlay: host it at the window's root, not inside a ScrollView or a clipped container; place it from the frame of what opens it (anchorPreference or GeometryReader in the window's coordinates), clamp it inside the window bounds with a margin, open it upward or leftward when there is no room below or to the right, and cap its height to the space left.
+- No fixed offsets or sizes that assume a large window. Check it at the smallest window size, and record it in the Presented UI table of $layout_doc."
+  fi
+fi
+
 # ---- Architecture contracts (#13) ----
 # An edited manifest is checked at once. dump-package runs Package.swift, so only with the
 # approved verify command, like the end-of-turn check.
