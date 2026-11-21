@@ -509,6 +509,29 @@ else
     3) row WARN "Layout contract" "${layout_out#Layout contract ($layout): }" ;;
     *) row FAIL "Layout contract" "$(printf '%s\n' "$layout_out" | grep '^- ' | head -3 | sed 's/^- //' | paste -sd ';' - | sed 's/;/; /g'). Fix: update $layout" ;;
   esac
+  # Presented UI: the rows of its table ("<rows> <rows with a control in backticks>"), and the UI
+  # tests that open them with LayoutAudit.checkPresented.
+  presented="$(awk -F'|' '
+    /^#/ { inside = ($0 ~ /^#+[ \t]*Presented UI/); col = 0; next }
+    !inside || $0 !~ /^[ \t]*\|/ { next }
+    col == 0 { for (i = 2; i < NF; i++) { h = $i; gsub(/^[ \t]+|[ \t]+$/, "", h); if (tolower(h) == "opened from") col = i }; if (col == 0) col = -1; next }
+    col < 0 || $0 ~ /^[ \t]*\|[ \t:|-]*$/ { next }
+    { e = $2; gsub(/^[ \t]+|[ \t]+$/, "", e); if (e == "") next; rows++; if ($col ~ /`[^`]+`/) named++ }
+    END { printf "%d %d\n", rows, named }' "$SH_ROOT/$layout" 2>/dev/null)"
+  p_rows="${presented%% *}"
+  p_named="${presented##* }"
+  if [ "${p_rows:-0}" -gt 0 ]; then
+    p_tests="$(git -C "$SH_ROOT" -c core.quotepath=off grep --untracked -l -F 'LayoutAudit.checkPresented(' -- '*.swift' 2>/dev/null | head -3 | paste -sd, - | sed 's/,/, /g')"
+    p_unnamed=""
+    [ "$p_named" -ge "$p_rows" ] || p_unnamed="; $((p_rows - p_named)) of them name no control in backticks in Opened from, so no test opens them"
+    if [ -z "$p_tests" ]; then
+      row WARN "Presented UI" "$p_rows element(s) in the Presented UI table of $layout, and no UI test opens them: nothing measures that they stay inside the window at its smallest size$p_unnamed. Fix: a UI test that calls LayoutAudit.checkPresented(app) (tests/LayoutAudit.swift from the setup templates), with each control's accessibility identifier in backticks in Opened from"
+    elif [ -n "$p_unnamed" ]; then
+      row WARN "Presented UI" "opened by LayoutAudit.checkPresented in $p_tests$p_unnamed. Fix: add the control's accessibility identifier in backticks"
+    else
+      row PASS "Presented UI" "$p_rows element(s), opened at the smallest window by LayoutAudit.checkPresented in $p_tests (UI tests: scripts/verify.sh full)"
+    fi
+  fi
 fi
 
 # Porting ratchet (#73). Reads Swift and C as text; shown only once a module is recorded.

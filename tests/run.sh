@@ -440,7 +440,7 @@ set_config "$PU" '{"format":"none","lint":"none"}'
 hook session-start.sh "$PU" '{"source":"startup"}' >/dev/null
 printf 'struct Bar: View {\n    var body: some View { Button("x") {}.popover(isPresented: $shown) { List {} } }\n}\n' >"$PU/Sources/Bar.swift"
 out="$(pe_write "$PU" "$PU/Sources/Bar.swift" 'Button("x") {}.popover(isPresented: $shown) { List {} }')"
-expect_result "presented UI: a popover written by an edit is reminded to open inside the window" 0 'Presented UI: this edit opens a popover, menu, sheet or overlay in Sources/Bar\.swift.*smallest one.*Nothing may stick out of the window.*windows of their own.*clamp it inside the window bounds.*fits inside the window on the side it opens' "exit=0
+expect_result "presented UI: a popover written by an edit is reminded to open inside the window" 0 'Presented UI: this edit opens a popover, menu, sheet or overlay in Sources/Bar\.swift.*smallest one.*Nothing may stick out of the window.*windows of their own.*clamp it inside the window bounds.*fits inside the window on the side it opens.*LayoutAudit\.checkPresented\(app\)' "exit=0
 $out"
 expect_result "presented UI: ... once per file in a session" 0 '^exit=0$' "exit=0
 $(pe_write "$PU" "$PU/Sources/Bar.swift" 'Menu("More") { Button("A") {} }')" 'Presented UI'
@@ -2772,6 +2772,29 @@ cp "$TEMPLATES/tests/Snapshot.swift" "$AN/Tests/AppTests/Snapshot.swift"
 expect_row "doctor: approveNew with the current helper is said" "$(doctor "$AN")" INFO 'New snapshots' 'becomes its baseline in its test'
 set_config "$AN" '{"snapshots":{"approveNew":"yes"}}'
 expect_row "doctor: approveNew must be a boolean" "$(doctor "$AN")" FAIL Config 'snapshots\.approveNew must be true'
+# Presented UI: the doctor says whether a UI test opens what the contract's table lists.
+PR="$(new_project presented-doctor)"
+mkdir -p "$PR/docs"
+cp "$TEMPLATES/docs/LAYOUT_CONTRACT.md" "$PR/docs/LAYOUT_CONTRACT.md"
+python3 - "$PR/docs/LAYOUT_CONTRACT.md" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+i = s.index("| | | | | |\n", s.index("## Presented UI"))
+s = s[:i] + "| Track details | Library, `more` | popover | 200x120 | inside |\n| Sort list | Library, the sort button | dropdown | 160 | inside |\n" + s[i + len("| | | | | |\n"):]
+open(p, "w").write(s)
+PY
+expect_row "doctor: Presented UI rows that no UI test opens are a warning" "$(doctor "$PR")" WARN 'Presented UI' '2 element\(s\) in the Presented UI table of docs/LAYOUT_CONTRACT\.md, and no UI test opens them.*1 of them name no control in backticks'
+mkdir -p "$PR/UITests"
+printf 'func testPresented() throws { try LayoutAudit.checkPresented(app) }\n' >"$PR/UITests/PresentedTests.swift"
+expect_row "doctor: ... a row with no control in backticks still is" "$(doctor "$PR")" WARN 'Presented UI' 'opened by LayoutAudit\.checkPresented in UITests/PresentedTests\.swift; 1 of them name no control'
+sed -i '' 's/| Library, the sort button |/| Library, `sort` |/' "$PR/docs/LAYOUT_CONTRACT.md"
+expect_row "doctor: ... and every row opened passes" "$(doctor "$PR")" PASS 'Presented UI' '2 element\(s\), opened at the smallest window by LayoutAudit\.checkPresented in UITests/PresentedTests\.swift'
+if grep -qF 'static func checkPresented(' "$TEMPLATES/tests/LayoutAudit.swift" && grep -qF 'case .outsideWindow:' "$TEMPLATES/tests/LayoutAudit.swift" &&
+  grep -qF 'LayoutAudit.checkPresented(app)' "$TEMPLATES/docs/LAYOUT_CONTRACT.md"; then
+  ok "presented UI: the template helper measures it, and the contract template says how to name the controls"
+else nok "presented UI: the template helper measures it, and the contract template says how to name the controls"; fi
+
 if grep -qF 'approveNew ?? (settings["approveNew"] as? Bool == true)' "$TEMPLATES/tests/Snapshot.swift"; then
   ok "approveNew: Snapshot.verify reads it from the project config"
 else nok "approveNew: Snapshot.verify reads it from the project config"; fi

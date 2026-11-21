@@ -221,6 +221,9 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/dd-layout" 2>&1 | tee "$RUNNER_TEMP/mac.log" | grep -E 'Test Case|LayoutAudit|error:|TEST (SUCCEEDED|FAILED)'
           grep -q 'TEST SUCCEEDED' "$RUNNER_TEMP/mac.log"
           grep -q 'LayoutAudit: window shrunk' "$RUNNER_TEMP/mac.log"
+          # Presented UI: the fixed screen's popover, menus and dropdown were opened and fit.
+          grep -q "LayoutAudit: opened 'more': inside the window" "$RUNNER_TEMP/mac.log"
+          grep -q "testWhatSticksOutOfTheWindowIsFound\]' passed" "$RUNNER_TEMP/mac.log"
 
       - name: UI tests of tests/fixtures/layout-audit (iOS simulator)
         working-directory: tests/fixtures/layout-audit

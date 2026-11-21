@@ -67,6 +67,39 @@ final class LayoutFixtureUITests: XCTestCase {
     }
     #endif
 
+    #if os(macOS)
+    /// Presented UI at the smallest window: the wide popover and the menu with long items stick out
+    /// of the window, and the dropdown at a fixed offset is cut by its right edge; the short menu
+    /// passes.
+    @MainActor
+    func testWhatSticksOutOfTheWindowIsFound() throws {
+        let app = launch(["-presented"])
+        let found = try LayoutAudit.presentedIssues(app, controls: ["actions", "more", "sort", "export"], shrink: false)
+        print("LayoutAudit presented negative control:", found.map { "\($0.control): \($0.issue)" })
+        XCTAssertEqual(Set(found.map(\.control)), ["more", "sort", "export"], "\(found)")
+        XCTAssertTrue(found.contains { $0.control == "more" && $0.issue.kind == .outsideWindow }, "\(found)")
+        XCTAssertTrue(found.contains { $0.control == "sort" && $0.issue.kind == .cutByEdge }, "\(found)")
+        XCTAssertTrue(found.contains { $0.control == "export" && $0.issue.kind == .outsideWindow }, "\(found)")
+    }
+
+    /// The same screen fixed passes, opened from the fixture's layout contract.
+    @MainActor
+    func testWhatFitsPassesFromTheContract() throws {
+        try LayoutAudit.checkPresented(launch(["-presented", "-fixed"], smallest: false))
+    }
+
+    /// checkPresented fails for each one that sticks out.
+    @MainActor
+    func testCheckPresentedFailsForWhatSticksOut() throws {
+        let app = launch(["-presented"], smallest: false)
+        let options = XCTExpectedFailure.Options()
+        options.issueMatcher = { ["opening 'more'", "opening 'sort'", "opening 'export'"].contains(where: $0.compactDescription.contains) }
+        XCTExpectFailure("the wide popover and the dropdown past the edge", options: options) {
+            try? LayoutAudit.checkPresented(app)
+        }
+    }
+    #endif
+
     #if os(iOS)
     @MainActor
     func testTheLargestTextStillShowsTheOverlap() throws {
