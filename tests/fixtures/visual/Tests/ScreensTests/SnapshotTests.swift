@@ -71,6 +71,30 @@ struct SnapshotTests {
         #expect(Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out, collect: false) { badge("Old") }.count == 2)
     }
 
+    // snapshots.approveNew = true: an image with no baseline becomes its baseline and passes; a
+    // different image still fails, and the baseline it differs from stays.
+    @Test func newImagesBecomeBaselinesWhenApprovedOnceForAll() throws {
+        let (baselines, out) = try folders()
+        #expect(Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out, approveNew: true) { badge("New") } == [])
+        #expect(try names(baselines) == [
+            "Badge-macos-120x40-dark.json", "Badge-macos-120x40-dark.png",
+            "Badge-macos-120x40-light.json", "Badge-macos-120x40-light.png",
+        ])
+        let info = try json(baselines.appendingPathComponent("Badge-macos-120x40-light.json"))
+        #expect(info["approvedFrom"] as? String == "new")
+        #expect(info["test"] as? String == "Tests/ScreensTests/SnapshotTests.swift")
+        #expect(try result(out, "Badge-macos-120x40-light")["status"] as? String == "passed")
+        #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent("Badge-macos-120x40-light.png").path))
+        let approved = try Data(contentsOf: baselines.appendingPathComponent("Badge-macos-120x40-light.png"))
+        #expect(Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out, approveNew: true) { badge("Old") }.count == 2)
+        #expect(try result(out, "Badge-macos-120x40-light")["status"] as? String == "failed")
+        #expect(try Data(contentsOf: baselines.appendingPathComponent("Badge-macos-120x40-light.png")) == approved)
+        // Without it, a new image is never written.
+        let (others, out2) = try folders()
+        #expect(Snapshot.verify("Badge", sizes: ["120x40"], baselines: others, output: out2, approveNew: false) { badge("New") }.count == 2)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: others.path).isEmpty)
+    }
+
     @Test func aBaselineThatCannotBeReadFailsAlsoWhenCollecting() throws {
         let (baselines, out) = try folders()
         _ = Snapshot.verify("Badge", sizes: ["120x40"], baselines: baselines, output: out) { badge("New") }
@@ -91,6 +115,8 @@ struct SnapshotTests {
         #expect(Snapshot.settings(from: root)["tolerance"] == nil)
         try #"{"snapshots":{"pending":"collect","tolerance":0.001}}"#.write(to: root.appendingPathComponent(".claude/swift-harness.json"), atomically: true, encoding: .utf8)
         #expect((Snapshot.settings(from: root)["tolerance"] as? NSNumber)?.doubleValue == 0.001)
+        try #"{"snapshots":{"approveNew":true}}"#.write(to: root.appendingPathComponent(".claude/swift-harness.json"), atomically: true, encoding: .utf8)
+        #expect(Snapshot.settings(from: root)["approveNew"] as? Bool == true)
         try #"{"snapshots":{"pending":"fail"}}"#.write(to: root.appendingPathComponent(".claude/swift-harness.json"), atomically: true, encoding: .utf8)
         #expect(!Snapshot.collects(from: root))
     }

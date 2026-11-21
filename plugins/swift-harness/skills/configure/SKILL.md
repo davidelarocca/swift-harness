@@ -20,7 +20,7 @@ It prints one `question: answer` line per question. If it says there is no confi
 
 ## 2. Ask
 
-Ask with the question tool, in three rounds of three questions (one round per group below). For each question put the current answer first, marked `(current)`, and keep the descriptions to one line on what the choice does in daily work. Do not ask anything else.
+Ask with the question tool, in three rounds (one round per group below). For each question put the current answer first, marked `(current)`, and keep the descriptions to one line on what the choice does in daily work. Do not ask anything else.
 
 Round 1, how the checks stop the work:
 
@@ -28,10 +28,11 @@ Round 1, how the checks stop the work:
 - **stop**: `turn` (the checks run at the end of each turn that changed code), `commit` (nothing runs at the end of a turn; a commit made by the agent is refused until the checks pass on its code).
 - **snapshots**: `fail` (a new or changed image fails its test at once), `collect` (it waits; one approval before the commit, and `scripts/verify.sh full` fails while any waits).
 
-Round 2, approvals and visual tolerance:
+Round 2, approvals and snapshots:
 
 - **approvals**: `weakening` (an approval command asks only when something weakens a check), `always` (it asks every time).
 - **moves**: `approve` (a security setting moved to another file, as in a rename, waits for an approval that asks nothing), `pass` (a move is no change).
+- **new**: `wait` (an image with no baseline yet waits for the approval like a changed one), `accept` (it becomes its baseline at once, its test passes, and the end of the turn lists it; a changed image still waits).
 - **tolerance**: `0` (any changed pixel counts), `0.001` (up to 0.1% of the pixels may differ: antialiasing noise), `0.01` (1%: only large changes count). The user may type another number from 0 up to 1.
 
 Round 3, the project:
@@ -54,6 +55,7 @@ If nothing differs, say that the configuration already matches, and stop.
 
 Show the lines it printed under `Written to`, then each line under `To know` in your own words, briefly. Some answers need one more step by the user, which you name and do not run:
 
+- `new=accept`: `tests/Snapshot.swift` must come from this version's setup template, or new images keep waiting (the doctor says so). It is reported once as a weaker check.
 - `moves=pass` weakens the security check: it fails the end of the turn until they approve it with `/swift-harness:approve-security`.
 - `snapshots=collect`: if `scripts/verify.sh` was made from an older template, update it from the setup template and approve it again (`/swift-harness:approve-verify`).
 - `stop=commit`: their own commits are not stopped; a git pre-commit hook that runs the `check.sh` path it printed checks them too.
