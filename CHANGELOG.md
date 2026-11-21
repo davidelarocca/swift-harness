@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## swift-harness 1.15.0 (2026-11-21)
+
+- New: popovers, menus, dropdowns, sheets and overlays must open inside the app window at every size, the smallest above all, and agents get this wrong often. An edit that writes one (`.popover`, `Menu`, `.contextMenu`, `.sheet`, `.inspector`, `.confirmationDialog`, `NSPopover`, `NSMenu`, `NSPanel`, or an `.overlay` in a file that offsets or positions views) gets a note, once per file and session, with how. Nothing may stick out past the window's edge: on the Mac a `.popover` and the list of a `Menu` or a `.menu` `Picker` are windows of their own, placed on the screen and not in the app window, so a dropdown that shows content is built in the window (hosted at its root, placed from its anchor, clamped to the window bounds, flipped when there is no room, its height capped), and a `.popover` or a `Menu` is used only where it fits inside the window on the side it opens. The menu bar and context menus opened at the pointer are not covered: the app does not place them. The same rule is now a line of its own in the `CLAUDE.md` template, the UI rules and the `ui-change` skill. Projects already set up get the note without changing their files.
+
 ## swift-harness 1.14.0 (2026-11-21)
 
 - New: new snapshot images can be approved once for all (`"snapshots": {"approveNew": true}`, or `new=accept` in `/swift-harness:configure`). An image that has no baseline yet, a component or a state never captured before, becomes its baseline in its test, approved from "new", and the test passes; the end of the turn lists the new images in one line, to commit with the change, and gives them to the agent to look at: no approval looked at them, and a baseline is what the tests keep from then on, so the agent tells the user what looks like a defect (clipped text, dark mode colors, a right-to-left layout not mirrored). An image that differs from its baseline still waits for `/swift-harness:approve-snapshots`, and no baseline is replaced this way. Turning it on is reported once as a weaker check, and the doctor says when `tests/Snapshot.swift` is too old to read it: update it from the setup template.

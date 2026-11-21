@@ -140,6 +140,26 @@ if sh_layout_on; then
   [ -z "$screens" ] || add_note "Layout contract: $rel draws $screens in $(sh_layout). If you changed its layout, it must still fit at those sizes (LayoutContract.check in the tests measures it); update the contract in the same change if the sizes or the compact behavior changed."
 fi
 
+# ---- Presented UI ----
+# Not blocking: an edit that writes a popover, menu, sheet or positioned overlay is reminded, once
+# per file and session, that it must open inside the window at every size. Agents get it wrong
+# most at the smallest window size, and no test measures it.
+written="$(sh_in '[.tool_input.new_string?, .tool_input.content?, (.tool_input.edits[]?.new_string)] | map(select(. != null)) | join("\n")')"
+if [ -n "$written" ] && { grep -qE '\.(popover|sheet|inspector|contextMenu|confirmationDialog)[[:space:]]*[({]|(^|[^A-Za-z])Menu[[:space:]]*[({]|NSPopover|NSMenu|NSPanel' <<<"$written" ||
+  { grep -qE '\.overlay[[:space:]]*[({]' <<<"$written" && grep -qE '\.(offset|position)[[:space:]]*\(' "$path"; }; }; then
+  told="$(sh_session_dir "$(sh_state_dir)" 2>/dev/null)/presented-told"
+  if ! grep -qxF -- "$rel" "$told" 2>/dev/null; then
+    printf '%s\n' "$rel" >>"$told" 2>/dev/null
+    layout_doc="$(sh_layout)"
+    add_note "Presented UI: this edit opens a popover, menu, sheet or overlay in $rel. It must open inside the app window at every window size, above all the smallest one the window can be resized to$([ -f "$SH_ROOT/$layout_doc" ] && printf ' (the Min of its screen in %s)' "$layout_doc"):
+- Nothing may stick out of the window, not even past its edge. On the Mac a .popover and the list of a Menu or a Picker with .menu style are windows of their own, placed to stay on the screen, not inside the app window: near an edge of a small window they stick out.
+- A dropdown, popup or list that shows content: build it in the window. Host it at the window's root, not inside a ScrollView or a clipped container; place it from the frame of what opens it (anchorPreference or GeometryReader in the window's coordinates), clamp it inside the window bounds with a margin, open it upward or leftward when there is no room below or to the right, cap its height to the space left and scroll inside.
+- A .popover or a Menu is allowed only when it fits inside the window on the side it opens, at the smallest window size: its content has a maxWidth and maxHeight below the space between its anchor and that edge of the window, and it opens toward the side with room (arrowEdge from the anchor's place in the window). A Menu or Picker is kept to a few fixed items, and its control is not placed near the bottom or right edge.
+- Not covered, since the app does not place them: the menu bar, and a context menu opened at the pointer. A sheet is attached to the window and fits it when its size is below the window's smallest size.
+- No fixed offsets or sizes that assume a large window. Check it at the smallest window size, near each edge, and record it in the Presented UI table of $layout_doc."
+  fi
+fi
+
 # ---- Architecture contracts (#13) ----
 # An edited manifest is checked at once. dump-package runs Package.swift, so only with the
 # approved verify command, like the end-of-turn check.
