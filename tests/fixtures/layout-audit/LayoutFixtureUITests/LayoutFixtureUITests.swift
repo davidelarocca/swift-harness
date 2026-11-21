@@ -76,14 +76,6 @@ final class LayoutFixtureUITests: XCTestCase {
         let app = launch(["-presented"])
         let found = try LayoutAudit.presentedIssues(app, controls: ["actions", "more", "sort", "export"], shrink: false)
         print("LayoutAudit presented negative control:", found.map { "\($0.control): \($0.issue)" })
-        // The tree with the popover and a menu open, on the CI log, for when this fails.
-        for id in ["more", "export"] {
-            app.descendants(matching: .any).matching(identifier: id).firstMatch.click()
-            sleep(1)
-            print("LayoutAudit tree with '\(id)' open:\n\(app.debugDescription)")
-            app.typeKey(.escape, modifierFlags: [])
-            sleep(1)
-        }
         XCTAssertEqual(Set(found.map(\.control)), ["more", "sort", "export"], "\(found)")
         XCTAssertTrue(found.contains { $0.control == "more" && $0.issue.kind == .outsideWindow }, "\(found)")
         XCTAssertTrue(found.contains { $0.control == "sort" && $0.issue.kind == .cutByEdge }, "\(found)")

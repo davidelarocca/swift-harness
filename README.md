@@ -184,10 +184,12 @@ It works on macOS and on an iOS simulator (iPhone, iPad, the largest Dynamic Typ
 On macOS it also measures what a screen opens. A `.popover`, a sheet, a dialog and the menu of a menu button or pop-up button are windows of their own on the Mac, placed to stay on the screen, not in the app window: near the edge of a small window they stick out. `LayoutAudit.check` reports one that sticks out of its app window, and `LayoutAudit.checkPresented(app)` opens each control named in backticks in the "Opened from" column of the layout contract's Presented UI table, one at a time at the smallest window, and fails for what it opened that sticks out, is cut or overlaps a text:
 
 ```swift
-try LayoutAudit.checkPresented(app)   // Layout, opening 'more': 'popover at (...)' sticks out of its window on the left and right
+try LayoutAudit.checkPresented(app)
+// Layout, opening 'more': 'popover at (0, 215, 486x186)' sticks out of its window on the left and right: (0, 215, 486x186) in the window (62, 143, 280x312)
+// Layout, opening 'export': 'menu at (233, 254, 328x58)' sticks out of its window on the right: (233, 254, 328x58) in the window (62, 143, 280x312)
 ```
 
-On the fixture in CI, a wide popover and a dropdown placed at a fixed offset are found, a short menu passes, and the fixed screen passes. The menu bar and a context menu opened at the pointer are not checked: the app does not place them. The doctor warns when the Presented UI table lists elements that no UI test opens.
+On the fixture in CI, at a 280x312 window: a wide popover, a menu with long items at the right edge and a dropdown placed at a fixed offset are found, a short menu passes, and the fixed screen passes with all four inside the window. The menu bar and a context menu opened at the pointer are not checked: the app does not place them. The doctor warns when the Presented UI table lists elements that no UI test opens.
 
 </details>
 
