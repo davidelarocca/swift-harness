@@ -27,7 +27,7 @@ The goal is that every interaction pattern exists once. Visual bugs usually come
 
 State the decision in one line before implementing.
 
-For a screen in the layout contract, design for its whole range of sizes, not the size of your preview: at Min nothing is clipped or pushed out, below Compact below the compact behavior applies, popovers open inside the window. Prefer layouts that adapt (`ViewThatFits`, flexible frames, a menu for overflow) to fixed widths and `.fixedSize()` rows.
+For a screen in the layout contract, design for its whole range of sizes, not the size of your preview: at Min nothing is clipped or pushed out, below Compact below the compact behavior applies, and popovers, menus, dropdowns, sheets and overlays open inside the window: the system presentations with a bounded size, or a hand-built one placed from its anchor, clamped to the window bounds and flipped when there is no room below or to the right. Open each one at the smallest window size before calling the change done. Prefer layouts that adapt (`ViewThatFits`, flexible frames, a menu for overflow) to fixed widths and `.fixedSize()` rows.
 
 For an entity shown in a new place, the default is the whole: it opens its destination, related entities shown with it open theirs (no plain text styled as a link), and it offers its action set through the shared menu or command. Leave something out only for a reason, and say which.
 
