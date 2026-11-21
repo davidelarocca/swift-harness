@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## swift-harness 1.14.0 (2026-11-21)
+
+- New: new snapshot images can be approved once for all (`"snapshots": {"approveNew": true}`, or `new=accept` in `/swift-harness:configure`). An image that has no baseline yet, a component or a state never captured before, becomes its baseline in its test, approved from "new", and the test passes; the end of the turn lists the new images in one line, to commit with the change, and gives them to the agent to look at: no approval looked at them, and a baseline is what the tests keep from then on, so the agent tells the user what looks like a defect (clipped text, dark mode colors, a right-to-left layout not mirrored). An image that differs from its baseline still waits for `/swift-harness:approve-snapshots`, and no baseline is replaced this way. Turning it on is reported once as a weaker check, and the doctor says when `tests/Snapshot.swift` is too old to read it: update it from the setup template.
+- Fix: the weakened-checks notice said nothing in a session that started with nothing to count (no test file, no lint exception, no tolerance): the list at the start was empty, and the comparison then took the list at the end for the start, so no change was ever found. It now reads each list by its file.
+
 ## swift-harness 1.13.1 (2026-11-20)
 
 - Fix: snapshot metadata made relative by hand asked the user once per file. Baselines approved with a `Snapshot.swift` older than 1.12.0 name the test file by its absolute path; an agent that fixed them with Edit got a question for every `.json`. The guard now refuses such an edit and names the one command that fixes all of them without a question (`snapshots.sh --relative-paths`); the images, and metadata with relative paths, still ask as before.

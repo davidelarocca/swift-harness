@@ -530,6 +530,9 @@ SH_SNAPSHOT_CANDIDATES=".build/swift-harness/snapshots"
 # waits, and the approval is asked once: before a commit (guard-bash.sh), and by
 # `scripts/verify.sh full`, which fails while images wait. The default, "fail", fails the test.
 sh_snapshots_collect() { [ "$(sh_cfg '.snapshots.pending' 'fail')" = collect ]; }
+# "snapshots": {"approveNew": true}: an image with no baseline yet becomes its baseline in the
+# test (Snapshot.swift), approved from "new"; one that differs from its baseline still waits.
+sh_snapshots_approve_new() { [ "$(sh_cfg '.snapshots.approveNew' 'false')" = true ]; }
 # The images of the last test run that are new or differ from their baseline, one name per
 # line. An image made on another macOS version (not compared) is not one of them: no approval
 # is owed for it on this Mac.
@@ -695,7 +698,8 @@ sh_weaken_list() {
       $1 == "R" && $3 != "" { printf "registry-retired\t%s\t%s\t1\n", f, $3 }'
     # The project's snapshot tolerance: a larger one lets more pixels change, like a larger
     # tolerance: in a test file.
-    jq -r 'if (.snapshots.tolerance? | type) == "number" then "tolerance\t.claude/swift-harness.json\t\(.snapshots.tolerance)\t1" else empty end' "$SH_CONFIG" 2>/dev/null
+    jq -r 'if (.snapshots.tolerance? | type) == "number" then "tolerance\t.claude/swift-harness.json\t\(.snapshots.tolerance)\t1" else empty end,
+      if .snapshots.approveNew? == true then "approve-new\t.claude/swift-harness.json\t-\t1" else empty end' "$SH_CONFIG" 2>/dev/null
     # The porting ratchet's modules and accepted uses (#73): one fewer module or one more accepted
     # use is a weaker ratchet.
     [ -f "$SH_ROOT/$(sh_ratchet)" ] && awk -F'\t' -v f="$(sh_ratchet)" '

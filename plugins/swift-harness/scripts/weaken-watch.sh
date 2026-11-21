@@ -34,7 +34,9 @@ report="$(awk -F'\t' '
     if (q[1] + 0 < p[1] + 0) return 1
     return ((2 in p) && (2 in q) && q[2] + 0 < p[2] + 0)
   }
-  NR == FNR { s[$1 FS $2 FS $3] = $4; if ($1 == "tests") sf[$2] = 1; next }
+  # The start list by name, not NR == FNR: that is true for the second file too when the first
+  # is empty (a project with nothing to count at the start of the session).
+  FILENAME == ARGV[1] { s[$1 FS $2 FS $3] = $4; if ($1 == "tests") sf[$2] = 1; next }
   { n[$1 FS $2 FS $3] = $4; if ($1 == "tests") nf[$2] = 1
     if ($1 == "registry") { id = $3; sub(/ .*/, "", id); nid[id] = 1 } }
   END {
@@ -96,6 +98,7 @@ report="$(awk -F'\t' '
         if (!has) print f ": layout row " name " removed (its sizes are no longer measured)"
         else if (lower(n[k], s[k])) print f ": Min of " name " lowered (" s[k] " -> " n[k] ")"
       }
+      else if (kind == "approve-new" && b > a) print f ": snapshots.approveNew turned on (a new snapshot image becomes its baseline with no approval)"
       else if (kind == "ratchet-module" && b < a) print f ": module " name " removed from the porting ratchet (its new macOS-only code is no longer caught)"
       else if (kind == "ratchet-accepted" && b > a) print f ": " plural(b - a, "macOS-only use") " accepted by the porting ratchet: " name
       else if (kind == "registry" && b < a) {

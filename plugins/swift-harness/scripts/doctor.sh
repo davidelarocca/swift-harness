@@ -88,7 +88,7 @@ unknown="$(jq -r '
   (if (.registry | type) == "object" then (.registry | keys - ["enabled", "path", "sources"])[] | "registry." + . else empty end),
   (if (.layout | type) == "object" then (.layout | keys - ["enabled", "path"])[] | "layout." + . else empty end),
   (if (.screenshots | type) == "object" then (.screenshots | keys - ["path"])[] | "screenshots." + . else empty end),
-  (if (.snapshots | type) == "object" then (.snapshots | keys - ["path", "pending", "tolerance"])[] | "snapshots." + . else empty end),
+  (if (.snapshots | type) == "object" then (.snapshots | keys - ["path", "pending", "tolerance", "approveNew"])[] | "snapshots." + . else empty end),
   (if (.security | type) == "object" then (.security | keys - ["enabled", "moves"])[] | "security." + . else empty end),
   (if (.docs | type) == "object" then (.docs | keys - ["enabled", "paths", "history", "ignore", "budget", "command", "blocking"])[] | "docs." + . else empty end),
   (("lint", "format") as $k | if (.[$k] | type) == "object" then (.[$k] | keys - ["command", "blocking"])[] | "\($k)." + . else empty end),
@@ -161,6 +161,8 @@ problems="$(jq -r '
       "snapshots.path must be a folder inside the project"),
     check(["snapshots", "pending"]; . == "fail" or . == "collect";
       "snapshots.pending must be \"fail\" (a new or different image fails its test) or \"collect\" (it waits, and the approval is asked before a commit)"),
+    check(["snapshots", "approveNew"]; type == "boolean";
+      "snapshots.approveNew must be true (an image with no baseline yet becomes its baseline in its test) or false"),
     check(["snapshots", "tolerance"]; type == "number" and . >= 0 and . < 1;
       "snapshots.tolerance must be a number from 0 up to 1 (the fraction of pixels allowed to differ, e.g. 0.001)")
   else empty end),
@@ -592,6 +594,19 @@ else
     row WARN "Snapshot baselines" "$count image(s) made on macOS $made$waits"
   else
     row PASS "Snapshot baselines" "$count image(s) made on macOS $made, compared on this Mac; only /swift-harness:approve-snapshots replaces them"
+  fi
+fi
+
+# snapshots.approveNew needs a Snapshot.swift that reads it (1.14.0): with an older one, new
+# images keep waiting and the setting does nothing.
+if sh_snapshots_approve_new; then
+  helpers="$(git -C "$SH_ROOT" -c core.quotepath=off ls-files -co --exclude-standard -- 'Snapshot.swift' '*/Snapshot.swift' 2>/dev/null |
+    while IFS= read -r f; do grep -q '^enum Snapshot' "$SH_ROOT/$f" 2>/dev/null && printf '%s\n' "$f"; done)"
+  old="$(printf '%s\n' "$helpers" | while IFS= read -r f; do [ -n "$f" ] && ! grep -q 'approveNew' "$SH_ROOT/$f" && printf '%s\n' "$f"; done)"
+  if [ -n "$old" ]; then
+    row WARN "New snapshots" "snapshots.approveNew is true, but $(printf '%s\n' "$old" | head -3 | paste -sd, - | sed 's/,/, /g') does not read it: new images still wait for an approval. Fix: update it from the setup template (tests/Snapshot.swift)"
+  else
+    row INFO "New snapshots" "snapshots.approveNew is true: an image with no baseline yet becomes its baseline in its test, and the end of the turn lists them; an image that differs from its baseline still waits for /swift-harness:approve-snapshots"
   fi
 fi
 

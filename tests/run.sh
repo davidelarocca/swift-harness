@@ -2694,6 +2694,63 @@ if grep -qF '"tolerance"' "$TEMPLATES/tests/Snapshot.swift" && grep -qF 'toleran
   ok "collect: Snapshot.verify takes the project's tolerance when a test passes none"
 else nok "collect: Snapshot.verify takes the project's tolerance when a test passes none"; fi
 
+# snapshots.approveNew: a new image recorded by its test as its baseline is told once, not
+# reported as unapproved; anything else in the folder still is.
+AN="$(new_project approve-new)"
+set_config "$AN" '{"verify":{"command":"scripts/verify.sh fast"},"format":"none","lint":"none","snapshots":{"approveNew":true}}'
+mkdir -p "$AN/snapshots"
+printf 'old' >"$AN/snapshots/Old-macos-80-light.png"
+printf '{"os": "%s", "approvedFrom": "missing"}\n' "$THIS_OS" >"$AN/snapshots/Old-macos-80-light.json"
+git -C "$AN" add -A && git -C "$AN" commit -qm approve-new
+hook session-start.sh "$AN" '{"source":"startup"}' >/dev/null
+for n in Card-macos-80-light Card-macos-80-dark; do
+  printf 'new %s' "$n" >"$AN/snapshots/$n.png"
+  printf '{"os": "%s", "approvedFrom": "new", "test": "Tests/AppTests/SnapTests.swift"}\n' "$THIS_OS" >"$AN/snapshots/$n.json"
+done
+out="$(swatch "$AN")"
+expect_result "approveNew: new images recorded by their test are told in one line, not as unapproved" 0 '2 new snapshot image\(s\) recorded as baselines with no approval \(snapshots\.approveNew is true\): Card-macos-80-dark, Card-macos-80-light\.' "$out" 'without /swift-harness:approve-snapshots'
+if jq -e --arg p "$AN/snapshots/Card-macos-80-dark.png" '.hookSpecificOutput.additionalContext | contains("Look at each image") and contains($p) and contains("clipped")' >/dev/null <<<"$(tail -n +2 <<<"$out")"; then
+  ok "approveNew: ... and the agent is given the new images to look at, for defects"
+else nok "approveNew: ... and the agent is given the new images to look at, for defects" "$out"; fi
+expect_result "approveNew: ... once" 0 '^exit=0$' "$(swatch "$AN")" 'swift-harness'
+printf 'changed' >"$AN/snapshots/Old-macos-80-light.png"
+printf 'hand' >"$AN/snapshots/Hand-macos-80-light.png"
+printf '{"os": "%s"}\n' "$THIS_OS" >"$AN/snapshots/Hand-macos-80-light.json"
+out="$(swatch "$AN")"
+expect_result "approveNew: a changed baseline and a new image not recorded as new are still reported" 0 'changed: snapshots/Hand-macos-80-light\.png' "$out"
+expect_result "approveNew: ... the changed one too" 0 'changed: snapshots/Old-macos-80-light\.png' "$out" 'Card-macos'
+git -C "$AN" checkout -q -- snapshots && rm -f "$AN"/snapshots/Hand-* "$AN"/snapshots/Card-*
+set_config "$AN" '{"verify":{"command":"scripts/verify.sh fast"},"format":"none","lint":"none"}'
+hook session-start.sh "$AN" '{"source":"startup"}' >/dev/null
+printf 'new' >"$AN/snapshots/Card-macos-80-light.png"
+printf '{"os": "%s", "approvedFrom": "new"}\n' "$THIS_OS" >"$AN/snapshots/Card-macos-80-light.json"
+expect_result "approveNew: off, an image marked new is reported like any other" 0 'changed: snapshots/Card-macos-80-light\.png' "$(swatch "$AN")"
+rm -f "$AN"/snapshots/Card-*
+set_config "$AN" '{"verify":{"command":"scripts/verify.sh fast"},"format":"none","lint":"none","snapshots":{"approveNew":true}}'
+WN="$(new_project weaken-approve-new)"
+hook session-start.sh "$WN" '{"source":"startup"}' >/dev/null
+set_config "$WN" '{"snapshots":{"approveNew":true}}'
+expect_result "approveNew: turning it on is reported as a weaker check" 0 '\.claude/swift-harness\.json: snapshots\.approveNew turned on' "exit=0
+$(hook weaken-watch.sh "$WN" 2>&1)"
+# A session that started with nothing to count: the first weakening is still found.
+WE="$(new_project weaken-empty-start)"
+hook session-start.sh "$WE" '{"source":"startup"}' >/dev/null
+printf '// swiftlint:disable force_cast\nlet app = 1\n' >"$WE/Sources/App.swift"
+expect_result "weaken: a session that started with nothing to count still reports the first weakening" 0 'Sources/App\.swift: 1 swiftlint:disable added' "exit=0
+$(hook weaken-watch.sh "$WE" 2>&1)"
+mkdir -p "$AN/Tests/AppTests"
+printf 'enum Snapshot {\n    static let candidates = ""\n}\n' >"$AN/Tests/AppTests/Snapshot.swift"
+out="$(doctor "$AN")"
+expect_row "doctor: approveNew with a Snapshot.swift that does not read it is a warning" "$out" WARN 'New snapshots' 'Tests/AppTests/Snapshot\.swift does not read it'
+expect_row "doctor: approveNew is a known key" "$out" PASS 'Config keys' 'all known'
+cp "$TEMPLATES/tests/Snapshot.swift" "$AN/Tests/AppTests/Snapshot.swift"
+expect_row "doctor: approveNew with the current helper is said" "$(doctor "$AN")" INFO 'New snapshots' 'becomes its baseline in its test'
+set_config "$AN" '{"snapshots":{"approveNew":"yes"}}'
+expect_row "doctor: approveNew must be a boolean" "$(doctor "$AN")" FAIL Config 'snapshots\.approveNew must be true'
+if grep -qF 'approveNew ?? (settings["approveNew"] as? Bool == true)' "$TEMPLATES/tests/Snapshot.swift"; then
+  ok "approveNew: Snapshot.verify reads it from the project config"
+else nok "approveNew: Snapshot.verify reads it from the project config"; fi
+
 # ---------- security settings (#32) ----------
 
 sec() { CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/security.sh" "$@"; }
@@ -3008,12 +3065,12 @@ $out" 'file removed'
 cfg() { local out code; out="$(CLAUDE_PLUGIN_DATA="$TMP/data" "$SCRIPTS/configure.sh" "$@" 2>&1)"; code=$?; printf 'exit=%s\n%s' "$code" "$out"; }
 CF="$(new_project configure)"
 out="$(cfg --show --project "$CF")"
-if [ "$(tail -n +2 <<<"$out" | paste -sd'|' -)" = 'strictness: normal|stop: turn|snapshots: fail|tolerance: 0|approvals: weakening|moves: approve|direction: mac|docs: blocking|recap: off' ]; then
+if [ "$(tail -n +2 <<<"$out" | paste -sd'|' -)" = 'strictness: normal|stop: turn|snapshots: fail|new: wait|tolerance: 0|approvals: weakening|moves: approve|direction: mac|docs: blocking|recap: off' ]; then
   ok "configure: --show gives the default answers for a fresh config"
 else nok "configure: --show gives the default answers for a fresh config" "$out"; fi
-out="$(cfg --apply --project "$CF" strictness=strict stop=commit snapshots=collect tolerance=.001 approvals=always moves=pass direction=porting docs=observed recap=md)"
+out="$(cfg --apply --project "$CF" strictness=strict stop=commit snapshots=collect new=accept tolerance=.001 approvals=always moves=pass direction=porting docs=observed recap=md)"
 if jq -e '.lintBlocking == true and .verify.maxAttempts == 5 and .verify.when == "commit" and .verify.command == "scripts/verify.sh fast"
-    and .snapshots == {pending: "collect", tolerance: 0.001} and .approvals.ask == "always" and .security.moves == "pass"
+    and .snapshots == {pending: "collect", approveNew: true, tolerance: 0.001} and .approvals.ask == "always" and .security.moves == "pass"
     and .porting.direction == "porting" and .docs == {blocking: false} and .recap == "md" and .protectedPaths == ["Sources/Audio/"]' "$CF/.claude/swift-harness.json" >/dev/null; then
   ok "configure: each answer is written as its keys, and the other keys stay"
 else nok "configure: each answer is written as its keys, and the other keys stay" "$(cat "$CF/.claude/swift-harness.json")"; fi
@@ -3023,7 +3080,7 @@ out="$(doctor "$CF")"
 expect_row "configure: the doctor knows every key it writes" "$out" PASS 'Config keys' 'all known'
 expect_row "doctor: verify.when commit is said" "$out" INFO 'Checks run' 'before a commit'
 expect_row "doctor: a port under way with no ratchet is a warning" "$out" WARN 'Porting ratchet' 'porting\.direction is "porting" but no module is recorded'
-cfg --apply --project "$CF" strictness=normal stop=turn snapshots=fail tolerance=0 approvals=weakening moves=approve direction=mac docs=blocking recap=off >/dev/null
+cfg --apply --project "$CF" strictness=normal stop=turn snapshots=fail new=wait tolerance=0 approvals=weakening moves=approve direction=mac docs=blocking recap=off >/dev/null
 if jq -e '. == {verify: {command: "scripts/verify.sh fast"}, protectedPaths: ["Sources/Audio/"]}' "$CF/.claude/swift-harness.json" >/dev/null; then
   ok "configure: default answers remove their keys, and empty objects go"
 else nok "configure: default answers remove their keys, and empty objects go" "$(cat "$CF/.claude/swift-harness.json")"; fi

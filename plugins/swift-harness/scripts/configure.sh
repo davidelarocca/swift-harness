@@ -12,6 +12,8 @@
 #                                      that changed code, or before a commit
 #     snapshots=fail|collect           a new or changed image fails its test, or waits for one
 #                                      approval (snapshots.pending)
+#     new=wait|accept                  an image with no baseline yet waits for the approval like
+#                                      any other, or becomes its baseline at once (snapshots.approveNew)
 #     tolerance=NUMBER                 the fraction of pixels a snapshot may differ by, 0 up to 1
 #                                      (snapshots.tolerance)
 #     approvals=weakening|always       the approval commands ask only when something weakens a
@@ -51,6 +53,7 @@ show() {
     "strictness: " + (if .lintBlocking == true then "strict" elif (.verify.maxAttempts? // 3) == 1 then "light" else "normal" end),
     "stop: " + (.verify.when? // "turn"),
     "snapshots: " + (.snapshots.pending? // "fail"),
+    "new: " + (if .snapshots.approveNew? == true then "accept" else "wait" end),
     "tolerance: " + ((.snapshots.tolerance? // 0) | tostring),
     "approvals: " + (.approvals.ask? // "weakening"),
     "moves: " + (.security.moves? // "approve"),
@@ -97,6 +100,14 @@ for answer in "$@"; do
           notes="$notes- snapshots=collect: scripts/verify.sh from a template older than this version does not fail on waiting images in full mode: update it from the setup template and approve it again.
 " ;;
         *) bad "fail or collect" ;;
+      esac ;;
+    new)
+      case "$a" in
+        wait) program="$program | del(.snapshots.approveNew)" ;;
+        accept) program="$program | .snapshots.approveNew = true"
+          notes="$notes- new=accept: an image with no baseline yet becomes its baseline in its test, and the end of the turn lists them. tests/Snapshot.swift must come from this version's setup template (update it), or new images keep waiting. The end of the turn reports the setting once as a weaker check.
+" ;;
+        *) bad "wait or accept" ;;
       esac ;;
     tolerance)
       [[ "$a" =~ ^(0|0?\.[0-9]+)$ ]] || bad "a number from 0 up to 1, such as 0.001"

@@ -17,8 +17,9 @@
 // environment, so localized strings, dates and numbers follow). On macOS, dynamicTypeSize does
 // not change how SwiftUI text is drawn: larger text is a state you draw yourself.
 //
-// Baselines are never written by a test. A missing or different image fails, and the new image
-// (with a diff image, changed pixels in red) is saved under .build/swift-harness/snapshots/.
+// Baselines are never written by a test (one exception: approveNew, below). A missing or
+// different image fails, and the new image (with a diff image, changed pixels in red) is saved
+// under .build/swift-harness/snapshots/.
 // The user looks at it and approves it with /swift-harness:approve-snapshots, which copies it
 // into the baselines folder: `snapshots.path` in .claude/swift-harness.json, default
 // `snapshots/` at the project root. Commit that folder: the metadata beside each image names
@@ -28,6 +29,11 @@
 // image does not fail its test: it is saved the same way and waits, so work goes on, and the
 // approval is asked once, when the work is committed (a commit asks first, and
 // `scripts/verify.sh full` fails while images wait). An image that cannot be read still fails.
+//
+// With `"snapshots": {"approveNew": true}` an image that has no baseline yet (a component or a
+// state never captured before) becomes its baseline at once, and its test passes: the user
+// approved new images once for all, in the config. The end of the turn lists them. An image that
+// differs from its baseline still waits for the approval, and nothing replaces a baseline.
 //
 // Baselines are pinned to the macOS version (major.minor) and display scale they were made on:
 // text and controls draw differently on other versions. On a Mac or runner that differs, the
@@ -80,6 +86,7 @@ enum Snapshot {
         baselines: URL? = nil,
         output: URL? = nil,
         collect: Bool? = nil,
+        approveNew: Bool? = nil,
         file: StaticString = #filePath,
         @ViewBuilder _ make: () -> Content
     ) -> [String] {
@@ -87,6 +94,7 @@ enum Snapshot {
         let settings = Snapshot.settings(from: testFolder)
         let collects = collect ?? (settings["pending"] as? String == "collect")
         let allowed = tolerance ?? (settings["tolerance"] as? NSNumber)?.doubleValue ?? 0
+        let acceptsNew = approveNew ?? (settings["approveNew"] as? Bool == true)
         let plan: Screenshot.Plan
         switch Screenshot.plan(name, sizes: sizes, source: source, contract: contract, file: file) {
         case .failure(let failure): return [failure.description]
@@ -133,7 +141,7 @@ enum Snapshot {
                     "test": test,
                     "captured": ISO8601DateFormatter().string(from: Date()),
                 ]
-                let outcome = check(image, info: info, base: base, baselines: baselineFolder, candidates: candidateFolder, tolerance: allowed)
+                let outcome = check(image, info: info, base: base, baselines: baselineFolder, candidates: candidateFolder, tolerance: allowed, acceptsNew: acceptsNew)
                 if let problem = outcome.problem {
                     if collects, outcome.waits {
                         print("swift-harness snapshot: \(base) waits for approval and does not fail this test (snapshots.pending is \"collect\"): \(problem)")
@@ -141,7 +149,7 @@ enum Snapshot {
                         problems.append(problem)
                     }
                 }
-                if outcome.status == .notCompared, let note = outcome.note { print("swift-harness snapshot: \(note)") }
+                if outcome.problem == nil, let note = outcome.note { print("swift-harness snapshot: \(note)") }
             }
         }
         return problems
@@ -158,6 +166,7 @@ enum Snapshot {
     /// The `snapshots` object of the .claude/swift-harness.json above `start`, or empty.
     /// `"pending": "collect"`: a new or different image waits instead of failing its test.
     /// `"tolerance"`: the fraction of pixels allowed to differ when a test passes none.
+    /// `"approveNew": true`: an image with no baseline yet becomes its baseline at once.
     static func settings(from start: URL) -> [String: Any] {
         guard let (_, config) = Screenshot.root(from: start) else { return [:] }
         return config?["snapshots"] as? [String: Any] ?? [:]
@@ -186,7 +195,9 @@ enum Snapshot {
     /// Compares one rendered image with its baseline and leaves the files the approval reads in
     /// the candidates folder: <base>.png and .json (the new image), <base>.diff.png, and
     /// <base>.result.json with the status. A match removes the new image and the diff.
-    static func check(_ image: CGImage, info: [String: Any], base: String, baselines: URL, candidates: URL, tolerance: Double) -> Outcome {
+    /// With `acceptsNew`, an image with no baseline is written as its baseline, approved from
+    /// "new": the only case where a test writes into the baselines folder.
+    static func check(_ image: CGImage, info: [String: Any], base: String, baselines: URL, candidates: URL, tolerance: Double, acceptsNew: Bool = false) -> Outcome {
         let files = FileManager.default
         let baselinePNG = baselines.appendingPathComponent("\(base).png")
         let baselineJSON = baselines.appendingPathComponent("\(base).json")
@@ -213,6 +224,19 @@ enum Snapshot {
         }
 
         guard files.fileExists(atPath: baselinePNG.path) else {
+            if acceptsNew {
+                var approved = info
+                approved["approved"] = ISO8601DateFormatter().string(from: Date())
+                approved["approvedFrom"] = "new"
+                if let data = png(image),
+                   let json = try? JSONSerialization.data(withJSONObject: approved, options: [.prettyPrinted, .sortedKeys]),
+                   (try? files.createDirectory(at: baselines, withIntermediateDirectories: true)) != nil,
+                   (try? json.write(to: baselineJSON)) != nil,
+                   (try? data.write(to: baselinePNG)) != nil {
+                    return finish(.passed, note: "\(base): new, recorded as its baseline (snapshots.approveNew is true): \(baselinePNG.path)")
+                }
+                try? files.removeItem(at: baselineJSON)
+            }
             return finish(.missing, problem: "\(base): no approved baseline in \(baselines.path). The new image is \(candidatePNG.path). \(approve)", waits: true)
         }
         let pinned = (try? Data(contentsOf: baselineJSON)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
