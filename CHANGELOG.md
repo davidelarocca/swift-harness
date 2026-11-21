@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## swift-harness 1.15.0 (2026-11-21)
+
 - New: popovers, menus, dropdowns, sheets and overlays must open inside the app window at every size, the smallest above all, and agents get this wrong often. An edit that writes one (`.popover`, `Menu`, `.contextMenu`, `.sheet`, `.inspector`, `.confirmationDialog`, `NSPopover`, `NSMenu`, `NSPanel`, or an `.overlay` in a file that offsets or positions views) gets a note, once per file and session, with how: system presentations with a bounded size, or a hand-built one hosted at the window's root, placed from its anchor, clamped to the window bounds and flipped when there is no room. The same rule is now a line of its own in the `CLAUDE.md` template, the UI rules and the `ui-change` skill. Projects already set up get the note without changing their files.
 
 ## swift-harness 1.14.0 (2026-11-21)
