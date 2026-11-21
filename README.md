@@ -179,7 +179,15 @@ LayoutAudit.shrinkWindow(app)   // macOS: drags the window to its minimum size
 try LayoutAudit.check(app)      // 'play' is cut by the left edge: (417, 390, 150x24) in (510, 285, 280x312)
 ```
 
-It works on macOS and on an iOS simulator (iPhone, iPad, the largest Dynamic Type size through `LayoutAudit.largestText`), measured on a fixture in CI: two cut buttons and two overlapping labels are found, a scrolling list past its edge is not, the fixed screen passes. Frames in the tree are not clipped, which is what makes an edge measurable. It catches the overflow that `.frame(minWidth: 0, maxWidth: .infinity)` hides from `LayoutContract`. Not measured: text truncated by its own frame, content under the iOS status bar, and where popovers open; those are review checks, on screenshots when the project captures them (below).
+It works on macOS and on an iOS simulator (iPhone, iPad, the largest Dynamic Type size through `LayoutAudit.largestText`), measured on a fixture in CI: two cut buttons and two overlapping labels are found, a scrolling list past its edge is not, the fixed screen passes. Frames in the tree are not clipped, which is what makes an edge measurable. It catches the overflow that `.frame(minWidth: 0, maxWidth: .infinity)` hides from `LayoutContract`. Not measured: text truncated by its own frame and content under the iOS status bar; those are review checks, on screenshots when the project captures them (below).
+
+On macOS it also measures what a screen opens. A `.popover`, a sheet, a dialog and the menu of a menu button or pop-up button are windows of their own on the Mac, placed to stay on the screen, not in the app window: near the edge of a small window they stick out. `LayoutAudit.check` reports one that sticks out of its app window, and `LayoutAudit.checkPresented(app)` opens each control named in backticks in the "Opened from" column of the layout contract's Presented UI table, one at a time at the smallest window, and fails for what it opened that sticks out, is cut or overlaps a text:
+
+```swift
+try LayoutAudit.checkPresented(app)   // Layout, opening 'more': 'popover at (...)' sticks out of its window on the left and right
+```
+
+On the fixture in CI, a wide popover and a dropdown placed at a fixed offset are found, a short menu passes, and the fixed screen passes. The menu bar and a context menu opened at the pointer are not checked: the app does not place them. The doctor warns when the Presented UI table lists elements that no UI test opens.
 
 </details>
 

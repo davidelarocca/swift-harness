@@ -156,7 +156,7 @@ if [ -n "$written" ] && { grep -qE '\.(popover|sheet|inspector|contextMenu|confi
 - A dropdown, popup or list that shows content: build it in the window. Host it at the window's root, not inside a ScrollView or a clipped container; place it from the frame of what opens it (anchorPreference or GeometryReader in the window's coordinates), clamp it inside the window bounds with a margin, open it upward or leftward when there is no room below or to the right, cap its height to the space left and scroll inside.
 - A .popover or a Menu is allowed only when it fits inside the window on the side it opens, at the smallest window size: its content has a maxWidth and maxHeight below the space between its anchor and that edge of the window, and it opens toward the side with room (arrowEdge from the anchor's place in the window). A Menu or Picker is kept to a few fixed items, and its control is not placed near the bottom or right edge.
 - Not covered, since the app does not place them: the menu bar, and a context menu opened at the pointer. A sheet is attached to the window and fits it when its size is below the window's smallest size.
-- No fixed offsets or sizes that assume a large window. Check it at the smallest window size, near each edge, and record it in the Presented UI table of $layout_doc."
+- No fixed offsets or sizes that assume a large window. Record it in the Presented UI table of $layout_doc, with the accessibility identifier of the control that opens it in backticks in Opened from: LayoutAudit.checkPresented(app) in a UI test opens each one at the smallest window and fails if it sticks out (scripts/verify.sh full)."
   fi
 fi
 

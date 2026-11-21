@@ -39,8 +39,11 @@ Sizes are in points, `<width>x<height>`, or `<width>` alone when the height does
 
 ## Presented UI
 
-Popovers, sheets, menus, tooltips and secondary windows opened from these screens. At the screen's Min size
-they must open inside the window, or on screen for a separate window.
+Popovers, sheets, menus, dropdowns, tooltips and secondary windows opened from these screens. At the screen's
+Min size they open inside the window and nothing sticks out past its edge; a separate window opens on screen.
+In **Opened from**, put the accessibility identifier of the control that opens it in backticks (`moreButton`):
+`LayoutAudit.checkPresented(app)` in a UI test opens each one at the smallest window and fails for what
+sticks out. The menu bar and context menus opened at the pointer are not listed: the app does not place them.
 
 | Element | Opened from | Kind | Size | At the minimum size |
 |---|---|---|---|---|

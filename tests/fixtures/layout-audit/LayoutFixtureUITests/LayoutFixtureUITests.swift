@@ -67,6 +67,45 @@ final class LayoutFixtureUITests: XCTestCase {
     }
     #endif
 
+    #if os(macOS)
+    /// Presented UI at the smallest window: the wide popover sticks out of the window and the
+    /// dropdown at a fixed offset is cut by its right edge; the short menu passes.
+    @MainActor
+    func testWhatSticksOutOfTheWindowIsFound() throws {
+        let app = launch(["-presented"])
+        let found = try LayoutAudit.presentedIssues(app, controls: ["actions", "more", "sort"], shrink: false)
+        print("LayoutAudit presented negative control:", found.map { "\($0.control): \($0.issue)" })
+        XCTAssertEqual(Set(found.map(\.control)), ["more", "sort"], "\(found)")
+        XCTAssertTrue(found.contains { $0.control == "more" && $0.issue.kind == .outsideWindow }, "\(found)")
+        XCTAssertTrue(found.contains { $0.control == "sort" && $0.issue.kind == .cutByEdge }, "\(found)")
+        // The tree with the popover and the menu open, on the CI log, for when this fails.
+        for id in ["more", "actions"] {
+            app.descendants(matching: .any).matching(identifier: id).firstMatch.click()
+            sleep(1)
+            print("LayoutAudit tree with '\(id)' open:\n\(app.debugDescription)")
+            app.typeKey(.escape, modifierFlags: [])
+            sleep(1)
+        }
+    }
+
+    /// The same screen fixed passes, opened from the fixture's layout contract.
+    @MainActor
+    func testWhatFitsPassesFromTheContract() throws {
+        try LayoutAudit.checkPresented(launch(["-presented", "-fixed"], smallest: false))
+    }
+
+    /// checkPresented fails for each one that sticks out.
+    @MainActor
+    func testCheckPresentedFailsForWhatSticksOut() throws {
+        let app = launch(["-presented"], smallest: false)
+        let options = XCTExpectedFailure.Options()
+        options.issueMatcher = { $0.compactDescription.contains("opening 'more'") || $0.compactDescription.contains("opening 'sort'") }
+        XCTExpectFailure("the wide popover and the dropdown past the edge", options: options) {
+            try? LayoutAudit.checkPresented(app)
+        }
+    }
+    #endif
+
     #if os(iOS)
     @MainActor
     func testTheLargestTextStillShowsTheOverlap() throws {
