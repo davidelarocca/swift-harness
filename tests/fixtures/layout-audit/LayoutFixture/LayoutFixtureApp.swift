@@ -65,7 +65,8 @@ struct PlayerScreen: View {
 /// dropdown built in the window. Broken, the popover is wider than the smallest window and the
 /// dropdown sits at a fixed offset past its right edge; with `-fixed` the popover is small enough
 /// for the middle of the window, and the dropdown opens under its button, inside the window.
-/// The short menu is the control that passes in both.
+/// The short menu is the control that passes in both; the Export menu at the right edge has
+/// items too long for the room to its right when broken, and short ones with `-fixed`.
 struct PresentedScreen: View {
     let fixed: Bool
     @State private var more = false
@@ -90,6 +91,16 @@ struct PresentedScreen: View {
                 Button("Sort") { sort.toggle() }
                     .accessibilityIdentifier("sort")
             }
+            HStack {
+                Spacer()
+                // At the right edge: broken, its items are wider than the room to the right.
+                Menu("Export") {
+                    Button(fixed ? "CSV" : "Export the whole library as a spreadsheet") {}
+                    Button(fixed ? "PDF" : "Export the whole library as a printable document") {}
+                }
+                .accessibilityIdentifier("export")
+                .fixedSize()
+            }
             Spacer()
             Text("Presented UI").accessibilityIdentifier("caption")
         }
@@ -106,7 +117,7 @@ struct PresentedScreen: View {
                 .frame(width: 160)
                 .background(.background)
                 .border(.separator)
-                .offset(x: fixed ? 60 : 200, y: 44)
+                .offset(x: fixed ? 60 : 270, y: 44)
             }
         }
     }

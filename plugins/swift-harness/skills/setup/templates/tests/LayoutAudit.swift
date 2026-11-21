@@ -351,7 +351,23 @@ enum LayoutAudit {
         if !node.identifier.isEmpty { return node.identifier }
         if !node.label.isEmpty { return node.label }
         if let value = node.value as? String, !value.isEmpty { return value }
-        return "\(node.elementType) at \(text(node.frame))"
+        return "\(typeName(node.elementType)) at \(text(node.frame))"
+    }
+
+    /// A readable name for an element with no identifier, label or value.
+    private static func typeName(_ type: XCUIElement.ElementType) -> String {
+        switch type {
+        case .popover: return "popover"
+        case .sheet: return "sheet"
+        case .dialog: return "dialog"
+        case .alert: return "alert"
+        case .menu: return "menu"
+        case .window: return "window"
+        case .staticText: return "text"
+        case .button: return "button"
+        case .image: return "image"
+        default: return "element of type \(type.rawValue)"
+        }
     }
 
     fileprivate static func edges(of frame: CGRect, in bounds: CGRect) -> String {

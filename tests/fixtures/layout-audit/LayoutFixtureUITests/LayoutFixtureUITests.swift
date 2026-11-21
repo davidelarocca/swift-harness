@@ -68,24 +68,26 @@ final class LayoutFixtureUITests: XCTestCase {
     #endif
 
     #if os(macOS)
-    /// Presented UI at the smallest window: the wide popover sticks out of the window and the
-    /// dropdown at a fixed offset is cut by its right edge; the short menu passes.
+    /// Presented UI at the smallest window: the wide popover and the menu with long items stick out
+    /// of the window, and the dropdown at a fixed offset is cut by its right edge; the short menu
+    /// passes.
     @MainActor
     func testWhatSticksOutOfTheWindowIsFound() throws {
         let app = launch(["-presented"])
-        let found = try LayoutAudit.presentedIssues(app, controls: ["actions", "more", "sort"], shrink: false)
+        let found = try LayoutAudit.presentedIssues(app, controls: ["actions", "more", "sort", "export"], shrink: false)
         print("LayoutAudit presented negative control:", found.map { "\($0.control): \($0.issue)" })
-        XCTAssertEqual(Set(found.map(\.control)), ["more", "sort"], "\(found)")
-        XCTAssertTrue(found.contains { $0.control == "more" && $0.issue.kind == .outsideWindow }, "\(found)")
-        XCTAssertTrue(found.contains { $0.control == "sort" && $0.issue.kind == .cutByEdge }, "\(found)")
-        // The tree with the popover and the menu open, on the CI log, for when this fails.
-        for id in ["more", "actions"] {
+        // The tree with the popover and a menu open, on the CI log, for when this fails.
+        for id in ["more", "export"] {
             app.descendants(matching: .any).matching(identifier: id).firstMatch.click()
             sleep(1)
             print("LayoutAudit tree with '\(id)' open:\n\(app.debugDescription)")
             app.typeKey(.escape, modifierFlags: [])
             sleep(1)
         }
+        XCTAssertEqual(Set(found.map(\.control)), ["more", "sort", "export"], "\(found)")
+        XCTAssertTrue(found.contains { $0.control == "more" && $0.issue.kind == .outsideWindow }, "\(found)")
+        XCTAssertTrue(found.contains { $0.control == "sort" && $0.issue.kind == .cutByEdge }, "\(found)")
+        XCTAssertTrue(found.contains { $0.control == "export" && $0.issue.kind == .outsideWindow }, "\(found)")
     }
 
     /// The same screen fixed passes, opened from the fixture's layout contract.
@@ -99,7 +101,7 @@ final class LayoutFixtureUITests: XCTestCase {
     func testCheckPresentedFailsForWhatSticksOut() throws {
         let app = launch(["-presented"], smallest: false)
         let options = XCTExpectedFailure.Options()
-        options.issueMatcher = { $0.compactDescription.contains("opening 'more'") || $0.compactDescription.contains("opening 'sort'") }
+        options.issueMatcher = { ["opening 'more'", "opening 'sort'", "opening 'export'"].contains(where: $0.compactDescription.contains) }
         XCTExpectFailure("the wide popover and the dropdown past the edge", options: options) {
             try? LayoutAudit.checkPresented(app)
         }
